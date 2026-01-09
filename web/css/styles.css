@@ -1,0 +1,147 @@
+/* PlayMatatu - Clean Responsive Styles using Bootstrap */
+/* Color Palette */
+:root {
+    --alizarin-crimson: #eb333a;
+    --valencia: #d83d44;
+    --soft-peach: #faf5f5;
+    --mine-shaft: #373536;
+    --contessa: #cb7478;
+    --silver: #cac8c8;
+    --azalea: #f9c3c5;
+    --chestnut: #be474c;
+    --scorpion: #676566;
+    
+    /* Legacy aliases for compatibility */
+    --primary: var(--mine-shaft);
+    --primary-dark: var(--scorpion);
+    --primary-light: var(--silver);
+}
+
+/* Override Bootstrap primary color */
+.text-primary {
+    color: var(--mine-shaft) !important;
+}
+
+.btn-primary {
+    background-color: var(--mine-shaft);
+    border-color: var(--mine-shaft);
+}
+
+.btn-primary:hover,
+.btn-primary:focus,
+.btn-primary:active {
+    background-color: var(--scorpion);
+    border-color: var(--scorpion);
+}
+
+.btn-primary:focus {
+    box-shadow: 0 0 0 0.25rem rgba(55, 53, 54, 0.25);
+}
+
+.btn-outline-primary {
+    color: var(--mine-shaft);
+    border-color: var(--mine-shaft);
+}
+
+.btn-outline-primary:hover {
+    background-color: var(--mine-shaft);
+    border-color: var(--mine-shaft);
+    color: white;
+}
+
+/* Body */
+body {
+    background-color: var(--soft-peach);
+    color: var(--mine-shaft);
+}
+
+/* Card styling - minimal overrides */
+.card {
+    border: none;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+/* Form styling */
+.form-control:focus {
+    border-color: var(--mine-shaft);
+    box-shadow: 0 0 0 0.25rem rgba(55, 53, 54, 0.15);
+}
+
+/* Alert success styling */
+.alert-success {
+    background-color: rgba(249, 195, 197, 0.3);
+    color: var(--chestnut);
+    border: 1px solid var(--contessa);
+}
+
+/* Spinner */
+.spinner-border.text-primary {
+    color: var(--mine-shaft) !important;
+}
+
+/* Links */
+a.text-primary:hover {
+    color: var(--scorpion) !important;
+}
+
+/* Footer links */
+footer a {
+    transition: color 0.2s ease;
+}
+
+/* Modal header */
+.modal-header {
+    background-color: var(--mine-shaft);
+    color: white;
+}
+
+.modal-header .btn-close {
+    filter: brightness(0) invert(1);
+}
+
+/* Badge */
+.badge.bg-primary {
+    background-color: var(--mine-shaft) !important;
+}
+
+.badge.bg-warning {
+    background-color: var(--trendy-green) !important;
+    color: white !important;
+}
+
+/* Game-specific colors */
+.text-citron {
+    color: var(--citron);
+}
+
+.bg-citron {
+    background-color: var(--citron);
+}
+
+.border-citron {
+    border-color: var(--citron) !important;
+}
+
+/* Utility: subtle hover effect for cards on desktop */
+@media (min-width: 992px) {
+    .card-hover:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+        transition: all 0.2s ease;
+    }
+}
+
+/* Ensure good touch targets on mobile */
+@media (max-width: 576px) {
+    .btn-lg {
+        padding: 0.75rem 1.5rem;
+    }
+}
+
+/* Accessibility - reduced motion */
+@media (prefers-reduced-motion: reduce) {
+    * {
+        transition: none !important;
+        animation: none !important;
+    }
+}

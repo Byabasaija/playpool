@@ -1,0 +1,48 @@
+[Unit]
+Description=PlayMatatu Backend Service
+Documentation=https://github.com/playmatatu/backend
+After=network.target postgresql.service redis.service
+Wants=postgresql.service redis.service
+StartLimitIntervalSec=500
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=playmatatu
+Group=playmatatu
+ExecStart=/opt/playmatatu/bin/playmatatu
+Restart=on-failure
+RestartSec=5s
+
+# Security settings
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/playmatatu/logs /tmp
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Environment
+Environment=GIN_MODE=release
+Environment=LOG_LEVEL=info
+EnvironmentFile=-/opt/playmatatu/configs/.env
+
+# Working directory
+WorkingDirectory=/opt/playmatatu
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=playmatatu
+
+# Process management
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
