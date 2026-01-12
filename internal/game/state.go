@@ -87,6 +87,7 @@ type GameState struct {
 	CurrentTurn  string     `json:"current_turn"` // Player ID
 	CurrentSuit  Suit       `json:"current_suit"`
 	TargetSuit   Suit       `json:"target_suit"` // The "Chop" suit (determined at start)
+	TargetCard   Card       `json:"target_card"` // The actual card drawn to determine the chop suit
 	DrawStack    int        `json:"draw_stack"`  // For stacking 2s
 	Status       GameStatus `json:"status"`
 	Winner       string     `json:"winner,omitempty"`
@@ -173,6 +174,7 @@ func (g *GameState) Initialize() error {
 
 		// Non-seven found - this suit becomes the Target Suit
 		g.TargetSuit = targetCard.Suit
+		g.TargetCard = targetCard // Store the full card
 		// Put this card back in the deck (it's not in play)
 		g.Deck.AddCards([]Card{targetCard})
 		g.Deck.Shuffle()
@@ -658,6 +660,16 @@ func (g *GameState) GetGameStateForPlayer(playerID string) map[string]interface{
 		opponentID = g.Player1.ID
 	}
 
+	// Get last 4 cards from discard pile for visual stacking
+	var discardPileCards []Card
+	if len(g.DiscardPile) > 0 {
+		startIndex := len(g.DiscardPile) - 4
+		if startIndex < 0 {
+			startIndex = 0
+		}
+		discardPileCards = g.DiscardPile[startIndex:]
+	}
+
 	return map[string]interface{}{
 		"game_id":             g.ID,
 		"token":               g.Token,
@@ -667,8 +679,10 @@ func (g *GameState) GetGameStateForPlayer(playerID string) map[string]interface{
 		"opponent_id":         opponentID,
 		"opponent_card_count": opponentCardCount,
 		"top_card":            g.GetTopCard(),
+		"discard_pile_cards":  discardPileCards,
 		"current_suit":        g.CurrentSuit,
 		"target_suit":         g.TargetSuit,
+		"target_card":         g.TargetCard,
 		"current_turn":        g.CurrentTurn,
 		"my_turn":             g.CurrentTurn == playerID,
 		"draw_stack":          g.DrawStack,

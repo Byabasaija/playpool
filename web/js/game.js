@@ -57,14 +57,20 @@
         myHand: [],
         opponentCardCount: 0,
         topCard: null,
+        discardPileCards: [], // Last 3-4 cards from discard pile for visual stacking
         currentSuit: null,
         targetSuit: null, // The "Chop" suit
+        targetCard: null, // The full card that determines the chop suit
         myTurn: false,
         drawStack: 0,
         deckCount: 0,
         connected: false,
         pendingAce: null, // Card waiting for suit selection (Ace is wild suit)
-        canPass: false // Flag to show PASS button after drawing
+        canPass: false, // Flag to show PASS button after drawing
+        initialDealPlayed: false, // Track if initial deal animation has played
+        previousHandSize: 0, // Track previous hand size to detect changes
+        previousOpponentCount: 0, // Track previous opponent count
+        previousTopCard: null // Track previous top card to detect discard pile changes
     };
 
     // WebSocket connection
@@ -302,8 +308,10 @@
             gameState.myHand = data.my_hand || [];
             gameState.opponentCardCount = data.opponent_card_count || 0;
             gameState.topCard = data.top_card;
+            gameState.discardPileCards = data.discard_pile_cards || [];
             gameState.currentSuit = data.current_suit;
             gameState.targetSuit = data.target_suit; // The "Chop" suit
+            gameState.targetCard = data.target_card; // The actual chop card
             gameState.myTurn = data.my_turn;
             gameState.drawStack = data.draw_stack || 0;
             gameState.deckCount = data.deck_count || 0;
@@ -335,10 +343,30 @@
             // Initialize UI on first game state with cards
             hideWaitingScreen();
 
-            // Update UI
-            renderOpponentHand();
-            renderPlayerHand();
-            renderDiscardPile();
+            // Only re-render hands if they changed
+            if (gameState.opponentCardCount !== gameState.previousOpponentCount) {
+                renderOpponentHand();
+                gameState.previousOpponentCount = gameState.opponentCardCount;
+            }
+            
+            if (gameState.myHand.length !== gameState.previousHandSize) {
+                renderPlayerHand();
+                gameState.previousHandSize = gameState.myHand.length;
+            }
+            
+            // Only re-render discard pile if it changed (check top card, not just length)
+            const currentTopCard = gameState.discardPileCards.length > 0 
+                ? gameState.discardPileCards[gameState.discardPileCards.length - 1] 
+                : null;
+            const previousTopCard = gameState.previousTopCard;
+            
+            if (currentTopCard && (!previousTopCard || 
+                currentTopCard.rank !== previousTopCard.rank || 
+                currentTopCard.suit !== previousTopCard.suit)) {
+                renderDiscardPile();
+                gameState.previousTopCard = currentTopCard;
+            }
+            
             renderTurnIndicator();
             updatePlayerState();
         } catch (error) {
@@ -404,23 +432,37 @@
 
         elements.discardPile.innerHTML = '';
         
-        // Don't show anything if no card has been played yet
-        if (!gameState.topCard || !gameState.topCard.rank || !gameState.topCard.suit) return;
+        // Don't show anything if no cards have been played yet
+        if (!gameState.discardPileCards || gameState.discardPileCards.length === 0) return;
         
-        const card = document.createElement('img');
-        card.src = getCardImageUrl(gameState.topCard);
-        card.className = 'playing-card top-card';
-        card.alt = gameState.topCard.rank + ' of ' + gameState.topCard.suit;
-        card.style.width = '70px';
-        
-        // Add random rotation for ramshackled discard pile look
-        const randomRotation = (Math.random() - 0.5) * 20; // -10 to +10 degrees
-        const randomX = (Math.random() - 0.5) * 10; // -5 to +5 px
-        const randomY = (Math.random() - 0.5) * 10; // -5 to +5 px
-        card.style.transform = `rotate(${randomRotation}deg) translate(${randomX}px, ${randomY}px)`;
-        card.style.transition = 'transform 0.3s ease';
-        
-        elements.discardPile.appendChild(card);
+        // Show the actual cards from the discard pile (up to 4)
+        gameState.discardPileCards.forEach((card, i) => {
+            const cardEl = document.createElement('img');
+            cardEl.src = getCardImageUrl(card);
+            cardEl.className = 'playing-card';
+            cardEl.alt = card.rank + ' of ' + card.suit;
+            cardEl.style.width = '70px';
+            cardEl.style.position = 'absolute';
+            cardEl.style.top = '0';
+            cardEl.style.left = '0';
+            
+            // Stack with increasing offset and rotation
+            const offset = i * 2;
+            const rotation = i * 5 - 8;
+            cardEl.style.transform = `translate(${offset}px, ${offset}px) rotate(${rotation}deg)`;
+            cardEl.style.transition = 'transform 0.3s ease';
+            cardEl.style.zIndex = i;
+            
+            // Top card gets additional random rotation for ramshackled look
+            if (i === gameState.discardPileCards.length - 1) {
+                const randomRotation = (Math.random() - 0.5) * 20;
+                const randomX = (Math.random() - 0.5) * 6;
+                const randomY = (Math.random() - 0.5) * 6;
+                cardEl.style.transform = `translate(${offset + randomX}px, ${offset + randomY}px) rotate(${rotation + randomRotation}deg)`;
+            }
+            
+            elements.discardPile.appendChild(cardEl);
+        });
     }
 
     // Render current suit indicator (especially after 8 is played)
@@ -435,34 +477,6 @@
         } else {
             elements.currentSuit.classList.add('d-none');
         }
-    }
-
-    // Render player's hand
-    function renderPlayerHand() {
-        if (!elements.playerHand) return;
-
-        elements.playerHand.innerHTML = '';
-        if (elements.playerCards) {
-            elements.playerCards.textContent = gameState.myHand.length + ' cards';
-        }
-
-        gameState.myHand.forEach(function(card, index) {
-            const cardEl = document.createElement('img');
-            cardEl.src = getCardImageUrl(card);
-            cardEl.className = 'playing-card player-card';
-            cardEl.alt = card.rank + ' of ' + card.suit;
-            cardEl.style.width = '60px';
-            cardEl.style.cursor = gameState.myTurn ? 'pointer' : 'default';
-            cardEl.dataset.index = index;
-            cardEl.dataset.card = JSON.stringify(card);
-            
-            if (gameState.myTurn && canPlayCard(card)) {
-                cardEl.classList.add('playable');
-            }
-            
-            cardEl.addEventListener('click', function() { onCardClick(card, index); });
-            elements.playerHand.appendChild(cardEl);
-        });
     }
 
     // Check if a card can be played
@@ -527,7 +541,7 @@
     }
 
     // Handle card click
-    function onCardClick(card, index) {
+    function onCardClick(card, cardEl) {
         if (!gameState.myTurn) {
             showMessage("It's not your turn!", 'warning');
             return;
@@ -545,8 +559,11 @@
             return;
         }
 
-        // Play the card
-        playCard(card);
+        // Animate card playing
+        animateCardPlay(cardEl, () => {
+            // Play the card after animation
+            playCard(card);
+        });
     }
 
     // Play a card
@@ -572,6 +589,60 @@
         ws.send(JSON.stringify(message));
     }
 
+    // Animate card being played from hand to discard pile
+    function animateCardPlay(cardEl, callback) {
+        console.log('animateCardPlay called with:', cardEl);
+        if (!cardEl) {
+            console.log('No cardEl, calling callback immediately');
+            callback();
+            return;
+        }
+
+        // Add animation
+        console.log('Applying cardPlay animation');
+        cardEl.style.animation = 'cardPlay 0.5s ease-out forwards';
+        cardEl.style.zIndex = '1000';
+
+        // Execute callback after animation
+        setTimeout(() => {
+            console.log('Animation complete, executing callback');
+            callback();
+        }, 500);
+    }
+
+    // Animate card being drawn from deck to hand
+    function animateCardDraw() {
+        const playerHand = document.getElementById('player-hand');
+        if (!playerHand) return;
+
+        // Create temporary card element at deck position
+        const tempCard = document.createElement('div');
+        tempCard.className = 'game-card';
+        tempCard.style.position = 'fixed';
+        tempCard.style.width = '100px';
+        tempCard.style.height = '140px';
+        tempCard.style.zIndex = '1000';
+        tempCard.style.animation = 'cardDraw 0.6s ease-out forwards';
+        
+        // Position at player hand location
+        const handRect = playerHand.getBoundingClientRect();
+        tempCard.style.left = handRect.left + 'px';
+        tempCard.style.top = handRect.top + 'px';
+        
+        // Add card back face
+        const faceEl = document.createElement('div');
+        faceEl.className = 'card-face card-back';
+        faceEl.innerHTML = '<img src="/images/logo.png" alt="Matatu">';
+        tempCard.appendChild(faceEl);
+        
+        document.body.appendChild(tempCard);
+        
+        // Remove after animation
+        setTimeout(() => {
+            tempCard.remove();
+        }, 600);
+    }
+
     // Handle draw button click
     function onDrawClick() {
         if (!gameState.myTurn) return;
@@ -580,6 +651,9 @@
             showMessage('Not connected!', 'danger');
             return;
         }
+
+        // Animate card draw
+        animateCardDraw();
 
         ws.send(JSON.stringify({ type: 'draw_card', data: {} }));
     }
@@ -891,7 +965,13 @@
         
         for (let i = 0; i < cardCount; i++) {
             const cardEl = createCardElement('back');
-            cardEl.style.animationDelay = `${i * 0.1}s`;
+            
+            // Only animate on initial deal
+            if (!gameState.initialDealPlayed) {
+                cardEl.classList.add('deal-animation');
+                cardEl.style.animationDelay = `${i * 0.1}s`;
+            }
+            
             cardEl.style.setProperty('--random', Math.random());
             container.appendChild(cardEl);
         }
@@ -915,15 +995,25 @@
         playerHand.forEach((card, index) => {
             console.log('Creating card:', card);
             const cardEl = createCardElement('front', card);
-            cardEl.style.animationDelay = `${index * 0.1}s`;
+            
+            // Only animate on initial deal
+            if (!gameState.initialDealPlayed) {
+                cardEl.classList.add('deal-animation');
+                cardEl.style.animationDelay = `${index * 0.1}s`;
+            }
+            
             cardEl.style.setProperty('--random', Math.random());
             
-            if (gameState.myTurn) {
-                cardEl.onclick = () => onCardClick(card, cardEl);
-            }
+            // Always add click handler - updatePlayerState controls whether it works via pointer-events
+            cardEl.onclick = () => onCardClick(card, cardEl);
             
             container.appendChild(cardEl);
         });
+        
+        // Mark that initial deal has played
+        if (!gameState.initialDealPlayed && playerHand.length > 0) {
+            gameState.initialDealPlayed = true;
+        }
         
         updatePlayerState();
     }
@@ -935,18 +1025,31 @@
         
         container.innerHTML = '';
         
-        // Only show card if one has been played and has valid properties
-        if (gameState.topCard && gameState.topCard.rank && gameState.topCard.suit) {
-            const cardEl = createCardElement('front', gameState.topCard);
-            
-            // Add random rotation for ramshackled discard pile look
-            const randomRotation = (Math.random() - 0.5) * 20; // -10 to +10 degrees
-            const randomX = (Math.random() - 0.5) * 10; // -5 to +5 px
-            const randomY = (Math.random() - 0.5) * 10; // -5 to +5 px
-            cardEl.style.transform = `rotate(${randomRotation}deg) translate(${randomX}px, ${randomY}px)`;
-            cardEl.style.transition = 'transform 0.3s ease';
-            
-            container.appendChild(cardEl);
+        // Show the actual cards from the discard pile (up to 4)
+        if (gameState.discardPileCards && gameState.discardPileCards.length > 0) {
+            gameState.discardPileCards.forEach((card, i) => {
+                const cardEl = createCardElement('front', card);
+                cardEl.style.position = 'absolute';
+                cardEl.style.top = '0';
+                cardEl.style.left = '0';
+                
+                // Stack with increasing offset and rotation
+                const offset = i * 2;
+                const rotation = i * 5 - 8;
+                cardEl.style.transform = `translate(${offset}px, ${offset}px) rotate(${rotation}deg)`;
+                cardEl.style.transition = 'transform 0.3s ease';
+                cardEl.style.zIndex = i;
+                
+                // Top card gets additional random rotation
+                if (i === gameState.discardPileCards.length - 1) {
+                    const randomRotation = (Math.random() - 0.5) * 20;
+                    const randomX = (Math.random() - 0.5) * 6;
+                    const randomY = (Math.random() - 0.5) * 6;
+                    cardEl.style.transform = `translate(${offset + randomX}px, ${offset + randomY}px) rotate(${rotation + randomRotation}deg)`;
+                }
+                
+                container.appendChild(cardEl);
+            });
         }
         
         // Update deck count
@@ -1038,16 +1141,14 @@
             if (opponentHand) opponentHand.classList.add('your-turn');
         }
         
-        // Update all cards
+        // Update all cards - only control pointer events, not opacity
         document.querySelectorAll('#player-hand .game-card').forEach(card => {
             if (isYourTurn) {
                 card.classList.remove('disabled-card');
                 card.style.pointerEvents = 'auto';
-                card.style.opacity = '1';
             } else {
                 card.classList.add('disabled-card');
                 card.style.pointerEvents = 'none';
-                card.style.opacity = '0.6';
             }
         });
         
@@ -1094,28 +1195,17 @@
     
     // Show target suit indicator
     function showTargetSuit(suit) {
-        const indicator = document.getElementById('target-suit-indicator');
-        const symbol = document.getElementById('target-suit-symbol');
+        const chopCard = document.getElementById('chop-card');
+        const chopCardImg = document.getElementById('chop-card-img');
         
-        if (!indicator || !symbol) return;
+        if (!chopCard || !chopCardImg) return;
         
-        const suitSymbols = {
-            'hearts': '♥',
-            'diamonds': '♦',
-            'clubs': '♣',
-            'spades': '♠'
-        };
-        
-        const suitColors = {
-            'hearts': '#e74c3c',
-            'diamonds': '#e74c3c',
-            'clubs': '#2c3e50',
-            'spades': '#2c3e50'
-        };
-        
-        symbol.textContent = suitSymbols[suit] || '?';
-        symbol.style.color = suitColors[suit] || '#fff';
-        indicator.style.display = 'block';
+        // Display the actual target card (the card that determined the chop suit)
+        if (gameState.targetCard) {
+            chopCardImg.src = getCardImageUrl(gameState.targetCard);
+            chopCardImg.alt = gameState.targetCard.rank + ' of ' + gameState.targetCard.suit + ' (Chop Card)';
+            chopCard.style.display = 'block';
+        }
     }
 
     // Start when DOM is ready

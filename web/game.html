@@ -30,17 +30,17 @@
             </div>
         </div>
 
-        <!-- Target Suit Indicator ("Chop" Suit) -->
-        <div id="target-suit-indicator" class="target-suit-indicator" style="display: none;">
-            <div class="target-suit-label">CHOP SUIT</div>
-            <div id="target-suit-symbol" class="target-suit-symbol">♠</div>
-        </div>
-
         <!-- Game Center Area (Deck, Discard, Turn Indicator) -->
         <div class="game-center">
             
-            <!-- Deck Stack -->
+            <!-- Deck Stack (with Chop Card underneath) -->
             <div class="deck-container" id="deck-btn">
+                <!-- Chop Card (Target Suit - shows actual target card) -->
+                <div id="chop-card" class="chop-card" style="display: none;">
+                    <img id="chop-card-img" src="" alt="Chop Card" class="playing-card">
+                </div>
+                
+                <!-- Draw Deck -->
                 <div class="deck-stack" id="deck-stack">
                     <div class="game-card" style="position: absolute; top: 0; left: 0;">
                         <div class="card-face card-back"><img src="/images/logo.png" alt="Matatu"></div>
