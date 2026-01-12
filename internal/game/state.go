@@ -24,7 +24,7 @@ type Player struct {
 	Hand           []Card     `json:"hand,omitempty"`
 	Connected      bool       `json:"connected"`
 	ShowedUp       bool       `json:"showed_up"` // True if player connected at least once
-	DisconnectedAt *time.Time `json:"-"` // When player disconnected (for grace period)
+	DisconnectedAt *time.Time `json:"-"`         // When player disconnected (for grace period)
 }
 
 // CardCount returns the number of cards in the player's hand
@@ -87,7 +87,7 @@ type GameState struct {
 	CurrentTurn  string     `json:"current_turn"` // Player ID
 	CurrentSuit  Suit       `json:"current_suit"`
 	TargetSuit   Suit       `json:"target_suit"` // The "Chop" suit (determined at start)
-	DrawStack    int        `json:"draw_stack"` // For stacking 2s
+	DrawStack    int        `json:"draw_stack"`  // For stacking 2s
 	Status       GameStatus `json:"status"`
 	Winner       string     `json:"winner,omitempty"`
 	WinType      string     `json:"win_type,omitempty"` // "classic" or "chop"
@@ -163,14 +163,14 @@ func (g *GameState) Initialize() error {
 		if err != nil {
 			return err
 		}
-		
+
 		// If it's a Seven, shuffle it back and draw again
 		if targetCard.Rank == Seven {
 			g.Deck.AddCards([]Card{targetCard})
 			g.Deck.Shuffle()
 			continue
 		}
-		
+
 		// Non-seven found - this suit becomes the Target Suit
 		g.TargetSuit = targetCard.Suit
 		// Put this card back in the deck (it's not in play)
@@ -260,15 +260,18 @@ func (g *GameState) SwitchTurn() {
 
 // PlayCardResult represents the result of playing a card
 type PlayCardResult struct {
-	Success      bool          `json:"success"`
-	GameOver     bool          `json:"game_over"`
-	Winner       string        `json:"winner,omitempty"`
-	Effect       *SpecialEffect `json:"effect,omitempty"`
-	Message      string        `json:"message,omitempty"`
-	CardPlayed   Card          `json:"card_played"`
-	NewTopCard   Card          `json:"new_top_card"`
-	CurrentSuit  Suit          `json:"current_suit"`
-	NextTurn     string        `json:"next_turn"`
+	Success        bool           `json:"success"`
+	GameOver       bool           `json:"game_over"`
+	Winner         string         `json:"winner,omitempty"`
+	WinType        string         `json:"win_type,omitempty"`
+	PlayerPoints   int            `json:"player_points,omitempty"`
+	OpponentPoints int            `json:"opponent_points,omitempty"`
+	Effect         *SpecialEffect `json:"effect,omitempty"`
+	Message        string         `json:"message,omitempty"`
+	CardPlayed     Card           `json:"card_played"`
+	NewTopCard     Card           `json:"new_top_card"`
+	CurrentSuit    Suit           `json:"current_suit"`
+	NextTurn       string         `json:"next_turn"`
 }
 
 // CanPlayCard checks if a player can play a specific card
@@ -341,7 +344,7 @@ func (g *GameState) PlayCard(playerID string, card Card, declaredSuit Suit) (*Pl
 	// Check if this is the first play (discard pile empty)
 	var topCard Card
 	isFirstPlay := len(g.DiscardPile) == 0
-	
+
 	if !isFirstPlay {
 		topCard = g.DiscardPile[len(g.DiscardPile)-1]
 		if !card.CanPlayOn(topCard, g.CurrentSuit) {
@@ -380,11 +383,11 @@ func (g *GameState) PlayCard(playerID string, card Card, declaredSuit Suit) (*Pl
 		g.Status = StatusCompleted
 		now := time.Now()
 		g.CompletedAt = &now
-		
+
 		// Calculate points for both players
 		playerPoints := g.calculateHandPoints(player.Hand)
 		opponentPoints := g.calculateHandPoints(opponent.Hand)
-		
+
 		// Winner is player with LOWEST points
 		if playerPoints < opponentPoints {
 			g.Winner = playerID
@@ -395,9 +398,12 @@ func (g *GameState) PlayCard(playerID string, card Card, declaredSuit Suit) (*Pl
 			g.Winner = playerID
 		}
 		g.WinType = "chop"
-		
+
 		result.GameOver = true
 		result.Winner = g.Winner
+		result.WinType = "chop"
+		result.PlayerPoints = playerPoints
+		result.OpponentPoints = opponentPoints
 		result.Effect = &SpecialEffect{
 			Type:    "chop",
 			Message: "Game Chopped! Counting points...",
@@ -405,7 +411,7 @@ func (g *GameState) PlayCard(playerID string, card Card, declaredSuit Suit) (*Pl
 		result.NextTurn = ""
 		return result, nil
 	}
-	
+
 	// Check for classic win (no cards left)
 	if player.CardCount() == 0 {
 		g.Status = StatusCompleted
@@ -416,6 +422,7 @@ func (g *GameState) PlayCard(playerID string, card Card, declaredSuit Suit) (*Pl
 
 		result.GameOver = true
 		result.Winner = playerID
+		result.WinType = "classic"
 		result.NextTurn = ""
 		return result, nil
 	}
@@ -464,7 +471,7 @@ func (g *GameState) handleSpecialCard(card Card, opponent *Player) *SpecialEffec
 		return &SpecialEffect{
 			Type:    "wild_suit",
 			Message: "Suit changed to " + string(g.CurrentSuit),
-		}	
+		}
 	case Jack:
 		// Jack skips opponent's turn
 		return &SpecialEffect{
@@ -472,7 +479,7 @@ func (g *GameState) handleSpecialCard(card Card, opponent *Player) *SpecialEffec
 			SkipOpponent: true,
 			Message:      "Jack played! You get another turn!",
 		}
-	
+
 	case Eight:
 		// Eight skips opponent's turn
 		return &SpecialEffect{
@@ -487,12 +494,12 @@ func (g *GameState) handleSpecialCard(card Card, opponent *Player) *SpecialEffec
 
 // DrawCardResult represents the result of drawing cards
 type DrawCardResult struct {
-	Success     bool   `json:"success"`
-	CardsDrawn  []Card `json:"cards_drawn"`
-	Count       int    `json:"count"`
-	Message     string `json:"message"`
-	NextTurn    string `json:"next_turn"`
-	CanPlayDrawn bool  `json:"can_play_drawn"`
+	Success      bool   `json:"success"`
+	CardsDrawn   []Card `json:"cards_drawn"`
+	Count        int    `json:"count"`
+	Message      string `json:"message"`
+	NextTurn     string `json:"next_turn"`
+	CanPlayDrawn bool   `json:"can_play_drawn"`
 }
 
 // DrawCard handles a player drawing cards
@@ -547,66 +554,48 @@ func (g *GameState) DrawCard(playerID string) (*DrawCardResult, error) {
 		go g.SaveToRedis()
 
 		return &DrawCardResult{
-			Success:     true,
-			CardsDrawn:  cardsDrawn,
-			Count:       len(cardsDrawn),
-			Message:     "Drew penalty cards",
-			NextTurn:    g.CurrentTurn,
+			Success:      true,
+			CardsDrawn:   cardsDrawn,
+			Count:        len(cardsDrawn),
+			Message:      "Drew penalty cards",
+			NextTurn:     g.CurrentTurn,
 			CanPlayDrawn: false,
 		}, nil
 	}
 
-	// Classic Matatu: Keep drawing until you find a playable card
-	topCard := g.DiscardPile[len(g.DiscardPile)-1]
-	cardsDrawn := []Card{}
-	var playableCard *Card
-
-	for {
-		// Reshuffle if needed
-		if g.Deck.Remaining() == 0 {
-			g.reshuffleDiscardPile()
-		}
-
-		// If still no cards, game is "cut" - end with scoring
-		if g.Deck.Remaining() == 0 {
-			// No more cards - will be handled as "cut" game
-			break
-		}
-
-		card, err := g.Deck.Draw()
-		if err != nil {
-			break
-		}
-		player.AddCard(card)
-		cardsDrawn = append(cardsDrawn, card)
-
-		// Check if this card is playable
-		if card.CanPlayOn(topCard, g.CurrentSuit) {
-			playableCard = &card
-			break
-		}
+	// Draw ONE card only - player decides what to do next
+	// Reshuffle if needed
+	if g.Deck.Remaining() == 0 {
+		g.reshuffleDiscardPile()
 	}
+
+	// If still no cards, game is "cut" - end with scoring
+	if g.Deck.Remaining() == 0 {
+		// No more cards - game will be cut
+		return &DrawCardResult{
+			Success:      false,
+			CardsDrawn:   []Card{},
+			Count:        0,
+			Message:      "No cards left to draw",
+			NextTurn:     g.CurrentTurn,
+			CanPlayDrawn: false,
+		}, nil
+	}
+
+	card, err := g.Deck.Draw()
+	if err != nil {
+		return nil, err
+	}
+	player.AddCard(card)
 
 	result := &DrawCardResult{
-		Success:    true,
-		CardsDrawn: cardsDrawn,
-		Count:      len(cardsDrawn),
-		Message:    "Drew " + string(rune('0'+len(cardsDrawn))) + " card(s)",
+		Success:      true,
+		CardsDrawn:   []Card{card},
+		Count:        1,
+		Message:      "Drew 1 card",
+		CanPlayDrawn: true,          // Player can choose to play or pass
+		NextTurn:     g.CurrentTurn, // Turn stays with player until they pass
 	}
-
-	if playableCard != nil {
-		result.CanPlayDrawn = true
-		result.Message = "Found a playable card! Play it or pass."
-		// Don't switch turn yet - player can choose to play or pass
-		result.NextTurn = g.CurrentTurn
-		// Save state to Redis
-		go g.SaveToRedis()
-		return result, nil
-	}
-
-	// No playable card found (deck exhausted) - switch turn
-	g.SwitchTurn()
-	result.NextTurn = g.CurrentTurn
 
 	// Save state to Redis
 	go g.SaveToRedis()
@@ -624,10 +613,10 @@ func (g *GameState) PassTurn(playerID string) error {
 	}
 
 	g.SwitchTurn()
-	
+
 	// Save state to Redis
 	go g.SaveToRedis()
-	
+
 	return nil
 }
 

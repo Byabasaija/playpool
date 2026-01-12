@@ -63,7 +63,8 @@
         drawStack: 0,
         deckCount: 0,
         connected: false,
-        pendingAce: null // Card waiting for suit selection (Ace is wild suit)
+        pendingAce: null, // Card waiting for suit selection (Ace is wild suit)
+        canPass: false // Flag to show PASS button after drawing
     };
 
     // WebSocket connection
@@ -120,6 +121,15 @@
 
     // Setup event listeners
     function setupEventListeners() {
+        // Turn indicator click (for passing)
+        if (elements.turnIndicator) {
+            elements.turnIndicator.addEventListener('click', function() {
+                if (gameState.canPass && gameState.myTurn) {
+                    onPassClick();
+                }
+            });
+        }
+
         // Draw button
         const drawBtn = document.getElementById('deck-btn');
         if (drawBtn) {
@@ -288,6 +298,7 @@
     function updateGameState(data) {
         try {
             gameState.gameId = data.game_id;
+            gameState.playerId = data.my_id; // Set player ID for winner comparison
             gameState.myHand = data.my_hand || [];
             gameState.opponentCardCount = data.opponent_card_count || 0;
             gameState.topCard = data.top_card;
@@ -306,7 +317,12 @@
             }
             
             if (data.winner) {
-                handleGameOver(data.winner === gameState.playerId);
+                handleGameOver({
+                    isWinner: data.winner === gameState.playerId,
+                    winType: data.win_type,
+                    playerPoints: data.player_points,
+                    opponentPoints: data.opponent_points
+                });
                 return;
             }
 
@@ -323,21 +339,8 @@
             renderOpponentHand();
             renderPlayerHand();
             renderDiscardPile();
+            renderTurnIndicator();
             updatePlayerState();
-            
-            // Update turn indicator
-            const turnInd = document.getElementById('turn-indicator');
-            if (turnInd) {
-                if (gameState.myTurn) {
-                    turnInd.textContent = 'YOUR TURN';
-                    turnInd.style.color = '#eb333a';
-                    turnInd.style.borderColor = '#eb333a';
-                } else {
-                    turnInd.textContent = "OPPONENT'S TURN";
-                    turnInd.style.color = 'rgba(255,255,255,0.6)';
-                    turnInd.style.borderColor = 'rgba(255,255,255,0.3)';
-                }
-            }
         } catch (error) {
             console.error('Error updating game state:', error);
             console.log('Game data:', data);
@@ -397,15 +400,26 @@
 
     // Render discard pile (top card)
     function renderDiscardPile() {
-        if (!elements.discardPile || !gameState.topCard) return;
+        if (!elements.discardPile) return;
 
         elements.discardPile.innerHTML = '';
+        
+        // Don't show anything if no card has been played yet
+        if (!gameState.topCard || !gameState.topCard.rank || !gameState.topCard.suit) return;
         
         const card = document.createElement('img');
         card.src = getCardImageUrl(gameState.topCard);
         card.className = 'playing-card top-card';
         card.alt = gameState.topCard.rank + ' of ' + gameState.topCard.suit;
         card.style.width = '70px';
+        
+        // Add random rotation for ramshackled discard pile look
+        const randomRotation = (Math.random() - 0.5) * 20; // -10 to +10 degrees
+        const randomX = (Math.random() - 0.5) * 10; // -5 to +5 px
+        const randomY = (Math.random() - 0.5) * 10; // -5 to +5 px
+        card.style.transform = `rotate(${randomRotation}deg) translate(${randomX}px, ${randomY}px)`;
+        card.style.transition = 'transform 0.3s ease';
+        
         elements.discardPile.appendChild(card);
     }
 
@@ -475,14 +489,23 @@
 
     // Render turn indicator
     function renderTurnIndicator() {
-        if (!elements.turnIndicator || !elements.turnText) return;
+        if (!elements.turnIndicator) return;
 
         if (gameState.myTurn) {
-            elements.turnIndicator.className = 'badge fs-5 px-4 py-2 rounded-pill bg-success';
-            elements.turnText.textContent = '🎯 Your Turn!';
+            if (gameState.canPass) {
+                // Show PASS button after drawing
+                elements.turnIndicator.className = 'badge fs-5 px-4 py-2 rounded-pill bg-warning text-dark';
+                elements.turnIndicator.style.cursor = 'pointer';
+                elements.turnIndicator.textContent = 'PASS';
+            } else {
+                elements.turnIndicator.className = 'badge fs-5 px-4 py-2 rounded-pill bg-success';
+                elements.turnIndicator.style.cursor = 'default';
+                elements.turnIndicator.textContent = 'PLAY';
+            }
         } else {
             elements.turnIndicator.className = 'badge fs-5 px-4 py-2 rounded-pill bg-secondary';
-            elements.turnText.textContent = "⏳ Opponent's Turn...";
+            elements.turnIndicator.style.cursor = 'default';
+            elements.turnIndicator.textContent = "WAIT";
         }
     }
 
@@ -565,7 +588,8 @@
     function onPassClick() {
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
         ws.send(JSON.stringify({ type: 'pass_turn', data: {} }));
-        if (elements.passBtn) elements.passBtn.classList.add('d-none');
+        gameState.canPass = false;
+        renderTurnIndicator();
     }
 
     // Show suit selector for Aces
@@ -593,12 +617,21 @@
 
     // Handle card played event
     function handleCardPlayed(data) {
+        // Reset pass flag when a card is played
+        gameState.canPass = false;
+        renderTurnIndicator();
+        
         if (data.effect && data.effect.message) {
             showMessage(data.effect.message, 'info');
         }
 
         if (data.game_over) {
-            handleGameOver(data.winner === gameState.playerId);
+            handleGameOver({
+                isWinner: data.winner === gameState.playerId,
+                winType: data.win_type,
+                playerPoints: data.player_points,
+                opponentPoints: data.opponent_points
+            });
         }
     }
 
@@ -610,12 +643,10 @@
             renderPlayerHand();
         }
 
-        if (data.can_play_drawn) {
-            showMessage('You drew a playable card! Play it or pass.', 'info');
-            if (elements.passBtn) {
-                elements.passBtn.classList.remove('d-none');
-            }
-        }
+        // After drawing, player can play a card or pass
+        gameState.canPass = true;
+        renderTurnIndicator();
+        showMessage('Drew ' + data.count + ' card(s). Play a card or pass your turn.', 'info');
     }
 
     // Handle opponent drew cards
@@ -631,37 +662,113 @@
     }
 
     // Handle game over
-    function handleGameOver(won) {
+    function handleGameOver(gameData) {
+        // Handle both old boolean format and new object format
+        var won = typeof gameData === 'boolean' ? gameData : gameData.isWinner;
+        var winType = (typeof gameData === 'object' && gameData.winType) ? gameData.winType : 'classic';
+        var playerPoints = typeof gameData === 'object' ? gameData.playerPoints : undefined;
+        var opponentPoints = typeof gameData === 'object' ? gameData.opponentPoints : undefined;
+        
         var modalEl = document.getElementById('game-over-modal');
         if (!modalEl) return;
         
-        var modal = new bootstrap.Modal(modalEl);
+        // Get all elements
         var resultEmoji = document.getElementById('result-emoji');
         var resultTitle = document.getElementById('result-title');
         var resultMessage = document.getElementById('result-message');
+        var winTypeBadge = document.getElementById('win-type-badge');
+        var pointsCard = document.getElementById('points-card');
+        var playerPointsEl = document.getElementById('player-points');
+        var opponentPointsEl = document.getElementById('opponent-points');
         var resultPrize = document.getElementById('result-prize');
+        var prizeAmount = document.getElementById('prize-amount');
 
         if (won) {
             var prize = Math.floor(gameState.stakeAmount * 2 * 0.9);
+            
+            // Emoji and title
             if (resultEmoji) resultEmoji.textContent = '🎉';
-            if (resultTitle) resultTitle.textContent = 'You Won!';
-            if (resultMessage) resultMessage.textContent = 'Congratulations! You cleared your hand first!';
+            if (resultTitle) resultTitle.textContent = 'Victory!';
+            
+            // Win type badge
+            if (winTypeBadge) {
+                if (winType === 'chop') {
+                    winTypeBadge.innerHTML = '<span class="badge bg-warning text-dark px-3 py-2 fs-6">🎯 Chop Win</span>';
+                } else {
+                    winTypeBadge.innerHTML = '<span class="badge bg-success px-3 py-2 fs-6">✨ Classic Win</span>';
+                }
+            }
+            
+            // Message
+            if (resultMessage) {
+                if (winType === 'chop') {
+                    resultMessage.textContent = 'You won with the lowest points!';
+                } else {
+                    resultMessage.textContent = 'You cleared your hand first!';
+                }
+            }
+            
+            // Points (for chop wins)
+            if (winType === 'chop' && playerPoints !== undefined && opponentPoints !== undefined) {
+                if (pointsCard) pointsCard.style.display = 'block';
+                if (playerPointsEl) playerPointsEl.textContent = playerPoints;
+                if (opponentPointsEl) opponentPointsEl.textContent = opponentPoints;
+            } else {
+                if (pointsCard) pointsCard.style.display = 'none';
+            }
+            
+            // Prize
             if (resultPrize) {
-                resultPrize.innerHTML = '<div class="fs-6 opacity-75">Prize Won</div><div class="fs-3 fw-bold">' + prize.toLocaleString() + ' UGX</div>';
-                resultPrize.classList.remove('bg-danger');
-                resultPrize.classList.add('bg-success');
+                resultPrize.className = 'card border-0 mb-4 bg-success';
+            }
+            if (prizeAmount) {
+                prizeAmount.className = 'fs-1 fw-bold text-white';
+                prizeAmount.textContent = prize.toLocaleString() + ' UGX';
             }
         } else {
+            // Loss styling
             if (resultEmoji) resultEmoji.textContent = '😢';
-            if (resultTitle) resultTitle.textContent = 'You Lost';
-            if (resultMessage) resultMessage.textContent = 'Better luck next time!';
+            if (resultTitle) resultTitle.textContent = 'Game Over';
+            
+            // Win type badge
+            if (winTypeBadge) {
+                if (winType === 'chop') {
+                    winTypeBadge.innerHTML = '<span class="badge bg-warning text-dark px-3 py-2 fs-6">🎯 Chop Loss</span>';
+                } else {
+                    winTypeBadge.innerHTML = '<span class="badge bg-secondary px-3 py-2 fs-6">Classic Loss</span>';
+                }
+            }
+            
+            // Message
+            if (resultMessage) {
+                if (winType === 'chop') {
+                    resultMessage.textContent = 'Opponent won with lower points.';
+                } else {
+                    resultMessage.textContent = 'Opponent cleared their hand first.';
+                }
+            }
+            
+            // Points (for chop wins)
+            if (winType === 'chop' && playerPoints !== undefined && opponentPoints !== undefined) {
+                if (pointsCard) pointsCard.style.display = 'block';
+                if (playerPointsEl) playerPointsEl.textContent = playerPoints;
+                if (opponentPointsEl) opponentPointsEl.textContent = opponentPoints;
+            } else {
+                if (pointsCard) pointsCard.style.display = 'none';
+            }
+            
+            // Prize/Loss
             if (resultPrize) {
-                resultPrize.innerHTML = '<div class="fs-6 opacity-75">Stake Lost</div><div class="fs-3 fw-bold">' + gameState.stakeAmount.toLocaleString() + ' UGX</div>';
-                resultPrize.classList.remove('bg-success');
-                resultPrize.classList.add('bg-danger');
+                resultPrize.className = 'card border-0 mb-4 bg-danger';
+            }
+            if (prizeAmount) {
+                prizeAmount.className = 'fs-1 fw-bold text-white';
+                prizeAmount.textContent = '-' + gameState.stakeAmount.toLocaleString() + ' UGX';
             }
         }
-
+        
+        // Show modal
+        var modal = new bootstrap.Modal(modalEl);
         modal.show();
     }
 
@@ -828,8 +935,17 @@
         
         container.innerHTML = '';
         
-        if (gameState.topCard) {
+        // Only show card if one has been played and has valid properties
+        if (gameState.topCard && gameState.topCard.rank && gameState.topCard.suit) {
             const cardEl = createCardElement('front', gameState.topCard);
+            
+            // Add random rotation for ramshackled discard pile look
+            const randomRotation = (Math.random() - 0.5) * 20; // -10 to +10 degrees
+            const randomX = (Math.random() - 0.5) * 10; // -5 to +5 px
+            const randomY = (Math.random() - 0.5) * 10; // -5 to +5 px
+            cardEl.style.transform = `rotate(${randomRotation}deg) translate(${randomX}px, ${randomY}px)`;
+            cardEl.style.transition = 'transform 0.3s ease';
+            
             container.appendChild(cardEl);
         }
         
@@ -944,22 +1060,6 @@
             } else {
                 deckContainer.style.pointerEvents = 'none';
                 deckContainer.style.opacity = '0.5';
-            }
-        }
-
-        // Update turn indicator with animation and clear text
-        const turnInd = document.getElementById('turn-indicator');
-        if (turnInd) {
-            if (isYourTurn) {
-                turnInd.classList.add('turn-active');
-                turnInd.classList.remove('turn-inactive');
-                turnInd.textContent = 'YOUR TURN';
-                turnInd.style.color = '#eb333a';
-            } else {
-                turnInd.classList.add('turn-inactive');
-                turnInd.classList.remove('turn-active');
-                turnInd.textContent = 'OPPONENT\'S TURN';
-                turnInd.style.color = 'rgba(255,255,255,0.6)';
             }
         }
     }

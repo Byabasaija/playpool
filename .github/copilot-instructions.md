@@ -172,7 +172,7 @@ A real-money, peer-to-peer Matatu card game platform where players stake money v
 
 - Players alternate turns
 - On your turn, play a single card that matches the top card of the discard pile by either **rank** or **suit**
-- **Cannot Play:** If you have no valid card, you must draw cards from the stock pile **until a playable card is found**, then you may play it or pass
+- **Cannot Play:** If you have no valid card (or choose not to play), you draw **ONE card** from the stock pile. After drawing, you may play the drawn card, play any other card from your hand, or pass your turn. The system does not force you to play the drawn card - you decide
 
 ### 3.4 Special Cards
 

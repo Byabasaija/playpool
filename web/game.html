@@ -55,9 +55,11 @@
             </div>
 
             <!-- Turn Indicator -->
-            <div id="turn-indicator" class="turn-indicator">
-                <!-- Turn indicator controlled by game.js -->
-            </div>
+            <button id="turn-indicator" class="btn btn-outline-light rounded-circle d-flex align-items-center justify-content-center fw-bold text-uppercase" 
+                    type="button" 
+                    style="width: 120px; height: 120px; font-size: 0.75rem; opacity: 0.6; border-width: 3px;">
+                WAIT
+            </button>
 
             <!-- Discard Pile (Top Card) -->
             <div class="discard-pile" id="discard-pile">
@@ -84,7 +86,52 @@
     </div>
 
     <!-- Game Over Modal -->
-    <div class="modal fade" id="game-over-modal" tabindex="-1">\n        <div class="modal-dialog modal-dialog-centered">\n            <div class="modal-content">\n                <div class="modal-header border-0">\n                    <h3 id="result-emoji" class="display-1 mx-auto mb-0"></h3>\n                </div>\n                <div class="modal-body text-center">\n                    <h4 id="result-title" class="mb-3"></h4>\n                    <p id="result-message" class="mb-3"></p>\n                    <h2 id="result-prize" class="text-success"></h2>\n                </div>\n                <div class="modal-footer border-0 justify-content-center">\n                    <a href="/" class="btn btn-primary btn-lg">Play Again</a>\n                </div>\n            </div>\n        </div>\n    </div>
+    <div class="modal fade" id="game-over-modal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-0 shadow-lg" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+                <div class="modal-body text-center p-5">
+                    <!-- Emoji -->
+                    <div id="result-emoji" class="display-1 mb-4" style="font-size: 5rem;"></div>
+                    
+                    <!-- Title -->
+                    <h2 id="result-title" class="text-white fw-bold mb-3"></h2>
+                    
+                    <!-- Win Type Badge -->
+                    <div id="win-type-badge" class="mb-3"></div>
+                    
+                    <!-- Message -->
+                    <p id="result-message" class="text-white-50 fs-5 mb-4" style="white-space: pre-line;"></p>
+                    
+                    <!-- Points Card (for chop wins) -->
+                    <div id="points-card" class="card bg-white bg-opacity-25 border-0 mb-4" style="display: none;">
+                        <div class="card-body py-3">
+                            <div class="row text-white">
+                                <div class="col-6 border-end border-white border-opacity-25">
+                                    <div class="text-white-50 small mb-1">Your Points</div>
+                                    <div id="player-points" class="fs-3 fw-bold"></div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="text-white-50 small mb-1">Opponent</div>
+                                    <div id="opponent-points" class="fs-3 fw-bold"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Prize Card -->
+                    <div id="result-prize" class="card border-0 mb-4">
+                        <div class="card-body py-3">
+                            <div class="small text-muted mb-1">Prize Money</div>
+                            <div id="prize-amount" class="fs-1 fw-bold"></div>
+                        </div>
+                    </div>
+                    
+                    <!-- Action Button -->
+                    <a href="/" class="btn btn-light btn-lg px-5 fw-bold">Play Again</a>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- Suit Selector Modal (for Aces) -->
     <div class="suit-selector" id="suit-selector">

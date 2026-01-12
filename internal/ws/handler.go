@@ -31,7 +31,7 @@ type Client struct {
 
 // Hub maintains the set of active clients
 type Hub struct {
-	clients    map[string]*Client // playerID -> Client
+	clients    map[string]*Client            // playerID -> Client
 	gameRooms  map[string]map[string]*Client // gameID -> playerID -> Client
 	register   chan *Client
 	unregister chan *Client
@@ -61,7 +61,7 @@ func (h *Hub) Run() {
 		select {
 		case client := <-h.register:
 			h.mu.Lock()
-			
+
 			// If player already has a connection, close the old one (reconnect scenario)
 			if oldClient, exists := h.clients[client.playerID]; exists {
 				// Close old connection's send channel to trigger cleanup
@@ -72,7 +72,7 @@ func (h *Hub) Run() {
 				}
 				log.Printf("Player %s reconnecting - closing old connection", client.playerID)
 			}
-			
+
 			h.clients[client.playerID] = client
 			if _, exists := h.gameRooms[client.gameID]; !exists {
 				h.gameRooms[client.gameID] = make(map[string]*Client)
@@ -90,7 +90,7 @@ func (h *Hub) Run() {
 				// Check if both players are now connected AND game hasn't started yet
 				if g.Status == game.StatusWaiting && g.BothPlayersConnected() {
 					log.Printf("✓ Both players connected - initializing game %s", g.ID)
-					
+
 					if err := g.Initialize(); err != nil {
 						log.Printf("❌ Init failed: %v", err)
 					} else {
@@ -139,13 +139,13 @@ func (h *Hub) Run() {
 						delete(h.gameRooms, client.gameID)
 					}
 				}
-				
+
 				log.Printf("Player %s disconnected from game %s", client.playerID, client.gameID)
 
 				// Mark player as disconnected with timestamp
 				if g, err := game.Manager.GetGameByToken(client.gameToken); err == nil {
 					g.SetPlayerDisconnected(client.playerID)
-					
+
 					// Only notify if game is in progress
 					if g.Status == game.StatusInProgress {
 						h.BroadcastToGame(client.gameID, map[string]interface{}{
@@ -156,7 +156,7 @@ func (h *Hub) Run() {
 					}
 				}
 			}
-			
+
 			// Always close the send channel
 			select {
 			case <-client.send:
@@ -164,7 +164,7 @@ func (h *Hub) Run() {
 			default:
 				close(client.send)
 			}
-			
+
 			h.mu.Unlock()
 		}
 	}
@@ -218,7 +218,7 @@ type WSMessage struct {
 }
 
 type PlayCardData struct {
-	Card        string `json:"card"`
+	Card         string `json:"card"`
 	DeclaredSuit string `json:"declared_suit,omitempty"`
 }
 
@@ -408,14 +408,17 @@ func (c *Client) handlePlayCard(g *game.GameState, data PlayCardData) {
 
 	// Broadcast the play to all players
 	GameHub.BroadcastToGame(c.gameID, map[string]interface{}{
-		"type":         "card_played",
-		"player":       c.playerID,
-		"card":         data.Card,
-		"current_suit": result.CurrentSuit,
-		"next_turn":    result.NextTurn,
-		"effect":       result.Effect,
-		"game_over":    result.GameOver,
-		"winner":       result.Winner,
+		"type":            "card_played",
+		"player":          c.playerID,
+		"card":            data.Card,
+		"current_suit":    result.CurrentSuit,
+		"next_turn":       result.NextTurn,
+		"effect":          result.Effect,
+		"game_over":       result.GameOver,
+		"winner":          result.Winner,
+		"win_type":        result.WinType,
+		"player_points":   result.PlayerPoints,
+		"opponent_points": result.OpponentPoints,
 	})
 
 	// Send updated game state to each player
@@ -432,11 +435,11 @@ func (c *Client) handleDrawCard(g *game.GameState) {
 
 	// Send drawn cards only to the player who drew
 	GameHub.SendToPlayer(c.playerID, map[string]interface{}{
-		"type":          "cards_drawn",
-		"cards":         result.CardsDrawn,
-		"count":         result.Count,
+		"type":           "cards_drawn",
+		"cards":          result.CardsDrawn,
+		"count":          result.Count,
 		"can_play_drawn": result.CanPlayDrawn,
-		"next_turn":     result.NextTurn,
+		"next_turn":      result.NextTurn,
 	})
 
 	// Broadcast to opponent that cards were drawn
