@@ -151,6 +151,9 @@ document.addEventListener('DOMContentLoaded', () => {
             playBtn.disabled = true;
             playBtn.textContent = 'Processing...';
 
+            // Immediately show waiting for payment screen
+            showWaitingPayment();
+
             try {
                 // Initiate stake payment (DUMMY - auto-approved)
                 const stakeResult = await initiateStake(phone, stake);
@@ -167,7 +170,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     return;
                 }
 
-                // Not matched yet, show waiting and poll for match
+                // Payment confirmed, now show waiting for match
                 showWaitingMatch();
 
                 // Poll for match

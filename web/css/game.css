@@ -610,12 +610,14 @@ body.game-page {
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    background: white;
-    padding: 30px;
-    border-radius: 20px;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+    background: rgba(255, 255, 255, 0.98);
+    backdrop-filter: blur(10px);
+    padding: 25px;
+    border-radius: 16px;
+    box-shadow: 0 25px 80px rgba(0, 0, 0, 0.5);
     z-index: 1000;
     display: none;
+    border: 2px solid rgba(255, 255, 255, 0.2);
 }
 
 .suit-selector.show {
@@ -623,26 +625,128 @@ body.game-page {
     animation: fadeInScale 0.3s ease-out;
 }
 
-.suit-selector h5 {
-    color: var(--mine-shaft);
-}
-
 .suit-option {
-    padding: 15px 20px;
-    margin: 5px;
-    border: 2px solid #ddd;
+    padding: 18px 20px;
+    margin: 8px;
+    border: 3px solid transparent;
     border-radius: 12px;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
     text-align: center;
-    font-size: 1.5rem;
-    background: white;
+    font-size: 2.2rem;
+    font-weight: bold;
+    background: rgba(255, 255, 255, 0.9);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    min-height: 60px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .suit-option:hover {
-    border-color: var(--mine-shaft);
-    background: linear-gradient(135deg, rgba(55, 53, 54, 0.1), rgba(103, 101, 102, 0.1));
-    transform: scale(1.08);
+    transform: translateY(-3px) scale(1.05);
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.25);
+}
+
+/* Individual suit colors */
+.suit-option:nth-child(1) { /* Hearts */
+    color: #e74c3c;
+    border-color: rgba(231, 76, 60, 0.3);
+}
+
+.suit-option:nth-child(1):hover {
+    background: linear-gradient(135deg, rgba(231, 76, 60, 0.1), rgba(231, 76, 60, 0.2));
+    border-color: #e74c3c;
+}
+
+.suit-option:nth-child(2) { /* Diamonds */
+    color: #e74c3c;
+    border-color: rgba(231, 76, 60, 0.3);
+}
+
+.suit-option:nth-child(2):hover {
+    background: linear-gradient(135deg, rgba(231, 76, 60, 0.1), rgba(231, 76, 60, 0.2));
+    border-color: #e74c3c;
+}
+
+.suit-option:nth-child(3) { /* Clubs */
+    color: #2c3e50;
+    border-color: rgba(44, 62, 80, 0.3);
+}
+
+.suit-option:nth-child(3):hover {
+    background: linear-gradient(135deg, rgba(44, 62, 80, 0.1), rgba(44, 62, 80, 0.2));
+    border-color: #2c3e50;
+}
+
+.suit-option:nth-child(4) { /* Spades */
+    color: #2c3e50;
+    border-color: rgba(44, 62, 80, 0.3);
+}
+
+.suit-option:nth-child(4):hover {
+    background: linear-gradient(135deg, rgba(44, 62, 80, 0.1), rgba(44, 62, 80, 0.2));
+    border-color: #2c3e50;
+}
+
+/* Suit Announcement Modal (shown to opponent) */
+.suit-announcement {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0, 0, 0, 0.95);
+    backdrop-filter: blur(8px);
+    padding: 20px 30px;
+    border-radius: 16px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
+    z-index: 10000;
+    display: none;
+    border: 3px solid rgba(255, 255, 255, 0.2);
+    animation: suitAnnouncement 3s ease-out forwards;
+}
+
+.suit-announcement.show {
+    display: block;
+}
+
+.suit-announcement-symbol {
+    font-size: 4rem;
+    font-weight: bold;
+    text-align: center;
+    animation: suitPulse 0.6s ease-out;
+    line-height: 1;
+}
+
+@keyframes suitAnnouncement {
+    0% {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(0.8);
+    }
+    10% {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1);
+    }
+    90% {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1);
+    }
+    100% {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(0.9);
+    }
+}
+
+@keyframes suitPulse {
+    0% {
+        transform: scale(1);
+    }
+    50% {
+        transform: scale(1.2);
+    }
+    100% {
+        transform: scale(1);
+    }
 }
 
 /* Messages */

@@ -1216,6 +1216,58 @@
     
     // Expose selectSuit to global scope for HTML onclick handlers
     window.selectSuit = selectSuit;
+    
+  
+    
+    // Test function to check if modal elements exist
+    window.checkModalElements = function() {
+        const announcement = document.getElementById('suit-announcement');
+        const symbolEl = document.getElementById('announced-suit-symbol');
+        console.log('Announcement element exists:', !!announcement);
+        console.log('Symbol element exists:', !!symbolEl);
+        console.log('Announcement element:', announcement);
+        console.log('Symbol element:', symbolEl);
+        return { announcement, symbolEl };
+    };
+
+    // Show suit announcement to opponent
+    function showSuitAnnouncement(suit) {
+        console.log('=== SHOWING SUIT ANNOUNCEMENT ===');
+        console.log('Suit:', suit);
+        
+        const announcement = document.getElementById('suit-announcement');
+        const symbolEl = document.getElementById('announced-suit-symbol');
+        
+        console.log('Announcement element found:', !!announcement);
+        console.log('Symbol element found:', !!symbolEl);
+        
+        if (!announcement || !symbolEl) {
+            console.error('Suit announcement elements not found!');
+            console.log('All elements with id containing "suit":', 
+                Array.from(document.querySelectorAll('[id*="suit"]')).map(el => el.id));
+            return;
+        }
+        
+        // Set the suit symbol and color
+        const symbol = suitSymbols[suit] || '?';
+        const color = suitColors[suit] || '#000';
+        
+        console.log('Setting symbol:', symbol, 'color:', color);
+        
+        symbolEl.textContent = symbol;
+        symbolEl.style.color = color;
+        
+        // Show the announcement
+        announcement.classList.add('show');
+        console.log('Added show class. Modal should be visible now!');
+        console.log('Modal classes:', announcement.className);
+        
+        // Hide after 3 seconds
+        setTimeout(() => {
+            announcement.classList.remove('show');
+            console.log('Removed show class');
+        }, 3000);
+    }
 
 })();
 

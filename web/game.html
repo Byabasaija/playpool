@@ -9,7 +9,7 @@
     <!-- Game Styles -->
     <link rel="stylesheet" href="/css/game.css">
 </head>
-<body class="game-page" style="background: linear-gradient(135deg, #373536 0%, #676566 100%); margin: 0; padding: 0; min-height: 100vh;">
+<body class="game-page" style="background: url('/images/10081449.jpg') no-repeat center center fixed; background-size: cover; margin: 0; padding: 0; min-height: 100vh;">
     
     <!-- WAITING ROOM SCREEN -->
     <div id="waiting-room" style="display: flex; align-items: center; justify-content: center; min-height: 100vh; flex-direction: column; color: white;">
@@ -135,29 +135,33 @@
 
     <!-- Suit Selector Modal (for Aces) -->
     <div class="suit-selector" id="suit-selector">
-        <h5 class="text-center mb-4">Choose a Suit (Ace is Wild)</h5>
-        <div class="row">
+        <div class="row g-2">
             <div class="col-6">
                 <div class="suit-option" onclick="selectSuit('hearts')">
-                    ♥<br><small>Hearts</small>
+                    ♥
                 </div>
             </div>
             <div class="col-6">
                 <div class="suit-option" onclick="selectSuit('diamonds')">
-                    ♦<br><small>Diamonds</small>
+                    ♦
                 </div>
             </div>
             <div class="col-6">
                 <div class="suit-option" onclick="selectSuit('clubs')">
-                    ♣<br><small>Clubs</small>
+                    ♣
                 </div>
             </div>
             <div class="col-6">
                 <div class="suit-option" onclick="selectSuit('spades')">
-                    ♠<br><small>Spades</small>
+                    ♠
                 </div>
             </div>
         </div>
+    </div>
+
+    <!-- Suit Announcement Modal (shown to opponent) -->
+    <div class="suit-announcement" id="suit-announcement">
+        <div class="suit-announcement-symbol" id="announced-suit-symbol">♥</div>
     </div>
 
     <!-- Bootstrap JS -->
