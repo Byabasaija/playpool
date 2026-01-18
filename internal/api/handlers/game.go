@@ -125,9 +125,9 @@ func CheckQueueStatus(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Ha
 			// Player is in a game! Get their link
 			var gameLink string
 			if gameState.Player1.ID == playerID {
-				gameLink = "http://localhost:8000/g/" + gameState.Token + "?pt=" + gameState.Player1.PlayerToken
+				gameLink = cfg.FrontendURL + "/g/" + gameState.Token + "?pt=" + gameState.Player1.PlayerToken
 			} else {
-				gameLink = "http://localhost:8000/g/" + gameState.Token + "?pt=" + gameState.Player2.PlayerToken
+				gameLink = cfg.FrontendURL + "/g/" + gameState.Token + "?pt=" + gameState.Player2.PlayerToken
 			}
 
 			log.Printf("[QUEUE STATUS] Player %s matched! Game: %s, Link: %s", playerID, gameState.ID, gameLink)
@@ -169,7 +169,7 @@ func CheckQueueStatus(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Ha
 func GetGameState(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := c.Param("token")
-		playerID := c.Query("player_id")
+		playerID := c.Query("pt")
 
 		// Get game by token
 		gameState, err := game.Manager.GetGameByToken(token)

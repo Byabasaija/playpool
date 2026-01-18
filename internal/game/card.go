@@ -108,7 +108,12 @@ func (c Card) PointValue() int {
 // Classic Ugandan Matatu rules:
 // - Ace (wild suit) can be played on any card
 // - Regular cards must match by suit or rank
-func (c Card) CanPlayOn(other Card, currentSuit Suit) bool {
+func (c Card) CanPlayOn(other *Card, currentSuit Suit) bool {
+	// If no top card (game just started), any card can be played
+	if other == nil {
+		return true
+	}
+
 	// Ace is wild suit - can be played on anything
 	if c.Rank == Ace {
 		return true
@@ -198,7 +203,7 @@ func (d *Deck) ReshuffleFrom(discardPile []Card) {
 	if len(discardPile) <= 1 {
 		return
 	}
-	
+
 	// Take all but the top card
 	cardsToAdd := discardPile[:len(discardPile)-1]
 	d.AddCards(cardsToAdd)

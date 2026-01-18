@@ -10,16 +10,18 @@ import (
 	"sync"
 	"time"
 
+	"github.com/playmatatu/backend/internal/config"
 	"github.com/redis/go-redis/v9"
 )
 
 // GameManager manages all active games and matchmaking
 type GameManager struct {
-	games          map[string]*GameState // keyed by game ID
-	playerToGame   map[string]string     // player ID -> game ID
-	matchmakingQueue map[int][]QueueEntry // stake amount -> queue of players
-	rdb            *redis.Client         // Redis client for persistence
-	mu             sync.RWMutex
+	games            map[string]*GameState // keyed by game ID
+	playerToGame     map[string]string     // player ID -> game ID
+	matchmakingQueue map[int][]QueueEntry  // stake amount -> queue of players
+	rdb              *redis.Client         // Redis client for persistence
+	config           *config.Config        // Application config
+	mu               sync.RWMutex
 }
 
 // QueueEntry represents a player in the matchmaking queue
@@ -32,16 +34,16 @@ type QueueEntry struct {
 
 // MatchResult represents the result of a successful match
 type MatchResult struct {
-	GameID        string
-	GameToken     string
-	Player1ID     string
-	Player1Token  string
-	Player1Link   string
-	Player2ID     string
-	Player2Token  string
-	Player2Link   string
-	StakeAmount   int
-	ExpiresAt     time.Time
+	GameID       string
+	GameToken    string
+	Player1ID    string
+	Player1Token string
+	Player1Link  string
+	Player2ID    string
+	Player2Token string
+	Player2Link  string
+	StakeAmount  int
+	ExpiresAt    time.Time
 }
 
 var (
@@ -49,22 +51,22 @@ var (
 	Manager *GameManager
 )
 
-// InitializeManager initializes the global game manager with Redis
-func InitializeManager(rdb *redis.Client) {
-	Manager = NewGameManager(rdb)
+// InitializeManager initializes the global game manager with Redis and config
+func InitializeManager(rdb *redis.Client, cfg *config.Config) {
+	Manager = NewGameManager(rdb, cfg)
 	// Start background jobs
 	go Manager.StartExpiryChecker()
 	go Manager.StartDisconnectChecker()
 }
 
 // NewGameManager creates a new game manager
-// NewGameManager creates a new game manager
-func NewGameManager(rdb *redis.Client) *GameManager {
+func NewGameManager(rdb *redis.Client, cfg *config.Config) *GameManager {
 	return &GameManager{
 		games:            make(map[string]*GameState),
 		playerToGame:     make(map[string]string),
 		matchmakingQueue: make(map[int][]QueueEntry),
 		rdb:              rdb,
+		config:           cfg,
 	}
 }
 
@@ -144,7 +146,7 @@ func (gm *GameManager) JoinQueue(playerID, phoneNumber string, stakeAmount int) 
 				gm.saveGameToRedis(game)
 
 				// Generate game links for both players
-				baseURL := "http://localhost:8000" // TODO: Get from config
+				baseURL := gm.config.FrontendURL
 				player1Link := baseURL + "/g/" + gameToken + "?pt=" + player1Token
 				player2Link := baseURL + "/g/" + gameToken + "?pt=" + player2Token
 
@@ -230,17 +232,21 @@ func (gm *GameManager) GetGameByToken(token string) (*GameState, error) {
 	for _, game := range gm.games {
 		if game.Token == token {
 			gm.mu.RUnlock()
+			log.Printf("[DEBUG] Found game %s in memory", token)
 			return game, nil
 		}
 	}
 	gm.mu.RUnlock()
 
+	log.Printf("[DEBUG] Game %s not found in memory, checking Redis", token)
 	// Not found in memory, try Redis
 	game, err := gm.loadGameFromRedis(token)
 	if err != nil {
+		log.Printf("[DEBUG] Game %s not found in Redis: %v", token, err)
 		return nil, errors.New("game not found")
 	}
 
+	log.Printf("[DEBUG] Loaded game %s from Redis", token)
 	// Load into memory and return
 	gm.mu.Lock()
 	gm.games[game.ID] = game
@@ -623,7 +629,7 @@ func (gm *GameManager) checkDisconnectForfeits() {
 		game.mu.RLock()
 		p1Disconnected := !game.Player1.Connected && game.Player1.DisconnectedAt != nil
 		p2Disconnected := !game.Player2.Connected && game.Player2.DisconnectedAt != nil
-		
+
 		var forfeitPlayerID string
 		if p1Disconnected && now.Sub(*game.Player1.DisconnectedAt) > graceMinutes {
 			forfeitPlayerID = game.Player1.ID

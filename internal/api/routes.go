@@ -2,15 +2,31 @@ package api
 
 import (
 	"log"
+
 	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
-	"github.com/redis/go-redis/v9"
-	"github.com/playmatatu/backend/internal/config"
 	"github.com/playmatatu/backend/internal/api/handlers"
+	"github.com/playmatatu/backend/internal/config"
+	"github.com/redis/go-redis/v9"
 )
 
 // SetupRoutes configures all API routes
 func SetupRoutes(router *gin.Engine, db *sqlx.DB, rdb *redis.Client, cfg *config.Config) {
+	// CORS middleware for React development server
+	router.Use(func(c *gin.Context) {
+		c.Header("Access-Control-Allow-Origin", "*")
+		c.Header("Access-Control-Allow-Credentials", "true")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
+		c.Header("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
+
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+
+		c.Next()
+	})
+
 	// CRITICAL: No-cache middleware MUST be first in development
 	if cfg.Environment != "production" {
 		router.Use(func(c *gin.Context) {
@@ -22,25 +38,6 @@ func SetupRoutes(router *gin.Engine, db *sqlx.DB, rdb *redis.Client, cfg *config
 		})
 		log.Println("[DEV MODE] Aggressive no-cache headers enabled for all routes")
 	}
-
-	// Health check
-	router.GET("/health", handlers.HealthCheck)
-
-	// Serve static files
-	router.Static("/css", "./web/css")
-	router.Static("/js", "./web/js")
-	router.Static("/images", "./web/images")
-	router.StaticFile("/game.html", "./web/game.html")
-	
-	// Handle game links BEFORE root
-	router.GET("/g/:token", func(c *gin.Context) {
-		token := c.Param("token")
-		log.Printf("[ROUTE] Serving game.html for token: %s", token)
-		c.File("./web/game.html")
-	})
-	
-	// Root must be last
-	router.StaticFile("/", "./web/index.html")
 
 	// API v1 group
 	v1 := router.Group("/api/v1")

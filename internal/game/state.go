@@ -2,6 +2,7 @@ package game
 
 import (
 	"errors"
+	"log"
 	"sync"
 	"time"
 )
@@ -59,7 +60,7 @@ func (p *Player) AddCard(card Card) {
 }
 
 // HasPlayableCard checks if the player has any card that can be played
-func (p *Player) HasPlayableCard(topCard Card, currentSuit Suit) bool {
+func (p *Player) HasPlayableCard(topCard *Card, currentSuit Suit) bool {
 	for _, card := range p.Hand {
 		if card.CanPlayOn(topCard, currentSuit) {
 			return true
@@ -204,14 +205,14 @@ func (g *GameState) Initialize() error {
 }
 
 // GetTopCard returns the top card of the discard pile
-func (g *GameState) GetTopCard() Card {
+func (g *GameState) GetTopCard() *Card {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
 	if len(g.DiscardPile) == 0 {
-		return Card{}
+		return nil
 	}
-	return g.DiscardPile[len(g.DiscardPile)-1]
+	return &g.DiscardPile[len(g.DiscardPile)-1]
 }
 
 // GetCurrentPlayer returns the player whose turn it is
@@ -304,7 +305,7 @@ func (g *GameState) CanPlayCard(playerID string, card Card) (bool, string) {
 	}
 
 	topCard := g.GetTopCard()
-	if !card.CanPlayOn(topCard, g.CurrentSuit) {
+	if topCard != nil && !card.CanPlayOn(topCard, g.CurrentSuit) {
 		return false, "Card doesn't match suit or rank"
 	}
 
@@ -316,12 +317,16 @@ func (g *GameState) PlayCard(playerID string, card Card, declaredSuit Suit) (*Pl
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	log.Printf("[GAME] PlayCard start - player=%s card=%s", playerID, card.String())
+
 	// Validate the play
 	if g.Status != StatusInProgress {
+		log.Printf("[GAME] PlayCard aborted - status not in progress: %v", g.Status)
 		return nil, errors.New("game is not in progress")
 	}
 
 	if g.CurrentTurn != playerID {
+		log.Printf("[GAME] PlayCard aborted - not player's turn. currentTurn=%s", g.CurrentTurn)
 		return nil, errors.New("not your turn")
 	}
 
@@ -335,42 +340,49 @@ func (g *GameState) PlayCard(playerID string, card Card, declaredSuit Suit) (*Pl
 	}
 
 	if !player.HasCard(card) {
+		log.Printf("[GAME] PlayCard aborted - player doesn't have card: %s", card.String())
 		return nil, errors.New("you don't have that card")
 	}
 
 	// If there's a draw stack, player must play a 2 or draw
 	if g.DrawStack > 0 && card.Rank != Two {
+		log.Printf("[GAME] PlayCard aborted - draw stack active and card is not a Two. drawStack=%d", g.DrawStack)
 		return nil, errors.New("must play a 2 or draw cards")
 	}
 
-	// Check if this is the first play (discard pile empty)
-	var topCard Card
-	isFirstPlay := len(g.DiscardPile) == 0
-
-	if !isFirstPlay {
-		topCard = g.DiscardPile[len(g.DiscardPile)-1]
-		if !card.CanPlayOn(topCard, g.CurrentSuit) {
-			return nil, errors.New("card doesn't match suit or rank")
-		}
+	// Check if card can be played
+	var topCard *Card
+	if len(g.DiscardPile) > 0 {
+		last := g.DiscardPile[len(g.DiscardPile)-1]
+		topCard = &last
+	} else {
+		topCard = nil
 	}
-	// First play can be any card
+	if !card.CanPlayOn(topCard, g.CurrentSuit) {
+		log.Printf("[GAME] PlayCard aborted - card cannot be played on topCard=%v currentSuit=%v", topCard, g.CurrentSuit)
+		return nil, errors.New("card doesn't match suit or rank")
+	}
 
 	// Remove card from player's hand
 	player.RemoveCard(card)
+	log.Printf("[GAME] PlayCard - removed card from player hand. remaining hand size=%d", player.CardCount())
 
 	// Add to discard pile
 	g.DiscardPile = append(g.DiscardPile, card)
+	log.Printf("[GAME] PlayCard - appended to discard pile. discard size=%d", len(g.DiscardPile))
 
 	// Update current suit
 	// Ace is wild suit - player declares new suit
 	if card.Rank == Ace {
 		if declaredSuit == "" {
+			log.Printf("[GAME] PlayCard aborted - Ace played but no declared suit provided")
 			return nil, errors.New("must declare suit for Ace")
 		}
 		g.CurrentSuit = declaredSuit
 	} else {
 		g.CurrentSuit = card.Suit
 	}
+	log.Printf("[GAME] PlayCard - new currentSuit=%v", g.CurrentSuit)
 
 	result := &PlayCardResult{
 		Success:     true,
@@ -381,6 +393,7 @@ func (g *GameState) PlayCard(playerID string, card Card, declaredSuit Suit) (*Pl
 
 	// Check if this is the "Chop" card (7 of Target Suit)
 	if card.Rank == Seven && card.Suit == g.TargetSuit {
+		log.Printf("[GAME] PlayCard - Chop triggered")
 		// Game ends immediately - calculate points
 		g.Status = StatusCompleted
 		now := time.Now()
@@ -411,11 +424,13 @@ func (g *GameState) PlayCard(playerID string, card Card, declaredSuit Suit) (*Pl
 			Message: "Game Chopped! Counting points...",
 		}
 		result.NextTurn = ""
+		log.Printf("[GAME] PlayCard - chop ended game, winner=%s", g.Winner)
 		return result, nil
 	}
 
 	// Check for classic win (no cards left)
 	if player.CardCount() == 0 {
+		log.Printf("[GAME] PlayCard - classic win by player=%s", playerID)
 		g.Status = StatusCompleted
 		g.Winner = playerID
 		g.WinType = "classic"
@@ -426,21 +441,25 @@ func (g *GameState) PlayCard(playerID string, card Card, declaredSuit Suit) (*Pl
 		result.Winner = playerID
 		result.WinType = "classic"
 		result.NextTurn = ""
+		log.Printf("[GAME] PlayCard - classic win processed")
 		return result, nil
 	}
 
 	// Handle special cards
 	effect := g.handleSpecialCard(card, opponent)
 	result.Effect = effect
+	log.Printf("[GAME] PlayCard - special effect: %v", effect)
 
 	// Switch turn unless effect says otherwise
 	if effect == nil || !effect.SkipOpponent {
 		g.SwitchTurn()
 	}
 	result.NextTurn = g.CurrentTurn
+	log.Printf("[GAME] PlayCard - next turn=%s", g.CurrentTurn)
 
 	// Save state to Redis
 	go g.SaveToRedis()
+	log.Printf("[GAME] PlayCard - SaveToRedis triggered")
 
 	return result, nil
 }
@@ -670,6 +689,12 @@ func (g *GameState) GetGameStateForPlayer(playerID string) map[string]interface{
 		discardPileCards = g.DiscardPile[startIndex:]
 	}
 
+	// Conditionally set current_suit to nil if empty
+	var currentSuit interface{} = g.CurrentSuit
+	if g.CurrentSuit == "" {
+		currentSuit = nil
+	}
+
 	return map[string]interface{}{
 		"game_id":             g.ID,
 		"token":               g.Token,
@@ -680,7 +705,7 @@ func (g *GameState) GetGameStateForPlayer(playerID string) map[string]interface{
 		"opponent_card_count": opponentCardCount,
 		"top_card":            g.GetTopCard(),
 		"discard_pile_cards":  discardPileCards,
-		"current_suit":        g.CurrentSuit,
+		"current_suit":        currentSuit,
 		"target_suit":         g.TargetSuit,
 		"target_card":         g.TargetCard,
 		"current_turn":        g.CurrentTurn,

@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+/* PlayMatatu - Clean Responsive Styles using Bootstrap */
+/* Color Palette */
+:root {
+    --alizarin-crimson: #eb333a;
+    --valencia: #d83d44;
+    --soft-peach: #faf5f5;
+    --mine-shaft: #373536;
+    --contessa: #cb7478;
+    --silver: #cac8c8;
+    --azalea: #f9c3c5;
+    --chestnut: #be474c;
+    --scorpion: #676566;
+    
+    /* Legacy aliases for compatibility */
+    --primary: var(--mine-shaft);
+    --primary-dark: var(--scorpion);
+    --primary-light: var(--silver);
+}
+
+
+/* Body */
+body {
+    background-color: var(--soft-peach);
+    color: var(--mine-shaft);
+}
+
+
+
+
+

@@ -35,8 +35,8 @@ func main() {
 	}
 	defer rdb.Close()
 
-	// Initialize Game Manager with Redis
-	game.InitializeManager(rdb)
+	// Initialize Game Manager with Redis and config
+	game.InitializeManager(rdb, cfg)
 
 	// Set up Gin router
 	if cfg.Environment == "production" {

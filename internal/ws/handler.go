@@ -62,15 +62,30 @@ func (h *Hub) Run() {
 		case client := <-h.register:
 			h.mu.Lock()
 
-			// If player already has a connection, close the old one (reconnect scenario)
+			// Check if this is a reconnect (player already has a connection)
+			isReconnect := false
 			if oldClient, exists := h.clients[client.playerID]; exists {
-				// Close old connection's send channel to trigger cleanup
-				close(oldClient.send)
+				// Attempt to close the old connection cleanly (send close control frame)
+				log.Printf("Player %s reconnecting - closing old connection (explicit conn close)", client.playerID)
+				if err := oldClient.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "replaced by new connection"), time.Now().Add(5*time.Second)); err != nil {
+					log.Printf("Error writing close control to old client %s: %v", oldClient.playerID, err)
+				}
+				// Ensure connection is closed
+				oldClient.conn.Close()
+
+				// Close old send channel to free the writer goroutine
+				select {
+				case <-oldClient.send:
+					// already closed
+				default:
+					close(oldClient.send)
+				}
+
 				delete(h.clients, client.playerID)
 				if room, roomExists := h.gameRooms[oldClient.gameID]; roomExists {
 					delete(room, client.playerID)
 				}
-				log.Printf("Player %s reconnecting - closing old connection", client.playerID)
+				isReconnect = true
 			}
 
 			h.clients[client.playerID] = client
@@ -93,6 +108,10 @@ func (h *Hub) Run() {
 
 					if err := g.Initialize(); err != nil {
 						log.Printf("❌ Init failed: %v", err)
+						h.SendToPlayer(client.playerID, map[string]interface{}{
+							"type":    "error",
+							"message": "Failed to initialize game",
+						})
 					} else {
 						// Broadcast game start
 						h.BroadcastToGame(client.gameID, map[string]interface{}{
@@ -110,21 +129,28 @@ func (h *Hub) Run() {
 						h.SendToPlayer(g.Player2.ID, p2State)
 					}
 				} else if g.Status == game.StatusWaiting {
-					// Still waiting for opponent
+					// Still waiting for opponent - send waiting message
 					h.SendToPlayer(client.playerID, map[string]interface{}{
 						"type":    "waiting_for_opponent",
 						"message": "Waiting for opponent to join...",
 					})
+				} else {
+					// Game is already in progress - send current state
+					currentState := g.GetGameStateForPlayer(client.playerID)
+					currentState["type"] = "game_state"
+					h.SendToPlayer(client.playerID, currentState)
 				}
 
-				// Notify opponent of connection (if game already in progress)
-				if g.Status == game.StatusInProgress {
+				// Notify opponent of reconnection (only if this was actually a reconnect)
+				if isReconnect && g.Status == game.StatusInProgress {
 					h.BroadcastToGame(client.gameID, map[string]interface{}{
 						"type":    "player_connected",
 						"player":  client.playerID,
 						"message": "Opponent connected",
 					})
 				}
+			} else {
+				log.Printf("❌ Failed to get game by token %s for player %s: %v", client.gameToken, client.playerID, err)
 			}
 
 		case client := <-h.unregister:
@@ -187,6 +213,7 @@ func (h *Hub) BroadcastToGame(gameID string, message interface{}) {
 			case client.send <- data:
 			default:
 				// Client's buffer is full
+				log.Printf("Client send buffer full for player %s in game %s, dropping message", client.playerID, gameID)
 			}
 		}
 	}
@@ -232,20 +259,28 @@ func HandleWebSocket(c *gin.Context) {
 		return
 	}
 
+	log.Printf("[WS] New connection attempt - gameToken: %s, playerToken: %s", gameToken, playerToken)
+
 	// Get the game
 	g, err := game.Manager.GetGameByToken(gameToken)
 	if err != nil {
+		log.Printf("[WS] Game not found for token %s: %v", gameToken, err)
 		c.JSON(http.StatusNotFound, gin.H{"error": "game not found"})
 		return
 	}
+
+	log.Printf("[WS] Found game %s for token %s", g.ID, gameToken)
 
 	// Verify player token matches one of the players in the game
 	var playerID string
 	if g.Player1.PlayerToken == playerToken {
 		playerID = g.Player1.ID
+		log.Printf("[WS] Player authenticated as Player1: %s", playerID)
 	} else if g.Player2.PlayerToken == playerToken {
 		playerID = g.Player2.ID
+		log.Printf("[WS] Player authenticated as Player2: %s", playerID)
 	} else {
+		log.Printf("[WS] Invalid player token %s for game %s", playerToken, gameToken)
 		c.JSON(http.StatusForbidden, gin.H{"error": "invalid player token"})
 		return
 	}
@@ -265,23 +300,7 @@ func HandleWebSocket(c *gin.Context) {
 		send:      make(chan []byte, 256),
 	}
 
-	// Send initial game state
-	gameState := g.GetGameStateForPlayer(playerID)
-	gameState["type"] = "game_state"
-	initialState, err := json.Marshal(gameState)
-	if err != nil {
-		log.Printf("Error marshaling initial game state: %v", err)
-		conn.Close()
-		return
-	}
-
-	// Send the initial state immediately before starting goroutines
-	if err := conn.WriteMessage(websocket.TextMessage, initialState); err != nil {
-		log.Printf("Error sending initial game state: %v", err)
-		conn.Close()
-		return
-	}
-
+	// Register client - this will handle sending appropriate initial messages
 	GameHub.register <- client
 
 	// Start goroutines for reading and writing
@@ -307,14 +326,16 @@ func (c *Client) readPump() {
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("WebSocket error: %v", err)
+				log.Printf("WebSocket error (unexpected) for player %s: %v", c.playerID, err)
+			} else {
+				log.Printf("WebSocket read error for player %s: %v", c.playerID, err)
 			}
 			break
 		}
 
 		var msg WSMessage
 		if err := json.Unmarshal(message, &msg); err != nil {
-			log.Printf("Invalid message format: %v", err)
+			log.Printf("Invalid message format from player %s: %v", c.playerID, err)
 			continue
 		}
 
@@ -335,17 +356,21 @@ func (c *Client) writePump() {
 		case message, ok := <-c.send:
 			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if !ok {
-				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				if err := c.conn.WriteMessage(websocket.CloseMessage, []byte{}); err != nil {
+					log.Printf("Error writing close message for player %s: %v", c.playerID, err)
+				}
 				return
 			}
 
 			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+				log.Printf("WebSocket write error for player %s: %v", c.playerID, err)
 				return
 			}
 
 		case <-ticker.C:
 			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				log.Printf("WebSocket ping error for player %s: %v", c.playerID, err)
 				return
 			}
 		}
@@ -388,6 +413,7 @@ func (c *Client) handleMessage(msg WSMessage) {
 
 // handlePlayCard processes a play card action
 func (c *Client) handlePlayCard(g *game.GameState, data PlayCardData) {
+	log.Printf("[WS] Play attempt from %s: %v", c.playerID, data)
 	// Parse card from string (e.g., "7H" -> 7 of Hearts)
 	card, err := parseCard(data.Card)
 	if err != nil {
@@ -401,6 +427,7 @@ func (c *Client) handlePlayCard(g *game.GameState, data PlayCardData) {
 	}
 
 	result, err := g.PlayCard(c.playerID, card, declaredSuit)
+	log.Printf("[WS] Play result for %s: err=%v, result=%+v", c.playerID, err, result)
 	if err != nil {
 		c.sendError(err.Error())
 		return
