@@ -102,6 +102,7 @@ export const GamePage: React.FC = () => {
         // Clear pass capability when a pass has been executed
         drawPendingRef.current = false;
         setCanPass(false);
+        console.log('Received turn_passed:', message);
         break;
 
       case 'player_connected':
@@ -139,6 +140,7 @@ export const GamePage: React.FC = () => {
 
   const handlePassTurn = useCallback(() => {
     playClick();
+    console.log('Sending pass_turn');
     sendWSMessage({
       type: 'pass_turn',
       data: {}

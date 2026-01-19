@@ -484,11 +484,14 @@ func (c *Client) handleDrawCard(g *game.GameState) {
 
 // handlePassTurn processes a pass turn action
 func (c *Client) handlePassTurn(g *game.GameState) {
+	log.Printf("[WS] PassTurn request from %s", c.playerID)
 	if err := g.PassTurn(c.playerID); err != nil {
+		log.Printf("[WS] PassTurn failed for %s: %v", c.playerID, err)
 		c.sendError(err.Error())
 		return
 	}
 
+	log.Printf("[WS] PassTurn success for %s, broadcast turn_passed", c.playerID)
 	GameHub.BroadcastToGame(c.gameID, map[string]interface{}{
 		"type":      "turn_passed",
 		"player":    c.playerID,

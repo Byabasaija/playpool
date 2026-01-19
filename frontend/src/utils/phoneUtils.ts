@@ -3,18 +3,24 @@ export function formatPhone(phone: string): string {
   let digits = phone.replace(/\D/g, '');
 
   // Handle Uganda numbers
-  if (digits.startsWith('0')) {
-    digits = '256' + digits.substring(1);
-  }
-  if (!digits.startsWith('256')) {
-    digits = '256' + digits;
+  if (digits.length === 9 && (digits[0] === '7' || digits[0] === '3')) {
+    return '256' + digits;
   }
 
-  return '+' + digits;
+  if (digits.length === 10 && digits[0] === '0') {
+    return '256' + digits.substring(1);
+  }
+
+  if (digits.length === 12 && digits.startsWith('256')) {
+    return digits;
+  }
+
+  // Fallback: return digits (caller should validate)
+  return digits;
 }
 
 export function validatePhone(phone: string): boolean {
   const formatted = formatPhone(phone);
-  // Uganda phone: +256 followed by 9 digits
-  return /^\+256[0-9]{9}$/.test(formatted);
+  // Uganda phone: 256 followed by 9 digits
+  return /^256[0-9]{9}$/.test(formatted);
 }

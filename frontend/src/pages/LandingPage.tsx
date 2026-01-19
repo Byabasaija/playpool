@@ -4,7 +4,7 @@ import { useMatchmaking } from '../hooks/useMatchmaking';
 import { validatePhone } from '../utils/phoneUtils';
 
 export const LandingPage: React.FC = () => {
-  const [phone, setPhone] = useState('');
+  const [phoneRest, setPhoneRest] = useState('');
   const [stake, setStake] = useState(1000);
   const [phoneError, setPhoneError] = useState('');
   const navigate = useNavigate();
@@ -15,13 +15,16 @@ export const LandingPage: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!validatePhone(phone)) {
-      setPhoneError('Please enter a valid Ugandan phone number');
+    // Combine prefix + rest for validation
+    const full = '256' + phoneRest.replace(/\D/g, '');
+
+    if (!validatePhone(full)) {
+      setPhoneError('Please enter a valid Ugandan phone number (9 digits after 256)');
       return;
     }
 
     setPhoneError('');
-    await startGame(phone, stake);
+    await startGame(full, stake);
   };
 
 
@@ -54,14 +57,17 @@ export const LandingPage: React.FC = () => {
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Phone Number
                 </label>
-                <input
-                  type="tel"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="+256 7XX XXX XXX"
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg"
-                  required
-                />
+                <div className="flex">
+                  <span className="inline-flex items-center px-3 rounded-l-md border border-r-0 bg-gray-100 text-gray-700">256</span>
+                  <input
+                    type="tel"
+                    value={phoneRest}
+                    onChange={(e) => setPhoneRest(e.target.value)}
+                    placeholder="7XX XXX XXX"
+                    className="w-full px-4 py-3 border border-gray-300 rounded-r-lg"
+                    required
+                  />
+                </div>
                 {phoneError && (
                   <p className="mt-1 text-sm text-red-600">{phoneError}</p>
                 )}

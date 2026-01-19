@@ -5,7 +5,8 @@ import (
 	"math/big"
 )
 
-// normalizePhone normalizes phone number to international format
+// normalizePhone normalizes phone number to international format (no leading '+')
+// Returns digits like: 256700123456
 func normalizePhone(phone string) string {
 	// Remove all non-digit characters
 	digits := ""
@@ -15,15 +16,15 @@ func normalizePhone(phone string) string {
 		}
 	}
 
-	// Handle Uganda phone numbers
+	// Handle Uganda phone numbers (expecting 9 local digits)
 	if len(digits) == 9 && (digits[0] == '7' || digits[0] == '3') {
-		return "+256" + digits
+		return "256" + digits
 	} else if len(digits) == 10 && digits[0] == '0' {
-		return "+256" + digits[1:]
+		return "256" + digits[1:]
 	} else if len(digits) == 12 && digits[:3] == "256" {
-		return "+" + digits
+		return digits
 	} else if len(phone) > 0 && phone[0] == '+' && len(digits) == 12 && digits[:3] == "256" {
-		return phone
+		return digits
 	}
 
 	return ""

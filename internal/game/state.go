@@ -603,10 +603,14 @@ func (g *GameState) DrawCard(playerID string) (*DrawCardResult, error) {
 		}
 
 		// Switch turn - player loses their turn after drawing penalty
+		prev := g.CurrentTurn
 		g.SwitchTurn()
 
 		// Save state to Redis
 		go g.SaveToRedis()
+
+		// Debug log
+		log.Printf("[GAME] DrawCard penalty - player=%s drew=%d prevTurn=%s nextTurn=%s", playerID, len(cardsDrawn), prev, g.CurrentTurn)
 
 		return &DrawCardResult{
 			Success:      true,
@@ -660,6 +664,9 @@ func (g *GameState) DrawCard(playerID string) (*DrawCardResult, error) {
 	// Save state to Redis
 	go g.SaveToRedis()
 
+	// Debug log
+	log.Printf("[GAME] DrawCard - player=%s drew=%s currentTurn=%s handSize=%d", playerID, card.String(), g.CurrentTurn, player.CardCount())
+
 	return result, nil
 }
 
@@ -668,15 +675,28 @@ func (g *GameState) PassTurn(playerID string) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	log.Printf("[GAME] PassTurn attempt - player=%s currentTurn=%s", playerID, g.CurrentTurn)
+
 	if g.CurrentTurn != playerID {
+		log.Printf("[GAME] PassTurn aborted - not player's turn (current=%s)", g.CurrentTurn)
 		return errors.New("not your turn")
+	}
+
+	// Resolve player like other handlers to avoid nil/zero ambiguity
+	var player *Player
+	if g.Player1.ID == playerID {
+		player = g.Player1
+	} else {
+		player = g.Player2
 	}
 
 	g.SwitchTurn()
 
-	// Persist pass move
-	if Manager != nil {
-		Manager.RecordMove(g.SessionID, g.GetPlayerByID(playerID).DBPlayerID, "PASS", "", "")
+	log.Printf("[GAME] PassTurn - player=%s switched to %s", playerID, g.CurrentTurn)
+
+	// Persist pass move using resolved player DB id
+	if Manager != nil && player != nil && player.DBPlayerID > 0 {
+		Manager.RecordMove(g.SessionID, player.DBPlayerID, "PASS", "", "")
 	}
 
 	// Save state to Redis

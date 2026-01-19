@@ -8,8 +8,11 @@ DBURL=${DATABASE_URL:-"postgres://postgres:password1@localhost:5432/playmatatu_d
 
 if command -v migrate >/dev/null 2>&1; then
     echo "[migrate] Using local migrate binary"
-    migrate -path file://migrations -database "$DBURL" -verbose "$CMD"
+    migrate -path ./migrations -database "$DBURL" -verbose "$CMD"
 else
-    echo "[migrate] Local migrate binary not found, using dockerized migrate"
-    docker run --rm -v "$(pwd)/migrations:/migrations" -e DATABASE_URL="$DBURL" migrate/migrate -path=/migrations -database "$DBURL" -verbose "$CMD"
+    echo "[migrate] migrate CLI not found. Please install it locally and ensure it's on your PATH."
+    echo "On macOS:   brew install golang-migrate"
+    echo "Or with Go: go install github.com/golang-migrate/migrate/v4/cmd/migrate@latest"
+    echo "After installation ensure 'migrate -version' runs and retry."
+    exit 1
 fi

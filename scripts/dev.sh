@@ -80,30 +80,16 @@ setup_database() {
         /opt/homebrew/opt/postgresql@12/bin/createdb -h localhost -U postgres playmatatu_dev
     fi
     
-    log_info "Running migrations (applying all SQL files in migrations/)..."
+    log_info "Running migrations using migrate tool (scripts/migrate.sh)..."
 
-    # Ensure a table exists to track applied migrations
-    /opt/homebrew/opt/postgresql@12/bin/psql -h localhost -U postgres -d playmatatu_dev -c "CREATE TABLE IF NOT EXISTS applied_migrations (filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now());"
-
-    # Apply each migration file in sorted order, skip already-applied ones
-    for f in $(ls -1 migrations/*.sql 2>/dev/null | sort); do
-        fname=$(basename "$f")
-        applied=$(/opt/homebrew/opt/postgresql@12/bin/psql -h localhost -U postgres -d playmatatu_dev -tAc "SELECT 1 FROM applied_migrations WHERE filename='$fname'")
-        if [ "$applied" = "1" ]; then
-            log_info "Skipping already applied migration: $fname"
-            continue
-        fi
-
-        log_info "Applying migration: $fname"
-        if /opt/homebrew/opt/postgresql@12/bin/psql -h localhost -U postgres -d playmatatu_dev -v ON_ERROR_STOP=1 -f "$f"; then
-            /opt/homebrew/opt/postgresql@12/bin/psql -h localhost -U postgres -d playmatatu_dev -c "INSERT INTO applied_migrations (filename) VALUES ('$fname')"
-            log_info "Applied migration: $fname"
-        else
-            log_error "Failed to apply migration: $fname"
-            unset PGPASSWORD
-            exit 1
-        fi
-    done
+    # Use the migrate CLI/Docker wrapper (no fallback)
+    if ./scripts/migrate.sh up; then
+        log_info "Migrations applied via scripts/migrate.sh"
+    else
+        log_error "scripts/migrate.sh failed. Aborting setup."
+        unset PGPASSWORD
+        exit 1
+    fi
 
     unset PGPASSWORD
     log_info "Database setup complete"
@@ -217,7 +203,16 @@ reset() {
     export PGPASSWORD="password1"
     /opt/homebrew/opt/postgresql@12/bin/dropdb -h localhost -U postgres playmatatu_dev || true
     /opt/homebrew/opt/postgresql@12/bin/createdb -h localhost -U postgres playmatatu_dev
-    /opt/homebrew/opt/postgresql@12/bin/psql -h localhost -U postgres playmatatu_dev < migrations/001_initial_schema.sql
+
+    log_info "Applying migrations to fresh DB using scripts/migrate.sh..."
+    if ./scripts/migrate.sh up; then
+        log_info "Migrations applied"
+    else
+        log_error "Failed to apply migrations"
+        unset PGPASSWORD
+        exit 1
+    fi
+
     unset PGPASSWORD
     log_info "Database reset complete"
 }

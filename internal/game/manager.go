@@ -747,12 +747,20 @@ func (gm *GameManager) SaveFinalGameState(g *GameState) {
 
 	// Update session status and winner if available
 	if g.Status == StatusCompleted {
-		// Resolve winner DB id
+		// Resolve winner DB id: prefer direct access to the player objects to avoid nil/lock races
 		var winnerDBID int
 		if g.Winner != "" {
-			if p := g.GetPlayerByID(g.Winner); p != nil {
+			if g.Player1 != nil && g.Player1.ID == g.Winner {
+				winnerDBID = g.Player1.DBPlayerID
+			} else if g.Player2 != nil && g.Player2.ID == g.Winner {
+				winnerDBID = g.Player2.DBPlayerID
+			} else if p := g.GetPlayerByID(g.Winner); p != nil {
 				winnerDBID = p.DBPlayerID
 			}
+		}
+
+		if winnerDBID == 0 {
+			log.Printf("[DB] SaveFinalGameState: could not resolve winner DB id for winner=%s (session=%d)", g.Winner, g.SessionID)
 		}
 
 		if winnerDBID > 0 {
