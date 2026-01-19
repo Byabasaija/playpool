@@ -20,8 +20,19 @@ export const GamePage: React.FC = () => {
 
   const { gameState, gameOver, updateFromWSMessage, setCanPass, addCardsToHand, updateOpponentCardCount, setTokens } = useGameState();
   
-  const playClick = useSound('/play.mp3');
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (gameState.opponentConnected === true) {
+      setNotice('Opponent online');
+      setTimeout(() => setNotice(null), 3000);
+    } else if (gameState.opponentConnected === false) {
+      setNotice('Opponent disconnected');
+      setTimeout(() => setNotice(null), 3000);
+    }
+  }, [gameState.opponentConnected]);
   
+  const playClick = useSound('/play.mp3');
+
   // Extract tokens from URL parameters
   useEffect(() => {
     
@@ -226,9 +237,18 @@ export const GamePage: React.FC = () => {
         canPass={gameState.canPass}
         sendMessage={handleSendMessage}
         onPassTurn={handlePassTurn}
+        myDisplayName={gameState.myDisplayName}
+        opponentDisplayName={gameState.opponentDisplayName}
+        myConnected={gameState.myConnected}
+        opponentConnected={gameState.opponentConnected}
       />
 
       {revealedSuit && <SuitReveal suit={revealedSuit} />}
+      {notice && (
+        <div className="fixed top-6 right-6 bg-black bg-opacity-60 text-white px-4 py-2 rounded">
+          {notice}
+        </div>
+      )}
     </div>
   );
 };

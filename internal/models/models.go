@@ -9,6 +9,7 @@ import (
 type Player struct {
 	ID               int            `db:"id" json:"id"`
 	PhoneNumber      string         `db:"phone_number" json:"phone_number"`
+	DisplayName      string         `db:"display_name" json:"display_name"`
 	CreatedAt        time.Time      `db:"created_at" json:"created_at"`
 	TotalGamesPlayed int            `db:"total_games_played" json:"total_games_played"`
 	TotalGamesWon    int            `db:"total_games_won" json:"total_games_won"`
@@ -36,17 +37,17 @@ type Transaction struct {
 
 // GameSession represents a game between two players
 type GameSession struct {
-	ID          int          `db:"id" json:"id"`
-	GameToken   string       `db:"game_token" json:"game_token"`
-	Player1ID   int          `db:"player1_id" json:"player1_id"`
+	ID          int           `db:"id" json:"id"`
+	GameToken   string        `db:"game_token" json:"game_token"`
+	Player1ID   int           `db:"player1_id" json:"player1_id"`
 	Player2ID   sql.NullInt64 `db:"player2_id" json:"player2_id,omitempty"`
-	StakeAmount float64      `db:"stake_amount" json:"stake_amount"`
-	Status      string       `db:"status" json:"status"`
+	StakeAmount float64       `db:"stake_amount" json:"stake_amount"`
+	Status      string        `db:"status" json:"status"`
 	WinnerID    sql.NullInt64 `db:"winner_id" json:"winner_id,omitempty"`
-	CreatedAt   time.Time    `db:"created_at" json:"created_at"`
-	StartedAt   sql.NullTime `db:"started_at" json:"started_at,omitempty"`
-	CompletedAt sql.NullTime `db:"completed_at" json:"completed_at,omitempty"`
-	ExpiryTime  time.Time    `db:"expiry_time" json:"expiry_time"`
+	CreatedAt   time.Time     `db:"created_at" json:"created_at"`
+	StartedAt   sql.NullTime  `db:"started_at" json:"started_at,omitempty"`
+	CompletedAt sql.NullTime  `db:"completed_at" json:"completed_at,omitempty"`
+	ExpiryTime  time.Time     `db:"expiry_time" json:"expiry_time"`
 }
 
 // EscrowLedger represents an escrow entry
@@ -76,14 +77,14 @@ type MatchmakingQueue struct {
 
 // GameMove represents a single move in a game
 type GameMove struct {
-	ID           int          `db:"id" json:"id"`
-	SessionID    int          `db:"session_id" json:"session_id"`
-	PlayerID     int          `db:"player_id" json:"player_id"`
-	MoveNumber   int          `db:"move_number" json:"move_number"`
-	MoveType     string       `db:"move_type" json:"move_type"`
-	CardPlayed   string       `db:"card_played" json:"card_played,omitempty"`
-	SuitDeclared string       `db:"suit_declared" json:"suit_declared,omitempty"`
-	CreatedAt    time.Time    `db:"created_at" json:"created_at"`
+	ID           int       `db:"id" json:"id"`
+	SessionID    int       `db:"session_id" json:"session_id"`
+	PlayerID     int       `db:"player_id" json:"player_id"`
+	MoveNumber   int       `db:"move_number" json:"move_number"`
+	MoveType     string    `db:"move_type" json:"move_type"`
+	CardPlayed   string    `db:"card_played" json:"card_played,omitempty"`
+	SuitDeclared string    `db:"suit_declared" json:"suit_declared,omitempty"`
+	CreatedAt    time.Time `db:"created_at" json:"created_at"`
 }
 
 // Dispute represents a reported issue

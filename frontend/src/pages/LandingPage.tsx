@@ -10,7 +10,7 @@ export const LandingPage: React.FC = () => {
   const navigate = useNavigate();
   
   // const baseUrl = import.meta.env.VITE_BACKEND_URL
-  const { stage, error, gameLink, isLoading, startGame, reset } = useMatchmaking();
+  const { stage, error, gameLink, isLoading, startGame, reset, displayName } = useMatchmaking();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -120,6 +120,9 @@ export const LandingPage: React.FC = () => {
             </div>
             <h2 className="text-2xl font-bold text-gray-900 mb-2">Finding Opponent</h2>
             <p className="text-gray-600">Matching you with another player...</p>
+            {displayName && (
+              <p className="mt-4 text-sm text-gray-700">You are playing as <span className="font-semibold">{displayName}</span></p>
+            )}
             <div className="mt-4">
               <div className="animate-pulse bg-gray-200 h-2 rounded-full">
                 <div className="bg-[#373536] h-2 rounded-full animate-pulse" style={{width: '60%'}}></div>

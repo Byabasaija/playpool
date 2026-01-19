@@ -20,6 +20,10 @@ const initialGameState: GameState = {
   stakeAmount: 0,
   connected: false,
   canPass: false,
+  myDisplayName: null,
+  opponentDisplayName: null,
+  myConnected: false,
+  opponentConnected: false,
   winner: null,
   winType: null,
   lastPlayerPoints: null,
@@ -106,6 +110,12 @@ function reducer(state: GameState, action: Action): GameState {
       if (has('win_type')) next.winType = data.win_type || null;
       if (has('player_points')) next.lastPlayerPoints = (data as any).player_points ?? null;
       if (has('opponent_points')) next.lastOpponentPoints = (data as any).opponent_points ?? null;
+
+      if (has('my_display_name')) next.myDisplayName = (data as any).my_display_name || null;
+      if (has('opponent_display_name')) next.opponentDisplayName = (data as any).opponent_display_name || null;
+
+      if (has('my_connected')) next.myConnected = (data as any).my_connected ?? next.myConnected;
+      if (has('opponent_connected')) next.opponentConnected = (data as any).opponent_connected ?? next.opponentConnected;
 
       return next;
     }

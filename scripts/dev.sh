@@ -80,9 +80,31 @@ setup_database() {
         /opt/homebrew/opt/postgresql@12/bin/createdb -h localhost -U postgres playmatatu_dev
     fi
     
-    log_info "Running migrations..."
-    /opt/homebrew/opt/postgresql@12/bin/psql -h localhost -U postgres playmatatu_dev < migrations/001_initial_schema.sql
-    
+    log_info "Running migrations (applying all SQL files in migrations/)..."
+
+    # Ensure a table exists to track applied migrations
+    /opt/homebrew/opt/postgresql@12/bin/psql -h localhost -U postgres -d playmatatu_dev -c "CREATE TABLE IF NOT EXISTS applied_migrations (filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now());"
+
+    # Apply each migration file in sorted order, skip already-applied ones
+    for f in $(ls -1 migrations/*.sql 2>/dev/null | sort); do
+        fname=$(basename "$f")
+        applied=$(/opt/homebrew/opt/postgresql@12/bin/psql -h localhost -U postgres -d playmatatu_dev -tAc "SELECT 1 FROM applied_migrations WHERE filename='$fname'")
+        if [ "$applied" = "1" ]; then
+            log_info "Skipping already applied migration: $fname"
+            continue
+        fi
+
+        log_info "Applying migration: $fname"
+        if /opt/homebrew/opt/postgresql@12/bin/psql -h localhost -U postgres -d playmatatu_dev -v ON_ERROR_STOP=1 -f "$f"; then
+            /opt/homebrew/opt/postgresql@12/bin/psql -h localhost -U postgres -d playmatatu_dev -c "INSERT INTO applied_migrations (filename) VALUES ('$fname')"
+            log_info "Applied migration: $fname"
+        else
+            log_error "Failed to apply migration: $fname"
+            unset PGPASSWORD
+            exit 1
+        fi
+    done
+
     unset PGPASSWORD
     log_info "Database setup complete"
 }
@@ -105,6 +127,15 @@ check_air() {
         log_info "Installing Air..."
         go install github.com/air-verse/air@latest
         return 0
+    fi
+}
+
+# Check for migrate CLI and show guidance
+check_migrate() {
+    if command -v migrate >/dev/null 2>&1; then
+        log_info "migrate CLI found"
+    else
+        log_warn "migrate CLI not found. You can install it via 'brew install golang-migrate' or use 'scripts/migrate.sh' which falls back to Docker"
     fi
 }
 
@@ -218,3 +249,12 @@ case "${1:-setup}" in
         exit 1
         ;;
 esac
+
+# Notes: Migrations in this repo are SQL files placed under the 'migrations/' directory.
+# Currently they are managed manually (add a new .sql file and commit it).
+# If you want versioned up/down migrations and a CLI tool, consider using:
+#  - golang-migrate (https://github.com/golang-migrate/migrate)
+#  - pressly/goose         (https://github.com/pressly/goose)
+# These tools support incremental migrations, rollbacks, and version tracking.
+# Example with golang-migrate:
+#   migrate -path ./migrations -database "postgres://postgres:password1@localhost:5432/playmatatu_dev?sslmode=disable" up

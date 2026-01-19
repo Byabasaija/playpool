@@ -22,6 +22,14 @@ export interface GameState {
   connected: boolean;
   canPass: boolean;
 
+  // Persisted display names (optional)
+  myDisplayName?: string | null;
+  opponentDisplayName?: string | null;
+
+  // Connection flags
+  myConnected?: boolean;
+  opponentConnected?: boolean;
+
   // Transient server-provided winner info (optional)
   winner?: string | null;
   winType?: string | null;

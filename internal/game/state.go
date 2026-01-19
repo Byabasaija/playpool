@@ -21,6 +21,8 @@ const (
 type Player struct {
 	ID             string     `json:"id"`
 	PhoneNumber    string     `json:"phone_number"`
+	DBPlayerID     int        `json:"db_player_id,omitempty"`
+	DisplayName    string     `json:"display_name,omitempty"`
 	PlayerToken    string     `json:"-"` // Secure token for authentication
 	Hand           []Card     `json:"hand,omitempty"`
 	Connected      bool       `json:"connected"`
@@ -99,17 +101,23 @@ type GameState struct {
 	StartedAt    *time.Time `json:"started_at,omitempty"`
 	CompletedAt  *time.Time `json:"completed_at,omitempty"`
 	LastActivity time.Time  `json:"last_activity"`
+	SessionID    int        `json:"session_id,omitempty"`
 	mu           sync.RWMutex
 }
 
 // NewGame creates a new game state
-func NewGame(id, token string, player1ID, player1Phone, player1Token, player2ID, player2Phone, player2Token string, stakeAmount int) *GameState {
+func NewGame(id, token string,
+	player1ID, player1Phone, player1Token string, player1DBID int, player1DisplayName string,
+	player2ID, player2Phone, player2Token string, player2DBID int, player2DisplayName string,
+	stakeAmount int) *GameState {
 	game := &GameState{
 		ID:    id,
 		Token: token,
 		Player1: &Player{
 			ID:          player1ID,
 			PhoneNumber: player1Phone,
+			DBPlayerID:  player1DBID,
+			DisplayName: player1DisplayName,
 			PlayerToken: player1Token,
 			Hand:        []Card{},
 			Connected:   false,
@@ -118,6 +126,8 @@ func NewGame(id, token string, player1ID, player1Phone, player1Token, player2ID,
 		Player2: &Player{
 			ID:          player2ID,
 			PhoneNumber: player2Phone,
+			DBPlayerID:  player2DBID,
+			DisplayName: player2DisplayName,
 			PlayerToken: player2Token,
 			Hand:        []Card{},
 			Connected:   false,
@@ -371,6 +381,15 @@ func (g *GameState) PlayCard(playerID string, card Card, declaredSuit Suit) (*Pl
 	g.DiscardPile = append(g.DiscardPile, card)
 	log.Printf("[GAME] PlayCard - appended to discard pile. discard size=%d", len(g.DiscardPile))
 
+	// Persist move
+	var declared string
+	if card.Rank == Ace {
+		declared = string(declaredSuit)
+	}
+	if Manager != nil {
+		Manager.RecordMove(g.SessionID, player.DBPlayerID, "PLAY_CARD", card.String(), declared)
+	}
+
 	// Update current suit
 	// Ace is wild suit - player declares new suit
 	if card.Rank == Ace {
@@ -425,6 +444,11 @@ func (g *GameState) PlayCard(playerID string, card Card, declaredSuit Suit) (*Pl
 		}
 		result.NextTurn = ""
 		log.Printf("[GAME] PlayCard - chop ended game, winner=%s", g.Winner)
+
+		// Persist final game state
+		if Manager != nil {
+			Manager.SaveFinalGameState(g)
+		}
 		return result, nil
 	}
 
@@ -442,6 +466,11 @@ func (g *GameState) PlayCard(playerID string, card Card, declaredSuit Suit) (*Pl
 		result.WinType = "classic"
 		result.NextTurn = ""
 		log.Printf("[GAME] PlayCard - classic win processed")
+
+		// Persist final game state
+		if Manager != nil {
+			Manager.SaveFinalGameState(g)
+		}
 		return result, nil
 	}
 
@@ -566,6 +595,11 @@ func (g *GameState) DrawCard(playerID string) (*DrawCardResult, error) {
 			}
 			player.AddCard(card)
 			cardsDrawn = append(cardsDrawn, card)
+
+			// Persist each drawn card as a move
+			if Manager != nil {
+				Manager.RecordMove(g.SessionID, player.DBPlayerID, "DRAW_CARD", card.String(), "")
+			}
 		}
 
 		// Switch turn - player loses their turn after drawing penalty
@@ -609,6 +643,11 @@ func (g *GameState) DrawCard(playerID string) (*DrawCardResult, error) {
 	}
 	player.AddCard(card)
 
+	// Persist the single drawn card
+	if Manager != nil {
+		Manager.RecordMove(g.SessionID, player.DBPlayerID, "DRAW_CARD", card.String(), "")
+	}
+
 	result := &DrawCardResult{
 		Success:      true,
 		CardsDrawn:   []Card{card},
@@ -634,6 +673,11 @@ func (g *GameState) PassTurn(playerID string) error {
 	}
 
 	g.SwitchTurn()
+
+	// Persist pass move
+	if Manager != nil {
+		Manager.RecordMove(g.SessionID, g.GetPlayerByID(playerID).DBPlayerID, "PASS", "", "")
+	}
 
 	// Save state to Redis
 	go g.SaveToRedis()
@@ -666,17 +710,27 @@ func (g *GameState) GetGameStateForPlayer(playerID string) map[string]interface{
 	var myHand []Card
 	var opponentCardCount int
 	var myID, opponentID string
+	var myDisplayName, opponentDisplayName string
+	var myConnected, opponentConnected bool
 
 	if g.Player1.ID == playerID {
 		myHand = g.Player1.Hand
 		opponentCardCount = g.Player2.CardCount()
 		myID = g.Player1.ID
 		opponentID = g.Player2.ID
+		myDisplayName = g.Player1.DisplayName
+		opponentDisplayName = g.Player2.DisplayName
+		myConnected = g.Player1.Connected
+		opponentConnected = g.Player2.Connected
 	} else {
 		myHand = g.Player2.Hand
 		opponentCardCount = g.Player1.CardCount()
 		myID = g.Player2.ID
 		opponentID = g.Player1.ID
+		myDisplayName = g.Player2.DisplayName
+		opponentDisplayName = g.Player1.DisplayName
+		myConnected = g.Player2.Connected
+		opponentConnected = g.Player1.Connected
 	}
 
 	// Get last 4 cards from discard pile for visual stacking
@@ -696,25 +750,29 @@ func (g *GameState) GetGameStateForPlayer(playerID string) map[string]interface{
 	}
 
 	return map[string]interface{}{
-		"game_id":             g.ID,
-		"token":               g.Token,
-		"status":              g.Status,
-		"my_id":               myID,
-		"my_hand":             myHand,
-		"opponent_id":         opponentID,
-		"opponent_card_count": opponentCardCount,
-		"top_card":            g.GetTopCard(),
-		"discard_pile_cards":  discardPileCards,
-		"current_suit":        currentSuit,
-		"target_suit":         g.TargetSuit,
-		"target_card":         g.TargetCard,
-		"current_turn":        g.CurrentTurn,
-		"my_turn":             g.CurrentTurn == playerID,
-		"draw_stack":          g.DrawStack,
-		"deck_count":          g.Deck.Remaining(),
-		"stake_amount":        g.StakeAmount,
-		"winner":              g.Winner,
-		"win_type":            g.WinType,
+		"game_id":               g.ID,
+		"token":                 g.Token,
+		"status":                g.Status,
+		"my_id":                 myID,
+		"my_display_name":       myDisplayName,
+		"my_hand":               myHand,
+		"opponent_id":           opponentID,
+		"opponent_display_name": opponentDisplayName,
+		"opponent_card_count":   opponentCardCount,
+		"top_card":              g.GetTopCard(),
+		"discard_pile_cards":    discardPileCards,
+		"current_suit":          currentSuit,
+		"target_suit":           g.TargetSuit,
+		"target_card":           g.TargetCard,
+		"current_turn":          g.CurrentTurn,
+		"my_turn":               g.CurrentTurn == playerID,
+		"my_connected":          myConnected,
+		"opponent_connected":    opponentConnected,
+		"draw_stack":            g.DrawStack,
+		"deck_count":            g.Deck.Remaining(),
+		"stake_amount":          g.StakeAmount,
+		"winner":                g.Winner,
+		"win_type":              g.WinType,
 	}
 }
 
@@ -798,6 +856,19 @@ func (g *GameState) ForfeitByDisconnect(disconnectedPlayerID string) {
 	g.Status = StatusCompleted
 	now := time.Now()
 	g.CompletedAt = &now
+
+	// Record forfeit move for auditing
+	if Manager != nil {
+		var disconnectedDB int
+		if p := g.GetPlayerByID(disconnectedPlayerID); p != nil {
+			disconnectedDB = p.DBPlayerID
+		}
+		if disconnectedDB > 0 {
+			Manager.RecordMove(g.SessionID, disconnectedDB, "FORFEIT", "", "")
+		}
+		// Persist final state
+		Manager.SaveFinalGameState(g)
+	}
 
 	// TODO: Trigger payout to winner
 	// For now, just log

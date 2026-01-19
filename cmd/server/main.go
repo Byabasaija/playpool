@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"os"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -9,6 +10,7 @@ import (
 	"github.com/playmatatu/backend/internal/config"
 	"github.com/playmatatu/backend/internal/database"
 	"github.com/playmatatu/backend/internal/game"
+	"github.com/playmatatu/backend/internal/migrations"
 	"github.com/playmatatu/backend/internal/redis"
 )
 
@@ -28,6 +30,14 @@ func main() {
 	}
 	defer db.Close()
 
+	// Run migrations on start if requested
+	if os.Getenv("MIGRATE_ON_START") == "true" {
+		log.Println("↗ Running DB migrations on startup...")
+		if err := migrations.RunMigrations(cfg.DatabaseURL); err != nil {
+			log.Fatalf("Failed to run migrations: %v", err)
+		}
+	}
+
 	// Initialize Redis
 	rdb, err := redis.Connect(cfg.RedisURL)
 	if err != nil {
@@ -36,7 +46,7 @@ func main() {
 	defer rdb.Close()
 
 	// Initialize Game Manager with Redis and config
-	game.InitializeManager(rdb, cfg)
+	game.InitializeManager(db, rdb, cfg)
 
 	// Set up Gin router
 	if cfg.Environment == "production" {

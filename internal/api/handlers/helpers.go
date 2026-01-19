@@ -22,7 +22,7 @@ func normalizePhone(phone string) string {
 		return "+256" + digits[1:]
 	} else if len(digits) == 12 && digits[:3] == "256" {
 		return "+" + digits
-	} else if phone[0] == '+' && len(digits) == 12 && digits[:3] == "256" {
+	} else if len(phone) > 0 && phone[0] == '+' && len(digits) == 12 && digits[:3] == "256" {
 		return phone
 	}
 
@@ -45,7 +45,7 @@ func generateTransactionID() string {
 	return "TXN_" + generateID(10)
 }
 
-// generateQueueID generates a unique queue ID  
+// generateQueueID generates a unique queue ID
 func generateQueueID() string {
 	return "QUEUE_" + generateID(8)
 }

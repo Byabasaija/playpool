@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/playmatatu/backend/internal/config"
 	"github.com/redis/go-redis/v9"
 )
@@ -20,6 +21,7 @@ type GameManager struct {
 	playerToGame     map[string]string     // player ID -> game ID
 	matchmakingQueue map[int][]QueueEntry  // stake amount -> queue of players
 	rdb              *redis.Client         // Redis client for persistence
+	db               *sqlx.DB              // SQL DB for persistent records
 	config           *config.Config        // Application config
 	mu               sync.RWMutex
 }
@@ -29,21 +31,26 @@ type QueueEntry struct {
 	PlayerID    string
 	PhoneNumber string
 	StakeAmount int
+	DBPlayerID  int
+	DisplayName string
 	JoinedAt    time.Time
 }
 
 // MatchResult represents the result of a successful match
 type MatchResult struct {
-	GameID       string
-	GameToken    string
-	Player1ID    string
-	Player1Token string
-	Player1Link  string
-	Player2ID    string
-	Player2Token string
-	Player2Link  string
-	StakeAmount  int
-	ExpiresAt    time.Time
+	GameID             string
+	GameToken          string
+	Player1ID          string
+	Player1Token       string
+	Player1Link        string
+	Player1DisplayName string
+	Player2ID          string
+	Player2Token       string
+	Player2Link        string
+	Player2DisplayName string
+	StakeAmount        int
+	ExpiresAt          time.Time
+	SessionID          int
 }
 
 var (
@@ -51,21 +58,22 @@ var (
 	Manager *GameManager
 )
 
-// InitializeManager initializes the global game manager with Redis and config
-func InitializeManager(rdb *redis.Client, cfg *config.Config) {
-	Manager = NewGameManager(rdb, cfg)
+// InitializeManager initializes the global game manager with Redis, DB and config
+func InitializeManager(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) {
+	Manager = NewGameManager(db, rdb, cfg)
 	// Start background jobs
 	go Manager.StartExpiryChecker()
 	go Manager.StartDisconnectChecker()
 }
 
 // NewGameManager creates a new game manager
-func NewGameManager(rdb *redis.Client, cfg *config.Config) *GameManager {
+func NewGameManager(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) *GameManager {
 	return &GameManager{
 		games:            make(map[string]*GameState),
 		playerToGame:     make(map[string]string),
 		matchmakingQueue: make(map[int][]QueueEntry),
 		rdb:              rdb,
+		db:               db,
 		config:           cfg,
 	}
 }
@@ -83,7 +91,8 @@ func generateGameID() string {
 }
 
 // JoinQueue adds a player to the matchmaking queue
-func (gm *GameManager) JoinQueue(playerID, phoneNumber string, stakeAmount int) (*MatchResult, error) {
+// now accepts dbPlayerID and displayName to carry persistent identity
+func (gm *GameManager) JoinQueue(playerID, phoneNumber string, stakeAmount int, dbPlayerID int, displayName string) (*MatchResult, error) {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
 
@@ -123,9 +132,13 @@ func (gm *GameManager) JoinQueue(playerID, phoneNumber string, stakeAmount int) 
 					opponent.PlayerID,
 					opponent.PhoneNumber,
 					player1Token,
+					opponent.DBPlayerID,
+					opponent.DisplayName,
 					playerID,
 					phoneNumber,
 					player2Token,
+					dbPlayerID,
+					displayName,
 					stakeAmount,
 				)
 
@@ -145,22 +158,38 @@ func (gm *GameManager) JoinQueue(playerID, phoneNumber string, stakeAmount int) 
 				// Save to Redis
 				gm.saveGameToRedis(game)
 
+				// Persist a game_sessions row if we have DB player ids
+				var sessionID int
+				if gm.db != nil && opponent.DBPlayerID > 0 && dbPlayerID > 0 {
+					err := gm.db.QueryRowx(`INSERT INTO game_sessions (game_token, player1_id, player2_id, stake_amount, status, created_at, expiry_time) VALUES ($1, $2, $3, $4, $5, NOW(), $6) RETURNING id`,
+						gameToken, opponent.DBPlayerID, dbPlayerID, stakeAmount, string(StatusWaiting), game.ExpiresAt).Scan(&sessionID)
+					if err != nil {
+						log.Printf("[DB] Failed to create game_session: %v", err)
+					} else {
+						game.SessionID = sessionID
+						log.Printf("[DB] Created game_session %d for game %s", sessionID, gameID)
+					}
+				}
+
 				// Generate game links for both players
 				baseURL := gm.config.FrontendURL
 				player1Link := baseURL + "/g/" + gameToken + "?pt=" + player1Token
 				player2Link := baseURL + "/g/" + gameToken + "?pt=" + player2Token
 
 				return &MatchResult{
-					GameID:       gameID,
-					GameToken:    gameToken,
-					Player1ID:    opponent.PlayerID,
-					Player1Token: player1Token,
-					Player1Link:  player1Link,
-					Player2ID:    playerID,
-					Player2Token: player2Token,
-					Player2Link:  player2Link,
-					StakeAmount:  stakeAmount,
-					ExpiresAt:    game.ExpiresAt,
+					GameID:             gameID,
+					GameToken:          gameToken,
+					Player1ID:          opponent.PlayerID,
+					Player1Token:       player1Token,
+					Player1Link:        player1Link,
+					Player1DisplayName: opponent.DisplayName,
+					Player2ID:          playerID,
+					Player2Token:       player2Token,
+					Player2Link:        player2Link,
+					Player2DisplayName: displayName,
+					StakeAmount:        stakeAmount,
+					ExpiresAt:          game.ExpiresAt,
+					SessionID:          sessionID,
 				}, nil
 			}
 		}
@@ -171,6 +200,8 @@ func (gm *GameManager) JoinQueue(playerID, phoneNumber string, stakeAmount int) 
 		PlayerID:    playerID,
 		PhoneNumber: phoneNumber,
 		StakeAmount: stakeAmount,
+		DBPlayerID:  dbPlayerID,
+		DisplayName: displayName,
 		JoinedAt:    time.Now(),
 	}
 
@@ -387,9 +418,13 @@ func (gm *GameManager) CreateTestGame(player1Phone, player2Phone string, stakeAm
 		player1ID,
 		player1Phone,
 		player1Token,
+		0,             // player1 DB id (test)
+		"TestPlayer1", // player1 display name
 		player2ID,
 		player2Phone,
 		player2Token,
+		0,             // player2 DB id (test)
+		"TestPlayer2", // player2 display name
 		stakeAmount,
 	)
 
@@ -431,6 +466,7 @@ func (gm *GameManager) saveGameToRedis(game *GameState) error {
 		"started_at":    game.StartedAt,
 		"completed_at":  game.CompletedAt,
 		"last_activity": game.LastActivity,
+		"session_id":    game.SessionID,
 	}
 
 	data, err := json.Marshal(gameData)
@@ -544,6 +580,12 @@ func parsePlayerFromData(data map[string]interface{}) *Player {
 	}
 	if phoneNumber, ok := data["phone_number"].(string); ok {
 		player.PhoneNumber = phoneNumber
+	}
+	if displayName, ok := data["display_name"].(string); ok {
+		player.DisplayName = displayName
+	}
+	if dbID, ok := data["db_player_id"].(float64); ok {
+		player.DBPlayerID = int(dbID)
 	}
 
 	if handData, ok := data["hand"].([]interface{}); ok {
@@ -662,4 +704,91 @@ func parseCardsFromData(data []interface{}) []Card {
 		}
 	}
 	return cards
+}
+
+// RecordMove records a single move in game_moves (synchronous). It's best-effort and logs errors.
+func (gm *GameManager) RecordMove(sessionID int, playerID int, moveType, cardPlayed, suitDeclared string) {
+	if gm == nil || gm.db == nil || sessionID == 0 || playerID == 0 {
+		return
+	}
+
+	// Determine next move number
+	var maxMove int
+	if err := gm.db.Get(&maxMove, `SELECT COALESCE(MAX(move_number), 0) FROM game_moves WHERE session_id = $1`, sessionID); err != nil {
+		log.Printf("[DB] Failed to get max move number for session %d: %v", sessionID, err)
+		return
+	}
+	moveNumber := maxMove + 1
+
+	_, err := gm.db.Exec(`INSERT INTO game_moves (session_id, player_id, move_number, move_type, card_played, suit_declared, created_at) VALUES ($1,$2,$3,$4,$5,$6,NOW())`,
+		sessionID, playerID, moveNumber, moveType, cardPlayed, suitDeclared)
+	if err != nil {
+		log.Printf("[DB] Failed to record move for session %d: %v", sessionID, err)
+	}
+}
+
+// SaveFinalGameState persists the final game state JSON and updates the session row
+func (gm *GameManager) SaveFinalGameState(g *GameState) {
+	if gm == nil || gm.db == nil || g == nil || g.SessionID == 0 {
+		return
+	}
+
+	data, err := json.Marshal(g)
+	if err != nil {
+		log.Printf("[DB] Failed to marshal final game state for session %d: %v", g.SessionID, err)
+		return
+	}
+
+	_, err = gm.db.Exec(`INSERT INTO game_states (session_id, game_state, created_at) VALUES ($1, $2::jsonb, NOW())`, g.SessionID, string(data))
+	if err != nil {
+		log.Printf("[DB] Failed to insert game_states for session %d: %v", g.SessionID, err)
+		// continue to attempt update
+	}
+
+	// Update session status and winner if available
+	if g.Status == StatusCompleted {
+		// Resolve winner DB id
+		var winnerDBID int
+		if g.Winner != "" {
+			if p := g.GetPlayerByID(g.Winner); p != nil {
+				winnerDBID = p.DBPlayerID
+			}
+		}
+
+		if winnerDBID > 0 {
+			_, err = gm.db.Exec(`UPDATE game_sessions SET status=$1, winner_id=$2, completed_at=NOW() WHERE id=$3`, string(g.Status), winnerDBID, g.SessionID)
+		} else {
+			_, err = gm.db.Exec(`UPDATE game_sessions SET status=$1, completed_at=NOW() WHERE id=$2`, string(g.Status), g.SessionID)
+		}
+		if err != nil {
+			log.Printf("[DB] Failed to update game_sessions %d: %v", g.SessionID, err)
+		}
+
+		// After updating game_sessions, add payout transaction placeholder and update player aggregates
+		if winnerDBID > 0 {
+			prize := int(float64(g.StakeAmount*2) * 0.9) // 10% commission
+			_, err = gm.db.Exec(`INSERT INTO transactions (player_id, transaction_type, amount, status, created_at) VALUES ($1,'PAYOUT',$2,'PENDING',NOW())`, winnerDBID, prize)
+			if err != nil {
+				log.Printf("[DB] Failed to insert payout transaction for session %d: %v", g.SessionID, err)
+			}
+
+			_, err = gm.db.Exec(`UPDATE players SET total_games_won = total_games_won + 1, total_winnings = total_winnings + $2 WHERE id = $1`, winnerDBID, prize)
+			if err != nil {
+				log.Printf("[DB] Failed to update winner aggregates for player %d: %v", winnerDBID, err)
+			}
+		}
+
+		// Increment games_played for both players if we have DB ids
+		if g.Player1 != nil && g.Player2 != nil && g.Player1.DBPlayerID > 0 && g.Player2.DBPlayerID > 0 {
+			_, err = gm.db.Exec(`UPDATE players SET total_games_played = total_games_played + 1 WHERE id IN ($1, $2)`, g.Player1.DBPlayerID, g.Player2.DBPlayerID)
+			if err != nil {
+				log.Printf("[DB] Failed to update games_played for session %d: %v", g.SessionID, err)
+			}
+		}
+	} else {
+		_, err = gm.db.Exec(`UPDATE game_sessions SET status=$1 WHERE id=$2`, string(g.Status), g.SessionID)
+		if err != nil {
+			log.Printf("[DB] Failed to update game_sessions status for %d: %v", g.SessionID, err)
+		}
+	}
 }

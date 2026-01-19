@@ -22,6 +22,10 @@ interface GameBoardProps {
   canPass: boolean;
   sendMessage: (message: OutgoingWSMessage) => void;
   onPassTurn: () => void;
+  myDisplayName?: string | null;
+  opponentDisplayName?: string | null;
+  myConnected?: boolean;
+  opponentConnected?: boolean;
 }
 
 export const GameBoard: React.FC<GameBoardProps> = ({
@@ -36,7 +40,11 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   drawStack,
   canPass,
   sendMessage,
-  onPassTurn
+  onPassTurn,
+  myDisplayName,
+  opponentDisplayName,
+  myConnected,
+  opponentConnected
 }) => {
   const [showSuitSelector, setShowSuitSelector] = useState(false);
   const [pendingAce, setPendingAce] = useState<CardType | null>(null);
@@ -81,10 +89,18 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     });
   };
 
+  const statusDot = (online?: boolean) => (
+    <span className={`inline-block h-3 w-3 rounded-full mr-2 ${online ? 'bg-green-400' : 'bg-yellow-400'}`} />
+  );
+
   return (
     <div className="relative w-full h-screen flex flex-col" style={{ backgroundImage: "url('/background.jpg')", backgroundSize: 'cover', backgroundPosition: 'center' }}>
       {/* Opponent Hand (Top) */}
       <div className="flex-none">
+        <div className="flex items-center justify-center py-2">
+          {statusDot(opponentConnected)}
+          <div className="font-semibold text-white">{opponentDisplayName || 'Opponent'}</div>
+        </div>
         <OpponentHand cardCount={opponentCardCount} />
       </div>
 
@@ -110,7 +126,11 @@ export const GameBoard: React.FC<GameBoardProps> = ({
       </div>
 
       {/* Player Hand (Bottom) */}
-      <div className="flex-none">
+      <div className="flex-none mb-4">
+        <div className="flex items-center justify-center py-2 mb-2">
+          {statusDot(myConnected)}
+          <div className="font-semibold text-white">{myDisplayName || 'You'}</div>
+        </div>
         <PlayerHand
           cards={myHand}
           onCardClick={handleCardClick}

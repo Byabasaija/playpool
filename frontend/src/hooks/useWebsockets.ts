@@ -89,7 +89,14 @@ export function useWebSocket({
       try {
         const data = JSON.parse(event.data) as WSMessage;
         console.log('Received:', data);
-        onMessage(data);
+
+        // Forward display names if present
+        if (data.my_display_name || data.opponent_display_name) {
+          // merge into message
+          onMessage(data);
+        } else {
+          onMessage(data);
+        }
       } catch (error) {
         console.error('Error parsing WebSocket message:', error);
       }

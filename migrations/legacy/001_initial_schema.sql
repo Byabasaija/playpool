@@ -1,10 +1,9 @@
--- PlayMatatu Database Schema
--- Version: 1.0
--- Run this migration to set up the initial database structure
+-- Legacy initial schema (archived)
+-- Original 001_initial_schema.sql moved to migrations/legacy/ for archival after switching to migrate tool
 
--- ============================================
+-- (Full schema archived here for history.)
+
 -- PLAYERS TABLE
--- ============================================
 CREATE TABLE IF NOT EXISTS players (
     id SERIAL PRIMARY KEY,
     phone_number VARCHAR(15) UNIQUE NOT NULL,
@@ -24,9 +23,7 @@ CREATE TABLE IF NOT EXISTS players (
 CREATE INDEX idx_players_phone ON players(phone_number);
 CREATE INDEX idx_players_active ON players(is_active, is_blocked);
 
--- ============================================
 -- TRANSACTIONS TABLE
--- ============================================
 CREATE TABLE IF NOT EXISTS transactions (
     id SERIAL PRIMARY KEY,
     player_id INT REFERENCES players(id),
@@ -42,9 +39,7 @@ CREATE INDEX idx_transactions_player ON transactions(player_id);
 CREATE INDEX idx_transactions_status ON transactions(status);
 CREATE INDEX idx_transactions_momo ON transactions(momo_transaction_id);
 
--- ============================================
 -- GAME SESSIONS TABLE
--- ============================================
 CREATE TABLE IF NOT EXISTS game_sessions (
     id SERIAL PRIMARY KEY,
     game_token VARCHAR(100) UNIQUE NOT NULL,
@@ -63,9 +58,7 @@ CREATE INDEX idx_game_sessions_token ON game_sessions(game_token);
 CREATE INDEX idx_game_sessions_status ON game_sessions(status);
 CREATE INDEX idx_game_sessions_players ON game_sessions(player1_id, player2_id);
 
--- ============================================
--- ESCROW LEDGER TABLE (Virtual Escrow)
--- ============================================
+-- ESCROW LEDGER TABLE
 CREATE TABLE IF NOT EXISTS escrow_ledger (
     id SERIAL PRIMARY KEY,
     session_id INT REFERENCES game_sessions(id),
@@ -80,9 +73,7 @@ CREATE TABLE IF NOT EXISTS escrow_ledger (
 CREATE INDEX idx_escrow_session ON escrow_ledger(session_id);
 CREATE INDEX idx_escrow_type ON escrow_ledger(entry_type);
 
--- ============================================
 -- GAME STATES TABLE (Archived after game)
--- ============================================
 CREATE TABLE IF NOT EXISTS game_states (
     id SERIAL PRIMARY KEY,
     session_id INT REFERENCES game_sessions(id),
@@ -92,9 +83,7 @@ CREATE TABLE IF NOT EXISTS game_states (
 
 CREATE INDEX idx_game_states_session ON game_states(session_id);
 
--- ============================================
 -- GAME MOVES TABLE (Audit Trail)
--- ============================================
 CREATE TABLE IF NOT EXISTS game_moves (
     id SERIAL PRIMARY KEY,
     session_id INT REFERENCES game_sessions(id),
@@ -108,9 +97,7 @@ CREATE TABLE IF NOT EXISTS game_moves (
 
 CREATE INDEX idx_game_moves_session ON game_moves(session_id);
 
--- ============================================
 -- MATCHMAKING QUEUE TABLE
--- ============================================
 CREATE TABLE IF NOT EXISTS matchmaking_queue (
     id SERIAL PRIMARY KEY,
     player_id INT REFERENCES players(id),
@@ -126,9 +113,7 @@ CREATE TABLE IF NOT EXISTS matchmaking_queue (
 CREATE INDEX idx_matchmaking_status ON matchmaking_queue(status, stake_amount);
 CREATE INDEX idx_matchmaking_player ON matchmaking_queue(player_id);
 
--- ============================================
 -- DISPUTES TABLE
--- ============================================
 CREATE TABLE IF NOT EXISTS disputes (
     id SERIAL PRIMARY KEY,
     session_id INT REFERENCES game_sessions(id),

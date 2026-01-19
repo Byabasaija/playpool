@@ -1,0 +1,128 @@
+-- Initial schema (up)
+-- Copied from 001_initial_schema.sql
+
+-- PLAYERS TABLE
+CREATE TABLE IF NOT EXISTS players (
+    id SERIAL PRIMARY KEY,
+    phone_number VARCHAR(15) UNIQUE NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    total_games_played INT DEFAULT 0,
+    total_games_won INT DEFAULT 0,
+    total_winnings DECIMAL(12,2) DEFAULT 0,
+    is_active BOOLEAN DEFAULT TRUE,
+    is_blocked BOOLEAN DEFAULT FALSE,
+    block_reason VARCHAR(100),
+    block_until TIMESTAMP,
+    disconnect_count INT DEFAULT 0,
+    no_show_count INT DEFAULT 0,
+    last_active TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_players_phone ON players(phone_number);
+CREATE INDEX IF NOT EXISTS idx_players_active ON players(is_active, is_blocked);
+
+-- TRANSACTIONS TABLE
+CREATE TABLE IF NOT EXISTS transactions (
+    id SERIAL PRIMARY KEY,
+    player_id INT REFERENCES players(id),
+    transaction_type VARCHAR(20) NOT NULL,
+    amount DECIMAL(12,2) NOT NULL,
+    momo_transaction_id VARCHAR(100),
+    status VARCHAR(20) DEFAULT 'PENDING',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_transactions_player ON transactions(player_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status);
+CREATE INDEX IF NOT EXISTS idx_transactions_momo ON transactions(momo_transaction_id);
+
+-- GAME SESSIONS TABLE
+CREATE TABLE IF NOT EXISTS game_sessions (
+    id SERIAL PRIMARY KEY,
+    game_token VARCHAR(100) UNIQUE NOT NULL,
+    player1_id INT REFERENCES players(id),
+    player2_id INT REFERENCES players(id),
+    stake_amount DECIMAL(12,2) NOT NULL,
+    status VARCHAR(20) DEFAULT 'WAITING',
+    winner_id INT REFERENCES players(id),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    expiry_time TIMESTAMP NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_game_sessions_token ON game_sessions(game_token);
+CREATE INDEX IF NOT EXISTS idx_game_sessions_status ON game_sessions(status);
+CREATE INDEX IF NOT EXISTS idx_game_sessions_players ON game_sessions(player1_id, player2_id);
+
+-- ESCROW LEDGER TABLE
+CREATE TABLE IF NOT EXISTS escrow_ledger (
+    id SERIAL PRIMARY KEY,
+    session_id INT REFERENCES game_sessions(id),
+    entry_type VARCHAR(20) NOT NULL,
+    player_id INT REFERENCES players(id),
+    amount DECIMAL(12,2) NOT NULL,
+    balance_after DECIMAL(12,2) NOT NULL,
+    description VARCHAR(200),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_escrow_session ON escrow_ledger(session_id);
+CREATE INDEX IF NOT EXISTS idx_escrow_type ON escrow_ledger(entry_type);
+
+-- GAME STATES TABLE
+CREATE TABLE IF NOT EXISTS game_states (
+    id SERIAL PRIMARY KEY,
+    session_id INT REFERENCES game_sessions(id),
+    game_state JSONB NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_game_states_session ON game_states(session_id);
+
+-- GAME MOVES TABLE
+CREATE TABLE IF NOT EXISTS game_moves (
+    id SERIAL PRIMARY KEY,
+    session_id INT REFERENCES game_sessions(id),
+    player_id INT REFERENCES players(id),
+    move_number INT NOT NULL,
+    move_type VARCHAR(20) NOT NULL,
+    card_played VARCHAR(5),
+    suit_declared VARCHAR(10),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_game_moves_session ON game_moves(session_id);
+
+-- MATCHMAKING QUEUE TABLE
+CREATE TABLE IF NOT EXISTS matchmaking_queue (
+    id SERIAL PRIMARY KEY,
+    player_id INT REFERENCES players(id),
+    phone_number VARCHAR(15) NOT NULL,
+    stake_amount DECIMAL(12,2) NOT NULL,
+    transaction_id INT REFERENCES transactions(id),
+    status VARCHAR(20) DEFAULT 'WAITING',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    matched_at TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_matchmaking_status ON matchmaking_queue(status, stake_amount);
+CREATE INDEX IF NOT EXISTS idx_matchmaking_player ON matchmaking_queue(player_id);
+
+-- DISPUTES TABLE
+CREATE TABLE IF NOT EXISTS disputes (
+    id SERIAL PRIMARY KEY,
+    session_id INT REFERENCES game_sessions(id),
+    reported_by INT REFERENCES players(id),
+    dispute_type VARCHAR(50),
+    description TEXT,
+    status VARCHAR(20) DEFAULT 'OPEN',
+    resolution TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_disputes_session ON disputes(session_id);
+CREATE INDEX IF NOT EXISTS idx_disputes_status ON disputes(status);

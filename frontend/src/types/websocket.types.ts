@@ -41,6 +41,10 @@ export interface WSMessage {
   cards?: Card[];
   count?: number;
   player?: string;
+
+  // Display names for this player and opponent (optional)
+  my_display_name?: string;
+  opponent_display_name?: string;
 }
 
 export interface PlayCardMessage {

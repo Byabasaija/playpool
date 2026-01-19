@@ -122,10 +122,11 @@ deploy_nginx_config() {
 run_migrations() {
     if [[ -d "migrations" ]]; then
         log_info "Running database migrations..."
-        # This would run your migration tool
-        # For now, we'll just log that migrations should be run manually
-        log_warn "Please run database migrations manually using your preferred tool"
-        log_warn "Migration files are located in: migrations/"
+        if [[ -x ./scripts/migrate.sh ]]; then
+            ./scripts/migrate.sh up || { log_error "migrations failed"; exit 1; }
+        else
+            log_warn "Migration script not executable or found. Please run migrations manually or ensure ./scripts/migrate.sh is present."
+        fi
     fi
 }
 

@@ -21,7 +21,15 @@ export async function initiateStake(phone: string, stake: number): Promise<Stake
     throw new Error(data.error || 'Failed to initiate stake');
   }
 
-  return data;
+  // Ensure type safety even if backend returns extra fields
+  return {
+    player_id: data.player_id,
+    status: data.status,
+    game_link: data.game_link,
+    display_name: data.display_name,
+    my_display_name: data.my_display_name,
+    opponent_display_name: data.opponent_display_name,
+  } as StakeResponse;
 }
 
 export async function pollMatchStatus(playerId: string): Promise<QueueStatusResponse> {
@@ -32,5 +40,10 @@ export async function pollMatchStatus(playerId: string): Promise<QueueStatusResp
     throw new Error(data.error || 'Failed to check match status');
   }
   
-  return data;
+  return {
+    status: data.status,
+    game_link: data.game_link,
+    my_display_name: data.my_display_name,
+    opponent_display_name: data.opponent_display_name
+  } as QueueStatusResponse;
 }

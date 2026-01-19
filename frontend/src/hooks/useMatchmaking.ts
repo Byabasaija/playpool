@@ -8,6 +8,23 @@ export function useMatchmaking() {
   const [error, setError] = useState<string | null>(null);
   const [gameLink, setGameLink] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [displayName, setDisplayNameState] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem('playerDisplayName');
+    } catch (e) {
+      return null;
+    }
+  });
+
+  const setDisplayName = useCallback((name: string | null) => {
+    setDisplayNameState(name);
+    try {
+      if (name) localStorage.setItem('playerDisplayName', name);
+      else localStorage.removeItem('playerDisplayName');
+    } catch (e) {
+      // ignore storage errors
+    }
+  }, []);
 
   const startGame = useCallback(async (phone: string, stake: number) => {
     setIsLoading(true);
@@ -20,6 +37,11 @@ export function useMatchmaking() {
       
       // Store player ID
       localStorage.setItem('playerId', stakeResult.player_id);
+
+      // Store display name if provided
+      if (stakeResult.display_name) {
+        setDisplayName(stakeResult.display_name);
+      }
 
       // Check if immediately matched
       if (stakeResult.status === 'matched' && stakeResult.game_link) {
@@ -38,6 +60,9 @@ export function useMatchmaking() {
 
       const poll = async (): Promise<void> => {
         const result = await pollMatchStatus(stakeResult.player_id);
+
+        // If server returns display names on match, persist them (helpful for UI)
+        if (result.my_display_name) setDisplayName(result.my_display_name);
 
         if (result.status === 'matched' && result.game_link) {
           setGameLink(result.game_link);
@@ -65,14 +90,15 @@ export function useMatchmaking() {
       setStage('error');
       setIsLoading(false);
     }
-  }, []);
+  }, [setDisplayName]);
 
   const reset = useCallback(() => {
     setStage('form');
     setError(null);
     setGameLink(null);
     setIsLoading(false);
-  }, []);
+    setDisplayName(null);
+  }, [setDisplayName]);
 
   return {
     stage,
@@ -80,6 +106,7 @@ export function useMatchmaking() {
     gameLink,
     isLoading,
     startGame,
-    reset
+    reset,
+    displayName
   };
 }
