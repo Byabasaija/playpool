@@ -4,11 +4,16 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
+	"github.com/playmatatu/backend/internal/game"
 	"github.com/playmatatu/backend/internal/models"
+	"github.com/playmatatu/backend/internal/ws"
 )
 
 // generateDisplayName creates a short fun display name
@@ -93,4 +98,81 @@ func GetOrCreatePlayerByPhone(db *sqlx.DB, phone string) (*models.Player, error)
 		return nil, err
 	}
 	return &p, nil
+}
+
+// UpdateDisplayName allows a client to change a player's display name.
+// Route: PUT /api/v1/player/:phone/display-name
+func UpdateDisplayName(db *sqlx.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if db == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "db not available"})
+			return
+		}
+
+		phoneParam := c.Param("phone")
+		phone := normalizePhone(phoneParam)
+		if phone == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid phone format"})
+			return
+		}
+
+		var body struct {
+			DisplayName string `json:"display_name"`
+		}
+		if err := c.ShouldBindJSON(&body); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+			return
+		}
+
+		name := strings.TrimSpace(body.DisplayName)
+		if name == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "display_name cannot be empty"})
+			return
+		}
+		if len(name) > 50 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "display_name too long (max 50)"})
+			return
+		}
+
+		// Simple character whitelist (letters, numbers, spaces, hyphen, underscore, apostrophe)
+		var validName = regexp.MustCompile(`^[\p{L}0-9 _'\-]+$`)
+		if !validName.MatchString(name) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "display_name contains invalid characters"})
+			return
+		}
+
+		// Update database
+		res, err := db.Exec(`UPDATE players SET display_name=$1 WHERE phone_number=$2`, name, phone)
+		if err != nil {
+			log.Printf("[DB] Failed to update display_name for %s: %v", phone, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update display_name"})
+			return
+		}
+		rows, _ := res.RowsAffected()
+		if rows == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": "player not found"})
+			return
+		}
+
+		// Update manager state (queue + games) and notify
+		updatedGames := game.Manager.UpdateDisplayName(phone, name)
+		for _, gid := range updatedGames {
+			g, err := game.Manager.GetGame(gid)
+			if err != nil || g == nil {
+				log.Printf("[WARN] Updated game %s not found: %v", gid, err)
+				continue
+			}
+
+			// Persist and notify
+			go g.SaveToRedis()
+			p1State := g.GetGameStateForPlayer(g.Player1.ID)
+			p1State["type"] = "game_update"
+			p2State := g.GetGameStateForPlayer(g.Player2.ID)
+			p2State["type"] = "game_update"
+			ws.GameHub.SendToPlayer(g.Player1.ID, p1State)
+			ws.GameHub.SendToPlayer(g.Player2.ID, p2State)
+		}
+
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "display_name": name})
+	}
 }

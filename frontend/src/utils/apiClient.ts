@@ -47,3 +47,15 @@ export async function pollMatchStatus(playerId: string): Promise<QueueStatusResp
     opponent_display_name: data.opponent_display_name
   } as QueueStatusResponse;
 }
+
+export async function updateDisplayName(phone: string, name: string): Promise<{ display_name: string }> {
+  const resp = await fetch(`${API_BASE}/player/${formatPhone(phone)}/display-name`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ display_name: name })
+  });
+
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || 'Failed to update display name');
+  return { display_name: data.display_name };
+}

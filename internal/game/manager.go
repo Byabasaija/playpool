@@ -800,3 +800,39 @@ func (gm *GameManager) SaveFinalGameState(g *GameState) {
 		}
 	}
 }
+
+// UpdateDisplayName updates queue entries and in-memory game player display names for the given phone.
+// It returns a slice of game IDs that were updated.
+func (gm *GameManager) UpdateDisplayName(phone, name string) []string {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+
+	// Update queue entries
+	for stake, queue := range gm.matchmakingQueue {
+		for i := range queue {
+			if queue[i].PhoneNumber == phone {
+				gm.matchmakingQueue[stake][i].DisplayName = name
+			}
+		}
+	}
+
+	var updated []string
+	for gid, g := range gm.games {
+		g.mu.Lock()
+		changed := false
+		if g.Player1 != nil && g.Player1.PhoneNumber == phone {
+			g.Player1.DisplayName = name
+			changed = true
+		}
+		if g.Player2 != nil && g.Player2.PhoneNumber == phone {
+			g.Player2.DisplayName = name
+			changed = true
+		}
+		g.mu.Unlock()
+		if changed {
+			updated = append(updated, gid)
+		}
+	}
+
+	return updated
+}
