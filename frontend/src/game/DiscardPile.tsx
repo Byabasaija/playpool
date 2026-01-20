@@ -7,12 +7,9 @@ interface DiscardPileProps {
 }
 
 export const DiscardPile: React.FC<DiscardPileProps> = ({ cards }) => {
-  if (cards.length === 0) {
-    return (
-      <div className="relative w-24 h-36 bg-gray-200 border-2 border-dashed border-gray-400 rounded-lg flex items-center justify-center">
-        <span className="text-gray-400 text-xs">Discard</span>
-      </div>
-    );
+  // If there are no cards in the discard pile, render nothing
+  if (!cards || cards.length === 0) {
+    return null;
   }
 
   return (

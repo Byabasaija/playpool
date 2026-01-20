@@ -187,7 +187,7 @@ export const GamePage: React.FC = () => {
 
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="bg-white rounded-2xl shadow-2xl p-8 text-center max-w-md mx-auto">
+        <div className="p-8 text-center max-w-md mx-auto">
           <div className="mb-6">
             <div className={`h-20 w-20 rounded-full mx-auto flex items-center justify-center text-4xl ${
               youWon ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'
@@ -200,7 +200,7 @@ export const GamePage: React.FC = () => {
             {youWon ? 'You Won!' : 'You Lost'}
           </h2>
 
-          {winType === 'chop' ? (
+          {/* {winType === 'chop' ? (
             <div className="space-y-3 text-gray-700">
               <p className="font-semibold">Chop result</p>
               <p>Your points: <span className="font-bold">{playerPoints}</span></p>
@@ -211,7 +211,7 @@ export const GamePage: React.FC = () => {
             <div className="space-y-3 text-gray-700">
               <p className="font-semibold">Classic win</p>
             </div>
-          )}
+          )} */}
 
           <button
             onClick={() => window.location.href = '/'}
@@ -225,7 +225,7 @@ export const GamePage: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-green-800 via-blue-800 to-purple-800">
+    <div className="min-h-screen" style={{ backgroundImage: "url('/background.jpg')", backgroundSize: 'cover', backgroundPosition: 'center' }}>
       <GameBoard
         myHand={gameState.myHand}
         opponentCardCount={gameState.opponentCardCount}

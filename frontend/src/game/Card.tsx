@@ -25,7 +25,7 @@ export const Card: React.FC<CardProps> = ({
     return (
       <div
         className={`relative w-24 h-36 rounded-lg shadow-lg border-2 border-gray-200 overflow-hidden ${className}`}
-        style={{ backgroundImage: "url('/Kitenge.jpg')", backgroundSize: 'cover', backgroundPosition: 'center', ...style }}
+        style={{ backgroundImage: "url('/card_back_orange.png')", backgroundSize: 'cover', backgroundPosition: 'center', ...style }}
         role="img"
         aria-label="Card back"
       >
