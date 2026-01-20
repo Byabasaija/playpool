@@ -3,6 +3,8 @@ package handlers
 import (
 	"log"
 	"net/http"
+	"regexp"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
@@ -18,6 +20,7 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 		var req struct {
 			PhoneNumber string `json:"phone_number" binding:"required"`
 			StakeAmount int    `json:"stake_amount" binding:"required"`
+			DisplayName string `json:"display_name,omitempty"`
 		}
 
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -55,6 +58,32 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process player"})
 			return
 		}
+
+		// If client supplied a display name, validate and persist it (overrides generated/default)
+		if req.DisplayName != "" {
+			name := strings.TrimSpace(req.DisplayName)
+			if name == "" || len(name) > 50 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid display_name"})
+				return
+			}
+			// validation: allow letters, numbers, punctuation, symbols and space separators
+			var validName = regexp.MustCompile("^[\\p{L}\\p{N}\\p{P}\\p{S}\\p{Zs}]+$")
+			if !validName.MatchString(name) {
+				log.Printf("[INFO] Invalid display_name attempt for phone %s: %q", phone, name)
+				c.JSON(http.StatusBadRequest, gin.H{"error": "display_name contains invalid characters"})
+				return
+			}
+
+			// Persist the provided name if different
+			if name != player.DisplayName {
+				if _, err := db.Exec(`UPDATE players SET display_name=$1 WHERE id=$2`, name, player.ID); err != nil {
+					log.Printf("[DB] Failed to update display_name for player %d: %v", player.ID, err)
+				} else {
+					player.DisplayName = name
+				}
+			}
+		}
+
 		log.Printf("[INFO] InitiateStake - player: id=%d phone=%s display_name=%s", player.ID, player.PhoneNumber, player.DisplayName)
 
 		// DUMMY PAYMENT: Auto-approve payment (no actual Mobile Money call)

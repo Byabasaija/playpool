@@ -1,6 +1,7 @@
 export interface StakeRequest {
   phone_number: string;
   stake_amount: number;
+  display_name?: string;
 }
 
 export interface StakeResponse {

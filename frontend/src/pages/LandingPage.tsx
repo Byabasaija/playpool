@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMatchmaking } from '../hooks/useMatchmaking';
 import { validatePhone } from '../utils/phoneUtils';
+import { getPlayerProfile } from '../utils/apiClient';
 
 export const LandingPage: React.FC = () => {
   const [phoneRest, setPhoneRest] = useState('');
@@ -10,7 +11,38 @@ export const LandingPage: React.FC = () => {
   const navigate = useNavigate();
   
   // const baseUrl = import.meta.env.VITE_BACKEND_URL
-  const { stage, error, gameLink, isLoading, startGame, reset, displayName } = useMatchmaking();
+  const { stage, gameLink, isLoading, startGame, reset, displayName } = useMatchmaking();
+
+  const [displayNameInput, setDisplayNameInput] = useState<string>('');
+
+  React.useEffect(() => {
+    if (displayName) setDisplayNameInput(displayName);
+  }, [displayName]);
+
+  const generateRandomName = () => {
+    const adjectives = ["Lucky", "Swift", "Brave", "Jolly", "Mighty", "Quiet", "Clever", "Happy", "Kitenge", "Zesty"];
+    const nouns = ["Zebu", "Rider", "Matatu", "Champion", "Sevens", "Ace", "Mamba", "Jua", "Lion", "Drift"];
+    const ai = Math.floor(Math.random() * adjectives.length);
+    const ni = Math.floor(Math.random() * nouns.length);
+    const num = Math.floor(Math.random() * 1000);
+    return `${adjectives[ai]} ${nouns[ni]} ${num}`;
+  };
+
+  const handlePhoneBlur = async () => {
+    const full = '256' + phoneRest.replace(/\D/g, '');
+    if (!validatePhone(full)) return;
+
+    try {
+      const profile = await getPlayerProfile(full);
+      if (profile && profile.display_name) {
+        setDisplayNameInput(profile.display_name);
+      } else {
+        setDisplayNameInput(generateRandomName());
+      }
+    } catch (e) {
+      setDisplayNameInput(generateRandomName());
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -24,7 +56,7 @@ export const LandingPage: React.FC = () => {
     }
 
     setPhoneError('');
-    await startGame(full, stake);
+    await startGame(full, stake, displayNameInput || generateRandomName());
   };
 
 
@@ -63,6 +95,7 @@ export const LandingPage: React.FC = () => {
                     type="tel"
                     value={phoneRest}
                     onChange={(e) => setPhoneRest(e.target.value)}
+                    onBlur={handlePhoneBlur}
                     placeholder="7XX XXX XXX"
                     className="w-full px-4 py-3 border border-gray-300 rounded-r-lg"
                     required
@@ -71,6 +104,28 @@ export const LandingPage: React.FC = () => {
                 {phoneError && (
                   <p className="mt-1 text-sm text-red-600">{phoneError}</p>
                 )}
+              </div>
+
+              <div className="mt-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">Display Name</label>
+                <div className="flex space-x-2">
+                  <input
+                    type="text"
+                    value={displayNameInput}
+                    onChange={(e) => setDisplayNameInput(e.target.value)}
+                    maxLength={50}
+                    placeholder="Your display name"
+                    className="flex-1 px-4 py-3 border border-gray-300 rounded-lg"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setDisplayNameInput(generateRandomName())}
+                    className="px-3 py-2 bg-gray-100 rounded-lg border"
+                  >
+                    Randomize
+                  </button>
+                </div>
+                <p className="mt-1 text-sm text-gray-500">You can change this name later in your profile.</p>
               </div>
 
               <div>

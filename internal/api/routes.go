@@ -65,8 +65,9 @@ func SetupRoutes(router *gin.Engine, db *sqlx.DB, rdb *redis.Client, cfg *config
 		// Player endpoints
 		player := v1.Group("/player")
 		{
-			player.GET("/:phone/stats", handlers.GetPlayerStats(db, cfg))
-			player.PUT("/:phone/display-name", handlers.UpdateDisplayName(db))
+			player.GET(":phone/stats", handlers.GetPlayerStats(db, cfg))
+			player.GET(":phone", handlers.GetPlayerProfile(db))
+			player.PUT(":phone/display-name", handlers.UpdateDisplayName(db))
 		}
 	}
 }

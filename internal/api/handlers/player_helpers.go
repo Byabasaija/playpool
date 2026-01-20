@@ -134,9 +134,10 @@ func UpdateDisplayName(db *sqlx.DB) gin.HandlerFunc {
 			return
 		}
 
-		// Simple character whitelist (letters, numbers, spaces, hyphen, underscore, apostrophe)
-		var validName = regexp.MustCompile(`^[\p{L}0-9 _'\-]+$`)
+		// Simple character whitelist: letters, numbers, punctuation, symbols and space separators
+		var validName = regexp.MustCompile("^[\\p{L}\\p{N}\\p{P}\\p{S}\\p{Zs}]+$")
 		if !validName.MatchString(name) {
+			log.Printf("[INFO] Invalid display_name attempt for phone %s: %q", phone, name)
 			c.JSON(http.StatusBadRequest, gin.H{"error": "display_name contains invalid characters"})
 			return
 		}
@@ -174,5 +175,35 @@ func UpdateDisplayName(db *sqlx.DB) gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "display_name": name})
+	}
+}
+
+// GetPlayerProfile returns basic player info (display_name) if the player exists
+func GetPlayerProfile(db *sqlx.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if db == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "db not available"})
+			return
+		}
+
+		phoneParam := c.Param("phone")
+		phone := normalizePhone(phoneParam)
+		if phone == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid phone format"})
+			return
+		}
+
+		var p models.Player
+		if err := db.Get(&p, `SELECT id, phone_number, display_name FROM players WHERE phone_number=$1`, phone); err != nil {
+			if err == sql.ErrNoRows {
+				c.JSON(http.StatusNotFound, gin.H{"error": "player not found"})
+				return
+			}
+			log.Printf("[DB] Failed to fetch player %s: %v", phone, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch player"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"display_name": p.DisplayName})
 	}
 }

@@ -163,7 +163,7 @@ export const GamePage: React.FC = () => {
   if (!gameStarted) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="bg-white rounded-2xl shadow-2xl p-8 text-center max-w-md mx-auto">
+        <div className="p-8 text-center max-w-md mx-auto">
           <div className="mb-6">
             <div className="animate-pulse">
               <div className="h-12 w-12 bg-gray-600 rounded-full mx-auto flex items-center justify-center">

@@ -3,16 +3,20 @@ import { formatPhone } from './phoneUtils';
 
 const API_BASE = '/api/v1';
 
-export async function initiateStake(phone: string, stake: number): Promise<StakeResponse> {
+export async function initiateStake(phone: string, stake: number, displayName?: string): Promise<StakeResponse> {
+  const body:any = {
+    phone_number: formatPhone(phone),
+    stake_amount: stake
+  } as StakeRequest
+
+  if (displayName) body.display_name = displayName
+
   const response = await fetch(`${API_BASE}/game/stake`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({
-      phone_number: formatPhone(phone),
-      stake_amount: stake
-    } as StakeRequest)
+    body: JSON.stringify(body)
   });
 
   const data = await response.json();
@@ -57,5 +61,15 @@ export async function updateDisplayName(phone: string, name: string): Promise<{ 
 
   const data = await resp.json();
   if (!resp.ok) throw new Error(data.error || 'Failed to update display name');
+  return { display_name: data.display_name };
+}
+
+export async function getPlayerProfile(phone: string): Promise<{display_name?: string} | null> {
+  const response = await fetch(`${API_BASE}/player/${formatPhone(phone)}`);
+  if (response.status === 404) return null;
+
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Failed to fetch player');
+
   return { display_name: data.display_name };
 }
