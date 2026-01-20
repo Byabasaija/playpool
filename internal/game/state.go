@@ -2,6 +2,7 @@ package game
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -507,13 +508,13 @@ func (g *GameState) calculateHandPoints(hand []Card) int {
 func (g *GameState) handleSpecialCard(card Card, opponent *Player) *SpecialEffect {
 	switch card.Rank {
 	case Two:
-		// 2 forces opponent to draw cards (they can counter with another 2)
-		g.DrawStack += 2
+		// Non-cumulative draw stack: always set to 2 (do not add)
+		g.DrawStack = 2
 		return &SpecialEffect{
 			Type:         "draw_stack",
 			SkipOpponent: false, // Opponent can counter with a 2
 			DrawCount:    g.DrawStack,
-			Message:      "Opponent must draw " + string(rune('0'+g.DrawStack)) + " cards or play a 2!",
+			Message:      fmt.Sprintf("Opponent must draw %d cards or play a 2!", g.DrawStack),
 		}
 
 	case Ace:
