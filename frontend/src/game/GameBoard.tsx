@@ -8,6 +8,8 @@ import { TurnIndicator } from './TurnIndicator';
 import { SuitSelector } from './SuitSelector';
 import { cardToCode } from '../utils/cardUtils';
 import { OutgoingWSMessage } from '../types/websocket.types';
+import { useSound } from '../hooks/useSound';
+import { canPlayCard } from '../utils/cardUtils';
 
 interface GameBoardProps {
   myHand: CardType[];
@@ -49,8 +51,37 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   const [showSuitSelector, setShowSuitSelector] = useState(false);
   const [pendingAce, setPendingAce] = useState<CardType | null>(null);
 
+  const wrongSound = useSound('/wrong.mp3');
+
   const handleCardClick = (card: CardType) => {
-    if (!myTurn) return;
+    // Provide immediate feedback when clicking invalid actions
+    if (!myTurn) {
+      wrongSound();
+      return;
+    }
+
+    // Special-case: last-Ace wins immediately (but cannot bypass draw stack)
+    const isLastAce = card.rank === 'A' && myHand.length === 1;
+    if (isLastAce) {
+      if (drawStack > 0) {
+        wrongSound();
+        return;
+      }
+      // Play last ace immediately without requiring declared suit
+      sendMessage({
+        type: 'play_card',
+        data: {
+          card: cardToCode(card)
+        }
+      });
+      return;
+    }
+
+    // Local validation before sending to server
+    if (!canPlayCard(card, topCard, currentSuit, drawStack)) {
+      wrongSound();
+      return;
+    }
 
     // Ace requires suit selection
     if (card.rank === 'A') {
@@ -82,7 +113,10 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   };
 
   const handleDrawCard = () => {
-    if (!myTurn) return;
+    if (!myTurn) {
+      wrongSound();
+      return;
+    }
     sendMessage({
       type: 'draw_card',
       data: {}
@@ -94,7 +128,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   );
 
   return (
-    <div className="relative w-full h-screen flex flex-col" style={{ backgroundImage: "url('/background.jpg')", backgroundSize: 'cover', backgroundPosition: 'center' }}>
+    <div className="relative w-full h-[600px] flex flex-col justify-center items-center">
       {/* Opponent Hand (Top) */}
       <div className="flex-none">
         <div className="flex items-center justify-center py-2">
