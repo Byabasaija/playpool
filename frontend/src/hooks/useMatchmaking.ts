@@ -26,17 +26,17 @@ export function useMatchmaking() {
     }
   }, []);
 
-  const startGame = useCallback(async (phone: string, stake: number) => {
+  const startGame = useCallback(async (phone: string, stake: number, displayName?: string) => {
     setIsLoading(true);
     setError(null);
     setStage('payment');
 
     try {
       // Initiate stake
-      const stakeResult = await initiateStake(phone, stake);
+      const stakeResult = await initiateStake(phone, stake, displayName);
       
       // Store player ID
-      localStorage.setItem('playerId', stakeResult.player_id);
+      sessionStorage.setItem('playerId', stakeResult.player_id);
 
       // Store display name if provided
       if (stakeResult.display_name) {
@@ -98,6 +98,8 @@ export function useMatchmaking() {
     setGameLink(null);
     setIsLoading(false);
     setDisplayName(null);
+    // Clear session-scoped player id
+    try { sessionStorage.removeItem('playerId'); } catch (e) {}
   }, [setDisplayName]);
 
   return {
