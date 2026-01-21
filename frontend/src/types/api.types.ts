@@ -13,6 +13,8 @@ export interface StakeResponse {
   // When matched, server includes display names for both players
   my_display_name?: string;
   opponent_display_name?: string;
+  // New standardized queue token
+  queue_token?: string;
 }
 
 export interface QueueStatusResponse {
@@ -21,4 +23,6 @@ export interface QueueStatusResponse {
   // When matched, include display names
   my_display_name?: string;
   opponent_display_name?: string;
+  // Human-readable server message (e.g. 'Player not in queue')
+  message?: string;
 }

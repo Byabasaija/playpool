@@ -10,6 +10,7 @@ type Player struct {
 	ID               int            `db:"id" json:"id"`
 	PhoneNumber      string         `db:"phone_number" json:"phone_number"`
 	DisplayName      string         `db:"display_name" json:"display_name"`
+	PlayerToken      string         `db:"player_token" json:"player_token,omitempty"`
 	CreatedAt        time.Time      `db:"created_at" json:"created_at"`
 	TotalGamesPlayed int            `db:"total_games_played" json:"total_games_played"`
 	TotalGamesWon    int            `db:"total_games_won" json:"total_games_won"`
@@ -99,4 +100,26 @@ type Dispute struct {
 	Resolution  string       `db:"resolution" json:"resolution,omitempty"`
 	CreatedAt   time.Time    `db:"created_at" json:"created_at"`
 	ResolvedAt  sql.NullTime `db:"resolved_at" json:"resolved_at,omitempty"`
+}
+
+// Account represents an accounting bucket (player fee-exempt, winnings, platform, escrow, etc.)
+type Account struct {
+	ID            int           `db:"id" json:"id"`
+	AccountType   string        `db:"account_type" json:"account_type"`
+	OwnerPlayerID sql.NullInt64 `db:"owner_player_id" json:"owner_player_id,omitempty"`
+	Balance       float64       `db:"balance" json:"balance"`
+	CreatedAt     time.Time     `db:"created_at" json:"created_at"`
+	UpdatedAt     time.Time     `db:"updated_at" json:"updated_at"`
+}
+
+// AccountTransaction records a debit/credit movement between accounts
+type AccountTransaction struct {
+	ID              int            `db:"id" json:"id"`
+	DebitAccountID  sql.NullInt64  `db:"debit_account_id" json:"debit_account_id,omitempty"`
+	CreditAccountID sql.NullInt64  `db:"credit_account_id" json:"credit_account_id,omitempty"`
+	Amount          float64        `db:"amount" json:"amount"`
+	ReferenceType   sql.NullString `db:"reference_type" json:"reference_type,omitempty"`
+	ReferenceID     sql.NullInt64  `db:"reference_id" json:"reference_id,omitempty"`
+	Description     sql.NullString `db:"description" json:"description,omitempty"`
+	CreatedAt       time.Time      `db:"created_at" json:"created_at"`
 }

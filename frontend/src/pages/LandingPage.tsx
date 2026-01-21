@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMatchmaking } from '../hooks/useMatchmaking';
 import { validatePhone } from '../utils/phoneUtils';
-import { getPlayerProfile } from '../utils/apiClient';
+import { getPlayerProfile, requeuePlayer } from '../utils/apiClient';
 
 export const LandingPage: React.FC = () => {
   const [phoneRest, setPhoneRest] = useState('');
@@ -11,9 +11,10 @@ export const LandingPage: React.FC = () => {
   const navigate = useNavigate();
   
   // const baseUrl = import.meta.env.VITE_BACKEND_URL
-  const { stage, gameLink, isLoading, startGame, reset, displayName } = useMatchmaking();
+  const { stage, gameLink, isLoading, startGame, startPolling, reset, displayName, error } = useMatchmaking();
 
   const [displayNameInput, setDisplayNameInput] = useState<string>('');
+  const [expiredQueue, setExpiredQueue] = useState<{id:number, stake_amount:number} | null>(null);
 
   React.useEffect(() => {
     if (displayName) setDisplayNameInput(displayName);
@@ -39,8 +40,14 @@ export const LandingPage: React.FC = () => {
       } else {
         setDisplayNameInput(generateRandomName());
       }
+      if (profile && profile.expired_queue) {
+        setExpiredQueue(profile.expired_queue);
+      } else {
+        setExpiredQueue(null);
+      }
     } catch (e) {
       setDisplayNameInput(generateRandomName());
+      setExpiredQueue(null);
     }
   };
 
@@ -56,6 +63,26 @@ export const LandingPage: React.FC = () => {
     }
 
     setPhoneError('');
+
+    if (expiredQueue) {
+      // Requeue flow
+      try {
+        const res = await requeuePlayer(full, expiredQueue.id);
+        if (res && res.status === 'matched' && res.game_id) {
+          // navigate to matched game
+          navigate(`/g/${res.game_token}`);
+        } else if (res && res.status === 'queued') {
+          const token = res.queue_token || res.player_id;
+          try { sessionStorage.setItem('queueToken', token); } catch (e) {}
+          // start polling using existing requeue token
+          startPolling(token, displayNameInput || generateRandomName());
+        }
+      } catch (err) {
+        console.error('Requeue failed', err);
+      }
+      return;
+    }
+
     await startGame(full, stake, displayNameInput || generateRandomName());
   };
 
@@ -136,6 +163,7 @@ export const LandingPage: React.FC = () => {
                   value={stake}
                   onChange={(e) => setStake(Number(e.target.value))}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg"
+                  disabled={!!expiredQueue}
                 >
                   <option value={1000}>1,000 UGX</option>
                   <option value={2000}>2,000 UGX</option>
@@ -145,6 +173,9 @@ export const LandingPage: React.FC = () => {
                 <p className="mt-1 text-sm text-gray-500">
                   Win up to {stake * 1.8} UGX!
                 </p>
+                {expiredQueue && (
+                  <p className="mt-2 text-sm text-yellow-600">You have pending stake UGX {expiredQueue.stake_amount}. Click Requeue to retry.</p>
+                )}
               </div>
 
               <button
@@ -152,7 +183,7 @@ export const LandingPage: React.FC = () => {
                 disabled={isLoading}
                 className="w-full bg-[#373536] text-white py-3 px-6 rounded-lg font-semibold  transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isLoading ? 'Processing...' : 'Play Now'}
+                {isLoading ? 'Processing...' : (expiredQueue ? 'Requeue' : 'Play Now')}
               </button>
             </form>
           </div>
@@ -201,7 +232,7 @@ export const LandingPage: React.FC = () => {
               </div>
             </div>
             <h2 className="text-2xl font-bold text-gray-900 mb-2">Error</h2>
-            <p className="text-red-600 mb-4">Something went wrong. Please try again.</p>
+            <p className="text-red-600 mb-4">{error || 'Something went wrong. Please try again.'}</p>
             <button
               onClick={reset}
               className="bg-[#373536] text-white py-2 px-6 rounded-lg font-semibold hover:bg-[#2c2b2a] transition-colors"

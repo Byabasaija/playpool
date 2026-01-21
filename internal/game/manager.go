@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/playmatatu/backend/internal/accounts"
 	"github.com/playmatatu/backend/internal/config"
 	"github.com/playmatatu/backend/internal/models"
 	"github.com/redis/go-redis/v9"
@@ -32,7 +33,7 @@ type GameManager struct {
 
 // QueueEntry represents a player in the matchmaking queue
 type QueueEntry struct {
-	PlayerID    string
+	QueueToken  string
 	PhoneNumber string
 	StakeAmount int
 	DBPlayerID  int
@@ -115,7 +116,7 @@ func (gm *GameManager) JoinQueue(playerID, phoneNumber string, stakeAmount int, 
 	// Check if player is already in queue
 	for _, entries := range gm.matchmakingQueue {
 		for _, entry := range entries {
-			if entry.PlayerID == playerID {
+			if entry.QueueToken == playerID {
 				return nil, errors.New("player already in queue")
 			}
 		}
@@ -140,7 +141,7 @@ func (gm *GameManager) JoinQueue(playerID, phoneNumber string, stakeAmount int, 
 				game := NewGame(
 					gameID,
 					gameToken,
-					opponent.PlayerID,
+					opponent.QueueToken,
 					opponent.PhoneNumber,
 					player1Token,
 					opponent.DBPlayerID,
@@ -158,12 +159,12 @@ func (gm *GameManager) JoinQueue(playerID, phoneNumber string, stakeAmount int, 
 
 				// Store the game
 				gm.games[gameID] = game
-				gm.playerToGame[opponent.PlayerID] = gameID
+				gm.playerToGame[opponent.QueueToken] = gameID
 				gm.playerToGame[playerID] = gameID
 
 				// Log the mapping for debugging
 				log.Printf("[MATCHMAKING] Game created: %s", gameID)
-				log.Printf("[MATCHMAKING] Player1: %s → Game: %s", opponent.PlayerID, gameID)
+				log.Printf("[MATCHMAKING] Player1: %s → Game: %s", opponent.QueueToken, gameID)
 				log.Printf("[MATCHMAKING] Player2: %s → Game: %s", playerID, gameID)
 
 				// Save to Redis
@@ -190,7 +191,7 @@ func (gm *GameManager) JoinQueue(playerID, phoneNumber string, stakeAmount int, 
 				return &MatchResult{
 					GameID:             gameID,
 					GameToken:          gameToken,
-					Player1ID:          opponent.PlayerID,
+					Player1ID:          opponent.QueueToken,
 					Player1Token:       player1Token,
 					Player1Link:        player1Link,
 					Player1DisplayName: opponent.DisplayName,
@@ -208,7 +209,7 @@ func (gm *GameManager) JoinQueue(playerID, phoneNumber string, stakeAmount int, 
 
 	// No match found, add to queue
 	entry := QueueEntry{
-		PlayerID:    playerID,
+		QueueToken:  playerID,
 		PhoneNumber: phoneNumber,
 		StakeAmount: stakeAmount,
 		DBPlayerID:  dbPlayerID,
@@ -224,14 +225,14 @@ func (gm *GameManager) JoinQueue(playerID, phoneNumber string, stakeAmount int, 
 	return nil, nil // No match yet, player added to queue
 }
 
-// LeaveQueue removes a player from the matchmaking queue
-func (gm *GameManager) LeaveQueue(playerID string) bool {
+// LeaveQueue removes a player from the matchmaking queue (by queue token)
+func (gm *GameManager) LeaveQueue(queueToken string) bool {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
 
 	for stake, queue := range gm.matchmakingQueue {
 		for i, entry := range queue {
-			if entry.PlayerID == playerID {
+			if entry.QueueToken == queueToken {
 				gm.matchmakingQueue[stake] = append(queue[:i], queue[i+1:]...)
 				return true
 			}
@@ -356,14 +357,14 @@ func (gm *GameManager) GetActiveGameCount() int {
 	return len(gm.games)
 }
 
-// IsPlayerInQueue checks if a player is in the matchmaking queue
-func (gm *GameManager) IsPlayerInQueue(playerID string) bool {
+// IsPlayerInQueue checks if a player (by queue token) is in the matchmaking queue
+func (gm *GameManager) IsPlayerInQueue(queueToken string) bool {
 	gm.mu.RLock()
 	defer gm.mu.RUnlock()
 
 	for _, queue := range gm.matchmakingQueue {
 		for _, entry := range queue {
-			if entry.PlayerID == playerID {
+			if entry.QueueToken == queueToken {
 				return true
 			}
 		}
@@ -372,13 +373,13 @@ func (gm *GameManager) IsPlayerInQueue(playerID string) bool {
 }
 
 // GetPlayerQueuePosition returns the player's position in queue (1-indexed) or 0 if not in queue
-func (gm *GameManager) GetPlayerQueuePosition(playerID string, stakeAmount int) int {
+func (gm *GameManager) GetPlayerQueuePosition(queueToken string, stakeAmount int) int {
 	gm.mu.RLock()
 	defer gm.mu.RUnlock()
 
 	if queue, exists := gm.matchmakingQueue[stakeAmount]; exists {
 		for i, entry := range queue {
-			if entry.PlayerID == playerID {
+			if entry.QueueToken == queueToken {
 				return i + 1
 			}
 		}
@@ -875,20 +876,59 @@ func (gm *GameManager) SaveFinalGameState(g *GameState) {
 		}
 
 		if winnerDBID > 0 {
-			_, err = gm.db.Exec(`UPDATE game_sessions SET status=$1, winner_id=$2, completed_at=NOW() WHERE id=$3`, string(g.Status), winnerDBID, g.SessionID)
-		} else {
-			_, err = gm.db.Exec(`UPDATE game_sessions SET status=$1, completed_at=NOW() WHERE id=$2`, string(g.Status), g.SessionID)
-		}
-		if err != nil {
-			log.Printf("[DB] Failed to update game_sessions %d: %v", g.SessionID, err)
-		}
+			prize := int(float64(g.StakeAmount*2) * 0.9) // 10% commission (legacy placeholder)
+			// Create payout transaction and perform account transfers: debit ESCROW -> PLATFORM (payout tax) and ESCROW -> PLAYER_WINNINGS (net)
+			payoutTax := float64(g.StakeAmount*2) * float64(gm.config.PayoutTaxPercent) / 100.0
+			winnerAmount := float64(g.StakeAmount*2) - payoutTax
 
-		// After updating game_sessions, add payout transaction placeholder and update player aggregates
-		if winnerDBID > 0 {
-			prize := int(float64(g.StakeAmount*2) * 0.9) // 10% commission
-			_, err = gm.db.Exec(`INSERT INTO transactions (player_id, transaction_type, amount, status, created_at) VALUES ($1,'PAYOUT',$2,'PENDING',NOW())`, winnerDBID, prize)
+			// Perform transfers inside a transaction
+			tx, err := gm.db.Beginx()
 			if err != nil {
-				log.Printf("[DB] Failed to insert payout transaction for session %d: %v", g.SessionID, err)
+				log.Printf("[DB] Failed to begin tx for payout for session %d: %v", g.SessionID, err)
+			} else {
+				// Ensure accounts exist
+				escrowAcc, err1 := accounts.GetOrCreateAccount(gm.db, accounts.AccountEscrow, nil)
+				platformAcc, err2 := accounts.GetOrCreateAccount(gm.db, accounts.AccountPlatform, nil)
+				winnerAcc, err3 := accounts.GetOrCreateAccount(gm.db, accounts.AccountPlayerWinnings, &winnerDBID)
+				if err1 != nil || err2 != nil || err3 != nil {
+					log.Printf("[DB] Failed to resolve accounts for payout session %d: %v %v %v", g.SessionID, err1, err2, err3)
+					tx.Rollback()
+				} else {
+					// Debit ESCROW -> PLATFORM (payout tax)
+					if payoutTax > 0 {
+						if err := accounts.Transfer(tx, escrowAcc.ID, platformAcc.ID, payoutTax, "SESSION", sql.NullInt64{Int64: int64(g.SessionID), Valid: true}, "Payout tax"); err != nil {
+							log.Printf("[DB] Failed to transfer payout tax for session %d: %v", g.SessionID, err)
+							tx.Rollback()
+						} else {
+							// Debit ESCROW -> WINNER
+							if err := accounts.Transfer(tx, escrowAcc.ID, winnerAcc.ID, winnerAmount, "SESSION", sql.NullInt64{Int64: int64(g.SessionID), Valid: true}, "Payout to winner"); err != nil {
+								log.Printf("[DB] Failed to transfer winner payout for session %d: %v", g.SessionID, err)
+								tx.Rollback()
+							} else {
+								// Insert payout transaction row
+								if _, err := tx.Exec(`INSERT INTO transactions (player_id, transaction_type, amount, status, created_at) VALUES ($1,'PAYOUT',$2,'COMPLETED',NOW())`, winnerDBID, winnerAmount); err != nil {
+									log.Printf("[DB] Failed to insert payout transaction for session %d: %v", g.SessionID, err)
+								}
+								if err := tx.Commit(); err != nil {
+									log.Printf("[DB] Failed to commit payout tx for session %d: %v", g.SessionID, err)
+								}
+							}
+						}
+					} else {
+						// No payout tax (rare) - transfer full amount
+						if err := accounts.Transfer(tx, escrowAcc.ID, winnerAcc.ID, winnerAmount, "SESSION", sql.NullInt64{Int64: int64(g.SessionID), Valid: true}, "Payout to winner"); err != nil {
+							log.Printf("[DB] Failed to transfer winner payout for session %d: %v", g.SessionID, err)
+							tx.Rollback()
+						} else {
+							if _, err := tx.Exec(`INSERT INTO transactions (player_id, transaction_type, amount, status, created_at) VALUES ($1,'PAYOUT',$2,'COMPLETED',NOW())`, winnerDBID, winnerAmount); err != nil {
+								log.Printf("[DB] Failed to insert payout transaction for session %d: %v", g.SessionID, err)
+							}
+							if err := tx.Commit(); err != nil {
+								log.Printf("[DB] Failed to commit payout tx for session %d: %v", g.SessionID, err)
+							}
+						}
+					}
+				}
 			}
 
 			_, err = gm.db.Exec(`UPDATE players SET total_games_won = total_games_won + 1, total_winnings = total_winnings + $2 WHERE id = $1`, winnerDBID, prize)
@@ -983,13 +1023,14 @@ func (gm *GameManager) TryMatchFromRedis(stakeAmount int, myQueueID int, myPhone
 
 		// Try to claim the opponent row in the DB atomically by changing status to 'matching'
 		var oppQueue struct {
-			ID            int           `db:"id"`
-			PlayerID      sql.NullInt64 `db:"player_id"`
-			PhoneNumber   string        `db:"phone_number"`
-			TransactionID sql.NullInt64 `db:"transaction_id"`
+			ID            int            `db:"id"`
+			PlayerID      sql.NullInt64  `db:"player_id"`
+			PhoneNumber   string         `db:"phone_number"`
+			TransactionID sql.NullInt64  `db:"transaction_id"`
+			QueueToken    sql.NullString `db:"queue_token"`
 		}
 
-		err = gm.db.Get(&oppQueue, `UPDATE matchmaking_queue SET status='matching' WHERE id=$1 AND status='queued' RETURNING id, player_id, phone_number, transaction_id`, oppID)
+		err = gm.db.Get(&oppQueue, `UPDATE matchmaking_queue SET status='matching' WHERE id=$1 AND status='queued' RETURNING id, player_id, phone_number, transaction_id, queue_token`, oppID)
 		if err != nil {
 			// Race - someone else claimed it or it was removed - cleanup processing entry then try next
 			if err == sql.ErrNoRows {
@@ -1049,9 +1090,22 @@ func (gm *GameManager) TryMatchFromRedis(stakeAmount int, myQueueID int, myPhone
 		player1Token := generateToken(16)
 		player2Token := generateToken(16)
 
-		// ephemeral player IDs
+		// ephemeral player IDs (default generated values)
 		opponentEphemeral := "player_" + oppQueue.PhoneNumber[len(oppQueue.PhoneNumber)-4:] + "_" + generateToken(4)
 		myEphemeral := "player_" + myPhone[len(myPhone)-4:] + "_" + generateToken(4)
+
+		// Use queue_token values if present as the ephemeral player IDs; otherwise keep the generated tokens
+		if oppQueue.QueueToken.Valid && oppQueue.QueueToken.String != "" {
+			opponentEphemeral = oppQueue.QueueToken.String
+		}
+
+		// Fetch my queue token from DB
+		var myQueueTok struct {
+			QueueToken sql.NullString `db:"queue_token"`
+		}
+		if err := gm.db.Get(&myQueueTok, `SELECT queue_token FROM matchmaking_queue WHERE id=$1`, myQueueID); err == nil && myQueueTok.QueueToken.Valid && myQueueTok.QueueToken.String != "" {
+			myEphemeral = myQueueTok.QueueToken.String
+		}
 
 		// Create GameState (Player1 is opponent to preserve previous ordering)
 		game := NewGame(
@@ -1080,20 +1134,74 @@ func (gm *GameManager) TryMatchFromRedis(stakeAmount int, myQueueID int, myPhone
 		// Persist a game_sessions row if we have DB player ids
 		var sessionID int
 		if gm.db != nil && oppQueue.PlayerID.Valid && myDBPlayerID > 0 {
-			err := gm.db.QueryRowx(`INSERT INTO game_sessions (game_token, player1_id, player2_id, stake_amount, status, created_at, expiry_time) VALUES ($1, $2, $3, $4, $5, NOW(), $6) RETURNING id`,
-				gameToken, int(oppQueue.PlayerID.Int64), myDBPlayerID, stakeAmount, string(StatusWaiting), game.ExpiresAt).Scan(&sessionID)
+			tx, err := gm.db.Beginx()
 			if err != nil {
-				log.Printf("[DB] Failed to create game_session for queue pairing: %v", err)
+				log.Printf("[DB] Failed to begin tx for match initialization: %v", err)
+				// attempt to set queues back to queued and continue
+				if _, err2 := gm.db.Exec(`UPDATE matchmaking_queue SET status='queued' WHERE id IN ($1,$2)`, oppID, myQueueID); err2 != nil {
+					log.Printf("[DB] Failed to reset queue rows after tx begin failure: %v", err2)
+				}
 			} else {
-				// Update both queue rows with matched status and session id
-				if _, err := gm.db.Exec(`UPDATE matchmaking_queue SET status='matched', matched_at=NOW(), session_id=$1 WHERE id=$2`, sessionID, oppID); err != nil {
-					log.Printf("[DB] Failed to update opponent queue %d: %v", oppID, err)
+				// Insert session row within tx
+				if err := tx.QueryRowx(`INSERT INTO game_sessions (game_token, player1_id, player2_id, stake_amount, status, created_at, expiry_time) VALUES ($1, $2, $3, $4, $5, NOW(), $6) RETURNING id`,
+					gameToken, int(oppQueue.PlayerID.Int64), myDBPlayerID, stakeAmount, string(StatusWaiting), game.ExpiresAt).Scan(&sessionID); err != nil {
+					log.Printf("[DB] Failed to create game_session for queue pairing: %v", err)
+					tx.Rollback()
+					// revert queue status
+					if _, err2 := gm.db.Exec(`UPDATE matchmaking_queue SET status='queued' WHERE id IN ($1,$2)`, oppID, myQueueID); err2 != nil {
+						log.Printf("[DB] Failed to reset queue rows after session insert failure: %v", err2)
+					}
+				} else {
+					// Reserve opponent stake
+					if err := gm.reserveStakeForSession(tx, int(oppQueue.PlayerID.Int64), oppID, sessionID, stakeAmount); err != nil {
+						log.Printf("[DB] Failed to reserve opponent stake: %v", err)
+						tx.Rollback()
+						if _, err2 := gm.db.Exec(`UPDATE matchmaking_queue SET status='queued' WHERE id IN ($1,$2)`, oppID, myQueueID); err2 != nil {
+							log.Printf("[DB] Failed to reset queue rows after opponent reserve failure: %v", err2)
+						}
+						// continue the match loop to try next opponent
+						continue
+					}
+
+					// Reserve my stake
+					if err := gm.reserveStakeForSession(tx, myDBPlayerID, myQueueID, sessionID, stakeAmount); err != nil {
+						log.Printf("[DB] Failed to reserve my stake: %v", err)
+						tx.Rollback()
+						if _, err2 := gm.db.Exec(`UPDATE matchmaking_queue SET status='queued' WHERE id IN ($1,$2)`, oppID, myQueueID); err2 != nil {
+							log.Printf("[DB] Failed to reset queue rows after my reserve failure: %v", err2)
+						}
+						continue
+					}
+
+					// All good - update both queue rows and commit
+					if _, err := tx.Exec(`UPDATE matchmaking_queue SET status='matched', matched_at=NOW(), session_id=$1 WHERE id=$2`, sessionID, oppID); err != nil {
+						log.Printf("[DB] Failed to update opponent queue %d: %v", oppID, err)
+						tx.Rollback()
+						if _, err2 := gm.db.Exec(`UPDATE matchmaking_queue SET status='queued' WHERE id=$1`, myQueueID); err2 != nil {
+							log.Printf("[DB] Failed to reset my queue row after update failure: %v", err2)
+						}
+					} else {
+						if _, err := tx.Exec(`UPDATE matchmaking_queue SET status='matched', matched_at=NOW(), session_id=$1 WHERE id=$2`, sessionID, myQueueID); err != nil {
+							log.Printf("[DB] Failed to update my queue %d: %v", myQueueID, err)
+							tx.Rollback()
+							if _, err2 := gm.db.Exec(`UPDATE matchmaking_queue SET status='queued' WHERE id=$1`, oppID); err2 != nil {
+								log.Printf("[DB] Failed to reset opponent queue row after update failure: %v", err2)
+							}
+						} else {
+							if err := tx.Commit(); err != nil {
+								log.Printf("[DB] Failed to commit match initialization tx for session %d: %v", sessionID, err)
+								// attempt to reset queue rows
+								if _, err2 := gm.db.Exec(`UPDATE matchmaking_queue SET status='queued' WHERE id IN ($1,$2)`, oppID, myQueueID); err2 != nil {
+									log.Printf("[DB] Failed to reset queue rows after commit failure: %v", err2)
+								}
+							} else {
+								// Remove in-memory queue entries for both players (they are now matched)
+								gm.RemoveQueueEntriesByPhone(stakeAmount, oppQueue.PhoneNumber)
+								gm.RemoveQueueEntriesByPhone(stakeAmount, myPhone)
+							}
+						}
+					}
 				}
-				if _, err := gm.db.Exec(`UPDATE matchmaking_queue SET status='matched', matched_at=NOW(), session_id=$1 WHERE id=$2`, sessionID, myQueueID); err != nil {
-					log.Printf("[DB] Failed to update my queue %d: %v", myQueueID, err)
-				}
-				// Save game state to Redis
-				go game.SaveToRedis()
 			}
 		}
 
@@ -1229,4 +1337,57 @@ func (gm *GameManager) StartProcessingRecoveryChecker() {
 			}
 		}
 	}()
+}
+
+// reserveStakeForSession debits a player's PLAYER_FEE_EXEMPT and credits ESCROW inside the provided tx.
+func (gm *GameManager) reserveStakeForSession(tx *sqlx.Tx, playerDBID, queueID, sessionID, stakeAmount int) error {
+	// Get account rows (ensure they exist)
+	escrowAcc, err := accounts.GetOrCreateAccount(gm.db, accounts.AccountEscrow, nil)
+	if err != nil {
+		return err
+	}
+	playerFeeAcc, err := accounts.GetOrCreateAccount(gm.db, accounts.AccountPlayerFeeExempt, &playerDBID)
+	if err != nil {
+		return err
+	}
+	// Perform transfer within tx
+	if err := accounts.Transfer(tx, playerFeeAcc.ID, escrowAcc.ID, float64(stakeAmount), "SESSION", sql.NullInt64{Int64: int64(sessionID), Valid: true}, "Stake moved to escrow on match init"); err != nil {
+		return err
+	}
+	// Insert STAKE_IN escrow ledger row referencing queue and session
+	if _, err := tx.Exec(`INSERT INTO escrow_ledger (session_id, entry_type, player_id, amount, balance_after, description, created_at, queue_id) VALUES ($1,$2,$3,$4,$5,$6,NOW(),$7)`, sessionID, "STAKE_IN", playerDBID, float64(stakeAmount), 0.0, "Stake moved to escrow on match init", queueID); err != nil {
+		return err
+	}
+	return nil
+}
+
+// AddQueueEntry adds an entry to the in-memory matchmaking queue for the given stake
+func (gm *GameManager) AddQueueEntry(stakeAmount int, entry QueueEntry) {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+	if _, exists := gm.matchmakingQueue[stakeAmount]; !exists {
+		gm.matchmakingQueue[stakeAmount] = []QueueEntry{}
+	}
+	gm.matchmakingQueue[stakeAmount] = append(gm.matchmakingQueue[stakeAmount], entry)
+}
+
+// RemoveQueueEntriesByPhone removes any queue entries for a given phone under a stake amount
+func (gm *GameManager) RemoveQueueEntriesByPhone(stakeAmount int, phone string) int {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+	removed := 0
+	queue, exists := gm.matchmakingQueue[stakeAmount]
+	if !exists || len(queue) == 0 {
+		return removed
+	}
+	newQueue := []QueueEntry{}
+	for _, e := range queue {
+		if e.PhoneNumber == phone {
+			removed++
+			continue
+		}
+		newQueue = append(newQueue, e)
+	}
+	gm.matchmakingQueue[stakeAmount] = newQueue
+	return removed
 }

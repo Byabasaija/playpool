@@ -1,6 +1,10 @@
 package handlers
 
 import (
+	"crypto/rand"
+	"database/sql"
+	"encoding/hex"
+	"fmt"
 	"log"
 	"net/http"
 	"regexp"
@@ -9,10 +13,20 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
+	"github.com/playmatatu/backend/internal/accounts"
 	"github.com/playmatatu/backend/internal/config"
 	"github.com/playmatatu/backend/internal/game"
 	"github.com/redis/go-redis/v9"
 )
+
+// generateQueueToken returns a short random hex token used as the external queue token
+func generateQueueToken() string {
+	b := make([]byte, 6)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("qt_%d", time.Now().UnixNano()%1000000)
+	}
+	return hex.EncodeToString(b)
+}
 
 // InitiateStake handles stake initiation from web
 // For development: This is a DUMMY payment - no actual Mobile Money integration
@@ -89,7 +103,7 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 
 		// DUMMY PAYMENT: Auto-approve payment (no actual Mobile Money call)
 		transactionID := generateTransactionID()
-		playerID := "player_" + phone[len(phone)-4:] + "_" + transactionID[:8]
+		queueToken := generateQueueToken()
 
 		log.Printf("[DUMMY PAYMENT] Would charge %s %d UGX (transaction: %s)",
 			phone, req.StakeAmount+cfg.CommissionFlat, transactionID)
@@ -103,24 +117,68 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 			}
 		}
 
+		// Prevent duplicate active queues for the same player
+		var existingCount int
+		if err := db.Get(&existingCount, `SELECT COUNT(*) FROM matchmaking_queue WHERE player_id=$1 AND status IN ('queued','processing','matching')`, player.ID); err == nil && existingCount > 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "player already has an active queue entry"})
+			return
+		}
+
+		// Perform account movements: debit settlement, credit platform (commission), credit player_fee_exempt (net)
+		netAmount := float64(req.StakeAmount)
+		commission := float64(cfg.CommissionFlat)
+		tx, err := db.Beginx()
+		if err != nil {
+			log.Printf("[DB] Failed to begin tx for stake deposit: %v", err)
+		} else {
+			// Get system accounts
+			settlementAcc, errGet := accounts.GetOrCreateAccount(db, accounts.AccountSettlement, nil)
+			if errGet != nil {
+				log.Printf("[DB] Failed to get settlement account: %v", errGet)
+				tx.Rollback()
+			} else {
+				platformAcc, errGet2 := accounts.GetOrCreateAccount(db, accounts.AccountPlatform, nil)
+				if errGet2 != nil {
+					log.Printf("[DB] Failed to get platform account: %v", errGet2)
+					tx.Rollback()
+				} else {
+					playerFeeAcc, errGet3 := accounts.GetOrCreateAccount(db, accounts.AccountPlayerFeeExempt, &player.ID)
+					if errGet3 != nil {
+						log.Printf("[DB] Failed to get player fee exempt account for player %d: %v", player.ID, errGet3)
+						tx.Rollback()
+					} else {
+						// Debit settlement -> credit platform (commission)
+						if err := accounts.Transfer(tx, settlementAcc.ID, platformAcc.ID, commission, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Commission (flat)"); err != nil {
+							log.Printf("[DB] Failed to transfer commission: %v", err)
+							tx.Rollback()
+						} else {
+							// Debit settlement -> credit player fee exempt (net amount)
+							if err := accounts.Transfer(tx, settlementAcc.ID, playerFeeAcc.ID, netAmount, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Deposit (net)"); err != nil {
+								log.Printf("[DB] Failed to credit player fee exempt: %v", err)
+								tx.Rollback()
+							} else {
+								if err := tx.Commit(); err != nil {
+									log.Printf("[DB] Commit failed for stake deposit tx: %v", err)
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
 		// Insert into matchmaking_queue (durable ledger)
 		var queueID int
 		expiresAt := time.Now().Add(time.Duration(cfg.QueueExpiryMinutes) * time.Minute)
 		if db != nil {
-			insertQ := `INSERT INTO matchmaking_queue (player_id, phone_number, stake_amount, transaction_id, status, created_at, expires_at) VALUES ($1,$2,$3,$4,'queued',NOW(),$5) RETURNING id`
-			if err := db.QueryRowx(insertQ, player.ID, phone, float64(req.StakeAmount), txID, expiresAt).Scan(&queueID); err != nil {
+			insertQ := `INSERT INTO matchmaking_queue (player_id, phone_number, stake_amount, transaction_id, queue_token, status, created_at, expires_at) VALUES ($1,$2,$3,$4,$5,'queued',NOW(),$6) RETURNING id`
+			if err := db.QueryRowx(insertQ, player.ID, phone, float64(req.StakeAmount), txID, queueToken, expiresAt).Scan(&queueID); err != nil {
 				log.Printf("[DB] Failed to insert matchmaking_queue for player %d: %v", player.ID, err)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to queue player"})
 				return
 			}
 
-			// Create escrow ledger entries referencing the queue row
-			if _, err := db.Exec(`INSERT INTO escrow_ledger (session_id, entry_type, player_id, amount, balance_after, description, created_at, queue_id) VALUES ($1,$2,$3,$4,$5,$6,NOW(),$7)`, nil, "STAKE_IN", player.ID, float64(req.StakeAmount), 0.0, "Stake held for matchmaking", queueID); err != nil {
-				log.Printf("[DB] Failed to insert STAKE_IN ledger for queue %d: %v", queueID, err)
-			}
-			if _, err := db.Exec(`INSERT INTO escrow_ledger (session_id, entry_type, player_id, amount, balance_after, description, created_at, queue_id) VALUES ($1,$2,$3,$4,$5,$6,NOW(),$7)`, nil, "COMMISSION", nil, float64(cfg.CommissionFlat), 0.0, "Platform commission (flat)", queueID); err != nil {
-				log.Printf("[DB] Failed to insert COMMISSION ledger for queue %d: %v", queueID, err)
-			}
+			// Note: STAKE_IN is created at match initialization (when a session is created and funds move to ESCROW)
 		}
 
 		// Try to match immediately using Redis (pop-before-push). If no match, push our queue id into Redis.
@@ -136,7 +194,7 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 				// Return matched response
 				var myLink string
 				var myDisplayName, opponentDisplayName string
-				if matchResult.Player2ID == playerID {
+				if matchResult.Player2ID == queueToken {
 					myLink = matchResult.Player2Link
 					myDisplayName = matchResult.Player2DisplayName
 					opponentDisplayName = matchResult.Player1DisplayName
@@ -150,7 +208,9 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 					"status":                "matched",
 					"game_id":               matchResult.GameID,
 					"game_token":            matchResult.GameToken,
-					"player_id":             playerID,
+					"player_id":             queueToken, // legacy field (kept for compatibility)
+					"queue_token":           queueToken,
+					"player_token":          player.PlayerToken,
 					"game_link":             myLink,
 					"stake_amount":          req.StakeAmount,
 					"prize_amount":          int(float64(req.StakeAmount*2) * 0.9), // 10% commission (legacy field, precise payout computed later)
@@ -166,10 +226,26 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 		}
 
 		// No immediate match - queued
-		log.Printf("[QUEUE] Player queued: player=%s phone=%s stake=%d queue_id=%d", playerID, phone, req.StakeAmount, queueID)
+		log.Printf("[QUEUE] Player queued: player=%s phone=%s stake=%d queue_id=%d", queueToken, phone, req.StakeAmount, queueID)
+
+		// Add to in-memory matchmaking queue so CheckQueueStatus can see the player
+		if game.Manager != nil {
+			entry := game.QueueEntry{
+				QueueToken:  queueToken,
+				PhoneNumber: phone,
+				StakeAmount: req.StakeAmount,
+				DBPlayerID:  player.ID,
+				DisplayName: player.DisplayName,
+				JoinedAt:    time.Now(),
+			}
+			game.Manager.AddQueueEntry(req.StakeAmount, entry)
+		}
+
 		c.JSON(http.StatusOK, gin.H{
 			"status":         "queued",
-			"player_id":      playerID,
+			"player_id":      queueToken, // legacy
+			"queue_token":    queueToken,
+			"player_token":   player.PlayerToken,
 			"queue_id":       queueID,
 			"stake_amount":   req.StakeAmount,
 			"display_name":   player.DisplayName,
@@ -182,31 +258,34 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 // CheckQueueStatus checks if a player has been matched
 func CheckQueueStatus(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		playerID := c.Query("player_id")
-		if playerID == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "player_id required"})
+		queueToken := c.Query("queue_token")
+		if queueToken == "" {
+			queueToken = c.Query("player_id") // legacy fallback
+		}
+		if queueToken == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "queue_token or player_id required"})
 			return
 		}
 
 		// Check if player is in a game
-		gameState, err := game.Manager.GetGameForPlayer(playerID)
+		gameState, err := game.Manager.GetGameForPlayer(queueToken)
 		if err == nil {
 			// Player is in a game! Get their link
 			var gameLink string
-			if gameState.Player1.ID == playerID {
+			if gameState.Player1.ID == queueToken {
 				gameLink = cfg.FrontendURL + "/g/" + gameState.Token + "?pt=" + gameState.Player1.PlayerToken
 			} else {
 				gameLink = cfg.FrontendURL + "/g/" + gameState.Token + "?pt=" + gameState.Player2.PlayerToken
 			}
 
-			log.Printf("[QUEUE STATUS] Player %s matched! Game: %s, Link: %s", playerID, gameState.ID, gameLink)
+			log.Printf("[QUEUE STATUS] Player %s matched! Game: %s, Link: %s", queueToken, gameState.ID, gameLink)
 
 			c.JSON(http.StatusOK, gin.H{
 				"status":       "matched",
 				"game_id":      gameState.ID,
 				"game_token":   gameState.Token,
 				"game_link":    gameLink,
-				"player_id":    playerID,
+				"player_id":    queueToken,
 				"stake_amount": gameState.StakeAmount,
 				"prize_amount": int(float64(gameState.StakeAmount*2) * 0.9),
 				"expires_at":   gameState.ExpiresAt,
@@ -216,8 +295,8 @@ func CheckQueueStatus(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Ha
 		}
 
 		// Check if still in queue
-		if game.Manager.IsPlayerInQueue(playerID) {
-			log.Printf("[QUEUE STATUS] Player %s still in queue", playerID)
+		if game.Manager.IsPlayerInQueue(queueToken) {
+			log.Printf("[QUEUE STATUS] Player %s still in queue", queueToken)
 			c.JSON(http.StatusOK, gin.H{
 				"status":  "queued",
 				"message": "Still waiting for opponent...",
@@ -226,7 +305,7 @@ func CheckQueueStatus(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Ha
 		}
 
 		// Not in queue or game
-		log.Printf("[QUEUE STATUS] Player %s not found in queue or game", playerID)
+		log.Printf("[QUEUE STATUS] Player %s not found in queue or game", queueToken)
 		c.JSON(http.StatusOK, gin.H{
 			"status":  "not_found",
 			"message": "Player not in queue. Please stake again.",

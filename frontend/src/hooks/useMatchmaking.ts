@@ -35,8 +35,8 @@ export function useMatchmaking() {
       // Initiate stake
       const stakeResult = await initiateStake(phone, stake, displayName);
       
-      // Store player ID
-      sessionStorage.setItem('playerId', stakeResult.player_id);
+      // Store player ID (queue token)
+      sessionStorage.setItem('queueToken', stakeResult.queue_token || stakeResult.player_id);
 
       // Store display name if provided
       if (stakeResult.display_name) {
@@ -59,7 +59,8 @@ export function useMatchmaking() {
       let attempts = 0;
 
       const poll = async (): Promise<void> => {
-        const result = await pollMatchStatus(stakeResult.player_id);
+        const token = stakeResult.queue_token || stakeResult.player_id;
+        const result = await pollMatchStatus(token);
 
         // If server returns display names on match, persist them (helpful for UI)
         if (result.my_display_name) setDisplayName(result.my_display_name);
@@ -72,7 +73,54 @@ export function useMatchmaking() {
         }
 
         if (result.status === 'not_found') {
-          throw new Error('Session expired. Please try again.');
+          throw new Error(result.message || 'Session expired. Please try again.');
+        }
+
+        attempts++;
+        if (attempts >= maxAttempts) {
+          throw new Error('No opponent found. Please try again later.');
+        }
+
+        setTimeout(poll, 3000);
+      };
+
+      await poll();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'An error occurred';
+      setError(message);
+      setStage('error');
+      setIsLoading(false);
+    }
+  }, [setDisplayName]);
+
+  const startPolling = useCallback(async (queueToken: string, displayName?: string) => {
+    setIsLoading(true);
+    setError(null);
+    setStage('matching');
+
+    // persist token for session
+    try { sessionStorage.setItem('queueToken', queueToken); } catch (e) {}
+
+    if (displayName) setDisplayName(displayName);
+
+    try {
+      const maxAttempts = 180;
+      let attempts = 0;
+
+      const poll = async (): Promise<void> => {
+        const result = await pollMatchStatus(queueToken);
+
+        if (result.my_display_name) setDisplayName(result.my_display_name);
+
+        if (result.status === 'matched' && result.game_link) {
+          setGameLink(result.game_link);
+          setStage('found');
+          setIsLoading(false);
+          return;
+        }
+
+        if (result.status === 'not_found') {
+          throw new Error(result.message || 'Session expired. Please try again.');
         }
 
         attempts++;
@@ -98,8 +146,8 @@ export function useMatchmaking() {
     setGameLink(null);
     setIsLoading(false);
     setDisplayName(null);
-    // Clear session-scoped player id
-    try { sessionStorage.removeItem('playerId'); } catch (e) {}
+    // Clear session-scoped queue token
+    try { sessionStorage.removeItem('queueToken'); } catch (e) {}
   }, [setDisplayName]);
 
   return {
@@ -108,6 +156,7 @@ export function useMatchmaking() {
     gameLink,
     isLoading,
     startGame,
+    startPolling,
     reset,
     displayName
   };

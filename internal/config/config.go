@@ -30,6 +30,7 @@ type Config struct {
 	CommissionPercentage      int
 	CommissionFlat            int
 	MinStakeAmount            int
+	PayoutTaxPercent          int
 
 	// USSD Gateway
 	USSDShortcode  string
@@ -80,6 +81,7 @@ func Load() *Config {
 		CommissionPercentage:      getEnvInt("COMMISSION_PERCENTAGE", 10),
 		CommissionFlat:            getEnvInt("COMMISSION_FLAT", 1000),
 		MinStakeAmount:            getEnvInt("MIN_STAKE_AMOUNT", 1000),
+		PayoutTaxPercent:          getEnvInt("PAYOUT_TAX_PERCENT", 15),
 
 		// USSD Gateway
 		USSDShortcode:  getEnv("USSD_SHORTCODE", "*123*1#"),
