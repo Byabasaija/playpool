@@ -3,15 +3,19 @@ package game
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/playmatatu/backend/internal/config"
+	"github.com/playmatatu/backend/internal/models"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -64,6 +68,12 @@ func InitializeManager(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) {
 	// Start background jobs
 	go Manager.StartExpiryChecker()
 	go Manager.StartDisconnectChecker()
+	// Rehydrate queue from DB into Redis (if configured)
+	if err := Manager.RehydrateQueueFromDB(); err != nil {
+		log.Printf("[REHYDRATE] Error rehydrating queue from DB: %v", err)
+	}
+	// Start queue expiry checker
+	go Manager.StartQueueExpiryChecker()
 }
 
 // NewGameManager creates a new game manager
@@ -439,6 +449,24 @@ func (gm *GameManager) CreateTestGame(player1Phone, player2Phone string, stakeAm
 	return game, nil
 }
 
+// parseCardsFromData reconstructs cards from JSON data
+func parseCardsFromData(data []interface{}) []Card {
+	var cards []Card
+	for _, cardData := range data {
+		if cardMap, ok := cardData.(map[string]interface{}); ok {
+			var card Card
+			if suit, ok := cardMap["suit"].(string); ok {
+				card.Suit = Suit(suit)
+			}
+			if rank, ok := cardMap["rank"].(string); ok {
+				card.Rank = Rank(rank)
+			}
+			cards = append(cards, card)
+		}
+	}
+	return cards
+}
+
 // saveGameToRedis persists game state to Redis
 func (gm *GameManager) saveGameToRedis(game *GameState) error {
 	if gm.rdb == nil {
@@ -688,22 +716,104 @@ func (gm *GameManager) checkDisconnectForfeits() {
 	}
 }
 
-// parseCardsFromData reconstructs cards from JSON data
-func parseCardsFromData(data []interface{}) []Card {
-	var cards []Card
-	for _, cardData := range data {
-		if cardMap, ok := cardData.(map[string]interface{}); ok {
-			var card Card
-			if suit, ok := cardMap["suit"].(string); ok {
-				card.Suit = Suit(suit)
-			}
-			if rank, ok := cardMap["rank"].(string); ok {
-				card.Rank = Rank(rank)
-			}
-			cards = append(cards, card)
-		}
+// RehydrateQueueFromDB loads queued rows from the DB and pushes their ids into Redis per stake key.
+func (gm *GameManager) RehydrateQueueFromDB() error {
+	if gm.rdb == nil || gm.db == nil {
+		return nil
 	}
-	return cards
+
+	ctx := context.Background()
+	// Load queued rows grouped by stake
+	rows, err := gm.db.Queryx(`SELECT id, stake_amount FROM matchmaking_queue WHERE status='queued' AND expires_at > NOW() ORDER BY created_at`)
+	if err != nil {
+		log.Printf("[REHYDRATE] Failed to fetch queued rows from DB: %v", err)
+		return err
+	}
+	defer rows.Close()
+
+	grouped := make(map[int][]int)
+	for rows.Next() {
+		var id int
+		var stakeAmount float64
+		if err := rows.Scan(&id, &stakeAmount); err != nil {
+			log.Printf("[REHYDRATE] Row scan error: %v", err)
+			continue
+		}
+		s := int(stakeAmount)
+		grouped[s] = append(grouped[s], id)
+	}
+
+	for stake, ids := range grouped {
+		key := fmt.Sprintf("queue:stake:%d", stake)
+		llen, err := gm.rdb.LLen(ctx, key).Result()
+		if err != nil {
+			log.Printf("[REHYDRATE] Failed to check Redis key %s: %v", key, err)
+			continue
+		}
+		if llen > 0 {
+			// already populated - skip to avoid duplicates
+			continue
+		}
+		// Push ids to Redis (RPUSH to preserve FIFO order)
+		for _, id := range ids {
+			if err := gm.rdb.RPush(ctx, key, id).Err(); err != nil {
+				log.Printf("[REHYDRATE] Failed to push id %d to Redis key %s: %v", id, key, err)
+			}
+		}
+		log.Printf("[REHYDRATE] Loaded %d queued items into Redis key %s", len(ids), key)
+	}
+
+	return nil
+}
+
+// StartQueueExpiryChecker runs a background job to expire queued entries
+func (gm *GameManager) StartQueueExpiryChecker() {
+	if gm.db == nil || gm.rdb == nil {
+		return
+	}
+	ticker := time.NewTicker(1 * time.Minute)
+	go func() {
+		for range ticker.C {
+			if _, err := gm.ExpireQueuedEntries(); err != nil {
+				log.Printf("[QUEUE EXPIRY] Error during expiry job: %v", err)
+			}
+		}
+	}()
+}
+
+// ExpireQueuedEntries moves expired queued rows to status='expired' and removes them from Redis lists
+func (gm *GameManager) ExpireQueuedEntries() (int, error) {
+	if gm.db == nil || gm.rdb == nil {
+		return 0, nil
+	}
+
+	ctx := context.Background()
+	// Atomically update expired rows and return their ids and stake_amounts
+	rows, err := gm.db.Queryx(`UPDATE matchmaking_queue SET status='expired' WHERE expires_at < NOW() AND status='queued' RETURNING id, stake_amount`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	removed := 0
+	for rows.Next() {
+		var id int
+		var stakeAmount float64
+		if err := rows.Scan(&id, &stakeAmount); err != nil {
+			log.Printf("[QUEUE EXPIRY] Scan error: %v", err)
+			continue
+		}
+		key := fmt.Sprintf("queue:stake:%d", int(stakeAmount))
+		if err := gm.rdb.LRem(ctx, key, 0, id).Err(); err != nil {
+			log.Printf("[QUEUE EXPIRY] Failed to LREM id %d from %s: %v", id, key, err)
+		}
+		removed++
+	}
+
+	if removed > 0 {
+		log.Printf("[QUEUE EXPIRY] Expired %d queued entries", removed)
+	}
+	return removed, nil
 }
 
 // RecordMove records a single move in game_moves (synchronous). It's best-effort and logs errors.
@@ -835,4 +945,160 @@ func (gm *GameManager) UpdateDisplayName(phone, name string) []string {
 	}
 
 	return updated
+}
+
+// TryMatchFromRedis attempts to find an opponent for the provided queue row by popping an id
+// from the Redis list for the given stake. If an opponent is found and successfully claimed
+// in the DB, it creates a game session, updates both queue rows, persists the game and
+// returns a MatchResult. If no opponent is available the function pushes this queue id
+// into Redis and returns (nil, nil).
+func (gm *GameManager) TryMatchFromRedis(stakeAmount int, myQueueID int, myPhone string, myDBPlayerID int, myDisplayName string) (*MatchResult, error) {
+	if gm.rdb == nil || gm.db == nil {
+		// No Redis or DB available - nothing to do
+		return nil, nil
+	}
+
+	ctx := context.Background()
+	key := fmt.Sprintf("queue:stake:%d", stakeAmount)
+	// Try to pop an opponent from Redis. If none, push our own queue id and return.
+	for attempts := 0; attempts < 5; attempts++ {
+		oppStr, err := gm.rdb.RPop(ctx, key).Result()
+		if err == redis.Nil {
+			// No opponent - push our own queue id and return
+			if err := gm.rdb.LPush(ctx, key, myQueueID).Err(); err != nil {
+				log.Printf("[MATCH] Failed to push own queue id %d to Redis key %s: %v", myQueueID, key, err)
+			}
+			return nil, nil
+		} else if err != nil {
+			log.Printf("[MATCH] Redis RPop error on key %s: %v", key, err)
+			// push own id as a best-effort
+			if err := gm.rdb.LPush(ctx, key, myQueueID).Err(); err != nil {
+				log.Printf("[MATCH] Failed to push own queue id %d to Redis key %s: %v", myQueueID, key, err)
+			}
+			return nil, nil
+		}
+
+		oppID, err := strconv.Atoi(oppStr)
+		if err != nil {
+			log.Printf("[MATCH] Invalid popped id from Redis: %s", oppStr)
+			continue
+		}
+
+		// Try to claim the opponent row in the DB atomically by changing status to 'matching'
+		var oppQueue struct {
+			ID            int           `db:"id"`
+			PlayerID      sql.NullInt64 `db:"player_id"`
+			PhoneNumber   string        `db:"phone_number"`
+			TransactionID sql.NullInt64 `db:"transaction_id"`
+		}
+
+		err = gm.db.Get(&oppQueue, `UPDATE matchmaking_queue SET status='matching' WHERE id=$1 AND status='queued' RETURNING id, player_id, phone_number, transaction_id`, oppID)
+		if err != nil {
+			// Race - someone else claimed it or it was removed - try next
+			if err == sql.ErrNoRows {
+				continue
+			}
+			log.Printf("[MATCH] DB claim error for queue id %d: %v", oppID, err)
+			continue
+		}
+
+		// Avoid self-match if popped our own row unexpectedly
+		if oppQueue.PhoneNumber == myPhone {
+			// requeue opponent and continue
+			if err := gm.rdb.LPush(ctx, key, oppID).Err(); err != nil {
+				log.Printf("[MATCH] Failed to re-push own popped id %d: %v", oppID, err)
+			}
+			continue
+		}
+
+		// Build player identities for the in-memory game
+		// Retrieve opponent display name from players table if possible
+		var oppPlayer models.Player
+		if oppQueue.PlayerID.Valid {
+			if err := gm.db.Get(&oppPlayer, `SELECT id, phone_number, display_name FROM players WHERE id=$1`, int(oppQueue.PlayerID.Int64)); err != nil {
+				log.Printf("[MATCH] Failed to get opponent player %d: %v", oppQueue.PlayerID.Int64, err)
+			}
+		}
+
+		// Create game id and tokens
+		gameID := generateGameID()
+		gameToken := generateToken(16)
+		player1Token := generateToken(16)
+		player2Token := generateToken(16)
+
+		// ephemeral player IDs
+		opponentEphemeral := "player_" + oppQueue.PhoneNumber[len(oppQueue.PhoneNumber)-4:] + "_" + generateToken(4)
+		myEphemeral := "player_" + myPhone[len(myPhone)-4:] + "_" + generateToken(4)
+
+		// Create GameState (Player1 is opponent to preserve previous ordering)
+		game := NewGame(
+			gameID,
+			gameToken,
+			opponentEphemeral,
+			oppQueue.PhoneNumber,
+			player1Token,
+			0, // DB ID optional (we can set if available)
+			oppPlayer.DisplayName,
+			myEphemeral,
+			myPhone,
+			player2Token,
+			myDBPlayerID,
+			myDisplayName,
+			stakeAmount,
+		)
+
+		// Save to memory and Redis, and create session row if possible
+		gm.mu.Lock()
+		gm.games[gameID] = game
+		gm.playerToGame[opponentEphemeral] = gameID
+		gm.playerToGame[myEphemeral] = gameID
+		gm.mu.Unlock()
+
+		// Persist a game_sessions row if we have DB player ids
+		var sessionID int
+		if gm.db != nil && oppQueue.PlayerID.Valid && myDBPlayerID > 0 {
+			err := gm.db.QueryRowx(`INSERT INTO game_sessions (game_token, player1_id, player2_id, stake_amount, status, created_at, expiry_time) VALUES ($1, $2, $3, $4, $5, NOW(), $6) RETURNING id`,
+				gameToken, int(oppQueue.PlayerID.Int64), myDBPlayerID, stakeAmount, string(StatusWaiting), game.ExpiresAt).Scan(&sessionID)
+			if err != nil {
+				log.Printf("[DB] Failed to create game_session for queue pairing: %v", err)
+			} else {
+				// Update both queue rows with matched status and session id
+				if _, err := gm.db.Exec(`UPDATE matchmaking_queue SET status='matched', matched_at=NOW(), session_id=$1 WHERE id=$2`, sessionID, oppID); err != nil {
+					log.Printf("[DB] Failed to update opponent queue %d: %v", oppID, err)
+				}
+				if _, err := gm.db.Exec(`UPDATE matchmaking_queue SET status='matched', matched_at=NOW(), session_id=$1 WHERE id=$2`, sessionID, myQueueID); err != nil {
+					log.Printf("[DB] Failed to update my queue %d: %v", myQueueID, err)
+				}
+				// Save game state to Redis
+				go game.SaveToRedis()
+			}
+		}
+
+		// Build match result
+		baseURL := gm.config.FrontendURL
+		player1Link := baseURL + "/g/" + gameToken + "?pt=" + player1Token
+		player2Link := baseURL + "/g/" + gameToken + "?pt=" + player2Token
+
+		return &MatchResult{
+			GameID:             gameID,
+			GameToken:          gameToken,
+			Player1ID:          opponentEphemeral,
+			Player1Token:       player1Token,
+			Player1Link:        player1Link,
+			Player1DisplayName: oppPlayer.DisplayName,
+			Player2ID:          myEphemeral,
+			Player2Token:       player2Token,
+			Player2Link:        player2Link,
+			Player2DisplayName: myDisplayName,
+			StakeAmount:        stakeAmount,
+			ExpiresAt:          game.ExpiresAt,
+			SessionID:          sessionID,
+		}, nil
+	}
+
+	// Nothing matched after attempts — push own id and return
+	if err := gm.rdb.LPush(ctx, key, myQueueID).Err(); err != nil {
+		log.Printf("[MATCH] Final push of own queue id %d to Redis key %s failed: %v", myQueueID, key, err)
+	}
+	return nil, nil
 }

@@ -58,6 +58,7 @@ type EscrowLedger struct {
 	PlayerID     int       `db:"player_id" json:"player_id"`
 	Amount       float64   `db:"amount" json:"amount"`
 	BalanceAfter float64   `db:"balance_after" json:"balance_after"`
+	QueueID      int       `db:"queue_id" json:"queue_id,omitempty"`
 	Description  string    `db:"description" json:"description,omitempty"`
 	CreatedAt    time.Time `db:"created_at" json:"created_at"`
 }

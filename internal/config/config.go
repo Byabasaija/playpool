@@ -23,9 +23,11 @@ type Config struct {
 
 	// Game Settings
 	GameExpiryMinutes         int
+	QueueExpiryMinutes        int
 	DisconnectGracePeriodSecs int
 	NoShowFeePercentage       int
 	CommissionPercentage      int
+	CommissionFlat            int
 	MinStakeAmount            int
 
 	// USSD Gateway
@@ -70,9 +72,11 @@ func Load() *Config {
 
 		// Game Settings
 		GameExpiryMinutes:         getEnvInt("GAME_EXPIRY_MINUTES", 10),
+		QueueExpiryMinutes:        getEnvInt("QUEUE_EXPIRY_MINUTES", 10),
 		DisconnectGracePeriodSecs: getEnvInt("DISCONNECT_GRACE_PERIOD_SECONDS", 120),
 		NoShowFeePercentage:       getEnvInt("NO_SHOW_FEE_PERCENTAGE", 5),
 		CommissionPercentage:      getEnvInt("COMMISSION_PERCENTAGE", 10),
+		CommissionFlat:            getEnvInt("COMMISSION_FLAT", 1000),
 		MinStakeAmount:            getEnvInt("MIN_STAKE_AMOUNT", 1000),
 
 		// USSD Gateway
