@@ -24,6 +24,7 @@ type Config struct {
 	// Game Settings
 	GameExpiryMinutes         int
 	QueueExpiryMinutes        int
+	QueueProcessingVisibility int
 	DisconnectGracePeriodSecs int
 	NoShowFeePercentage       int
 	CommissionPercentage      int
@@ -73,6 +74,7 @@ func Load() *Config {
 		// Game Settings
 		GameExpiryMinutes:         getEnvInt("GAME_EXPIRY_MINUTES", 10),
 		QueueExpiryMinutes:        getEnvInt("QUEUE_EXPIRY_MINUTES", 10),
+		QueueProcessingVisibility: getEnvInt("QUEUE_PROCESSING_VISIBILITY_SECONDS", 30),
 		DisconnectGracePeriodSecs: getEnvInt("DISCONNECT_GRACE_PERIOD_SECONDS", 120),
 		NoShowFeePercentage:       getEnvInt("NO_SHOW_FEE_PERCENTAGE", 5),
 		CommissionPercentage:      getEnvInt("COMMISSION_PERCENTAGE", 10),

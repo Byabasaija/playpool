@@ -74,6 +74,7 @@ func InitializeManager(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) {
 	}
 	// Start queue expiry checker
 	go Manager.StartQueueExpiryChecker()
+	go Manager.StartProcessingRecoveryChecker()
 }
 
 // NewGameManager creates a new game manager
@@ -962,15 +963,9 @@ func (gm *GameManager) TryMatchFromRedis(stakeAmount int, myQueueID int, myPhone
 	key := fmt.Sprintf("queue:stake:%d", stakeAmount)
 	// Try to pop an opponent from Redis. If none, push our own queue id and return.
 	for attempts := 0; attempts < 5; attempts++ {
-		oppStr, err := gm.rdb.RPop(ctx, key).Result()
-		if err == redis.Nil {
-			// No opponent - push our own queue id and return
-			if err := gm.rdb.LPush(ctx, key, myQueueID).Err(); err != nil {
-				log.Printf("[MATCH] Failed to push own queue id %d to Redis key %s: %v", myQueueID, key, err)
-			}
-			return nil, nil
-		} else if err != nil {
-			log.Printf("[MATCH] Redis RPop error on key %s: %v", key, err)
+		oppID, err := gm.claimJobFromRedis(stakeAmount)
+		if err != nil {
+			log.Printf("[MATCH] Redis claim error on stake %d: %v", stakeAmount, err)
 			// push own id as a best-effort
 			if err := gm.rdb.LPush(ctx, key, myQueueID).Err(); err != nil {
 				log.Printf("[MATCH] Failed to push own queue id %d to Redis key %s: %v", myQueueID, key, err)
@@ -978,10 +973,12 @@ func (gm *GameManager) TryMatchFromRedis(stakeAmount int, myQueueID int, myPhone
 			return nil, nil
 		}
 
-		oppID, err := strconv.Atoi(oppStr)
-		if err != nil {
-			log.Printf("[MATCH] Invalid popped id from Redis: %s", oppStr)
-			continue
+		if oppID == 0 {
+			// No opponent - claim script returned no id; push own id and return
+			if err := gm.rdb.LPush(ctx, key, myQueueID).Err(); err != nil {
+				log.Printf("[MATCH] Failed to push own queue id %d to Redis key %s: %v", myQueueID, key, err)
+			}
+			return nil, nil
 		}
 
 		// Try to claim the opponent row in the DB atomically by changing status to 'matching'
@@ -994,19 +991,45 @@ func (gm *GameManager) TryMatchFromRedis(stakeAmount int, myQueueID int, myPhone
 
 		err = gm.db.Get(&oppQueue, `UPDATE matchmaking_queue SET status='matching' WHERE id=$1 AND status='queued' RETURNING id, player_id, phone_number, transaction_id`, oppID)
 		if err != nil {
-			// Race - someone else claimed it or it was removed - try next
+			// Race - someone else claimed it or it was removed - cleanup processing entry then try next
 			if err == sql.ErrNoRows {
+				// cleanup processing entry (remove from processing list and zset)
+				processingKey := fmt.Sprintf("processing:stake:%d", stakeAmount)
+				processingTsKey := fmt.Sprintf("processing_ts:stake:%d", stakeAmount)
+				if err := gm.rdb.LRem(ctx, processingKey, 0, oppID).Err(); err != nil {
+					log.Printf("[MATCH] Cleanup LREM failed for id %d: %v", oppID, err)
+				}
+				if err := gm.rdb.ZRem(ctx, processingTsKey, oppID).Err(); err != nil {
+					log.Printf("[MATCH] Cleanup ZREM failed for id %d: %v", oppID, err)
+				}
 				continue
 			}
 			log.Printf("[MATCH] DB claim error for queue id %d: %v", oppID, err)
-			continue
+			// cleanup and push own id
+			processingKey := fmt.Sprintf("processing:stake:%d", stakeAmount)
+			processingTsKey := fmt.Sprintf("processing_ts:stake:%d", stakeAmount)
+			if err := gm.rdb.LRem(ctx, processingKey, 0, oppID).Err(); err != nil {
+				log.Printf("[MATCH] Cleanup LREM failed for id %d: %v", oppID, err)
+			}
+			if err := gm.rdb.ZRem(ctx, processingTsKey, oppID).Err(); err != nil {
+				log.Printf("[MATCH] Cleanup ZREM failed for id %d: %v", oppID, err)
+			}
+			if err := gm.rdb.LPush(ctx, key, myQueueID).Err(); err != nil {
+				log.Printf("[MATCH] Failed to push own queue id %d to Redis key %s: %v", myQueueID, key, err)
+			}
+			return nil, nil
 		}
 
 		// Avoid self-match if popped our own row unexpectedly
 		if oppQueue.PhoneNumber == myPhone {
-			// requeue opponent and continue
-			if err := gm.rdb.LPush(ctx, key, oppID).Err(); err != nil {
-				log.Printf("[MATCH] Failed to re-push own popped id %d: %v", oppID, err)
+			// cleanup processing entry and continue
+			processingKey := fmt.Sprintf("processing:stake:%d", stakeAmount)
+			processingTsKey := fmt.Sprintf("processing_ts:stake:%d", stakeAmount)
+			if err := gm.rdb.LRem(ctx, processingKey, 0, oppID).Err(); err != nil {
+				log.Printf("[MATCH] Cleanup LREM failed for id %d: %v", oppID, err)
+			}
+			if err := gm.rdb.ZRem(ctx, processingTsKey, oppID).Err(); err != nil {
+				log.Printf("[MATCH] Cleanup ZREM failed for id %d: %v", oppID, err)
 			}
 			continue
 		}
@@ -1101,4 +1124,109 @@ func (gm *GameManager) TryMatchFromRedis(stakeAmount int, myQueueID int, myPhone
 		log.Printf("[MATCH] Final push of own queue id %d to Redis key %s failed: %v", myQueueID, key, err)
 	}
 	return nil, nil
+}
+
+// claimJobFromRedis atomically pops an id from the main queue and moves it to processing with a timestamp
+func (gm *GameManager) claimJobFromRedis(stake int) (int, error) {
+	ctx := context.Background()
+	key := fmt.Sprintf("queue:stake:%d", stake)
+	processingKey := fmt.Sprintf("processing:stake:%d", stake)
+	processingTsKey := fmt.Sprintf("processing_ts:stake:%d", stake)
+	// current timestamp in seconds
+	ts := time.Now().Unix()
+	script := `local id = redis.call('RPOP', KEYS[1]); if not id then return nil end; redis.call('LPUSH', KEYS[2], id); redis.call('ZADD', KEYS[3], ARGV[1], id); return id`
+	res, err := gm.rdb.Eval(ctx, script, []string{key, processingKey, processingTsKey}, ts).Result()
+	if err == redis.Nil {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	idStr, ok := res.(string)
+	if !ok {
+		return 0, fmt.Errorf("unexpected claim result type: %T", res)
+	}
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// RequeueStuckProcessing checks for items in processing that have exceeded visibility timeout and requeues them
+func (gm *GameManager) RequeueStuckProcessing() (int, error) {
+	if gm.rdb == nil || gm.db == nil {
+		return 0, nil
+	}
+
+	ctx := context.Background()
+	// Find stake buckets that have matching rows (we only need to check those)
+	rows, err := gm.db.Queryx(`SELECT DISTINCT stake_amount FROM matchmaking_queue WHERE status='matching'`)
+	if err != nil {
+		return 0, err
+	}
+	requeued := 0
+	for rows.Next() {
+		var stakeAmt float64
+		if err := rows.Scan(&stakeAmt); err != nil {
+			continue
+		}
+		stake := int(stakeAmt)
+		processingTsKey := fmt.Sprintf("processing_ts:stake:%d", stake)
+		processingKey := fmt.Sprintf("processing:stake:%d", stake)
+		queueKey := fmt.Sprintf("queue:stake:%d", stake)
+
+		threshold := time.Now().Add(-time.Duration(gm.config.QueueProcessingVisibility) * time.Second).Unix()
+		ids, err := gm.rdb.ZRangeByScore(ctx, processingTsKey, &redis.ZRangeBy{Min: "-inf", Max: fmt.Sprintf("%d", threshold)}).Result()
+		if err != nil {
+			log.Printf("[RECOVER] Failed to ZRANGEBYSCORE on %s: %v", processingTsKey, err)
+			continue
+		}
+
+		for _, idStr := range ids {
+			id, err := strconv.Atoi(idStr)
+			if err != nil {
+				continue
+			}
+
+			// Try to mark DB row back to queued if still matching
+			if _, err := gm.db.Exec(`UPDATE matchmaking_queue SET status='queued' WHERE id=$1 AND status='matching'`, id); err != nil {
+				log.Printf("[RECOVER] Failed to update queue row %d back to queued: %v", id, err)
+			}
+
+			// Remove from processing list and zset, push back to main queue
+			if err := gm.rdb.LRem(ctx, processingKey, 0, id).Err(); err != nil {
+				log.Printf("[RECOVER] Failed to LREM id %d from %s: %v", id, processingKey, err)
+			}
+			if err := gm.rdb.ZRem(ctx, processingTsKey, id).Err(); err != nil {
+				log.Printf("[RECOVER] Failed to ZREM id %d from %s: %v", id, processingTsKey, err)
+			}
+			if err := gm.rdb.RPush(ctx, queueKey, id).Err(); err != nil {
+				log.Printf("[RECOVER] Failed to RPush id %d back onto %s: %v", id, queueKey, err)
+			}
+			requeued++
+		}
+	}
+	return requeued, nil
+}
+
+// StartProcessingRecoveryChecker runs a background job to requeue stuck processing items
+func (gm *GameManager) StartProcessingRecoveryChecker() {
+	if gm.db == nil || gm.rdb == nil {
+		return
+	}
+	interval := time.Duration(gm.config.QueueProcessingVisibility/2) * time.Second
+	if interval < time.Second*5 {
+		interval = 5 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	go func() {
+		for range ticker.C {
+			if n, err := gm.RequeueStuckProcessing(); err != nil {
+				log.Printf("[RECOVER] Error requeueing stuck processing items: %v", err)
+			} else if n > 0 {
+				log.Printf("[RECOVER] Requeued %d stuck items", n)
+			}
+		}
+	}()
 }
