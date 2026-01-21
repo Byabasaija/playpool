@@ -100,3 +100,16 @@ export async function getPlayerProfile(phone: string): Promise<{display_name?: s
 
   return { display_name: data.display_name, fee_exempt_balance: data.fee_exempt_balance, expired_queue: data.expired_queue };
 }
+
+export async function getConfig(): Promise<{ commission_flat: number; payout_tax_percent: number; min_stake_amount: number; }> {
+  const response = await fetch(`${API_BASE}/config`);
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to fetch config');
+  }
+  return {
+    commission_flat: data.commission_flat,
+    payout_tax_percent: data.payout_tax_percent,
+    min_stake_amount: data.min_stake_amount,
+  };
+}

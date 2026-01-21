@@ -2,12 +2,15 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMatchmaking } from '../hooks/useMatchmaking';
 import { validatePhone } from '../utils/phoneUtils';
-import { getPlayerProfile, requeuePlayer } from '../utils/apiClient';
+import { getPlayerProfile, requeuePlayer, getConfig } from '../utils/apiClient';
 
 export const LandingPage: React.FC = () => {
   const [phoneRest, setPhoneRest] = useState('');
   const [stake, setStake] = useState(1000);
   const [phoneError, setPhoneError] = useState('');
+  const [commission, setCommission] = useState<number | null>(null);
+  const [minStake, setMinStake] = useState<number>(1000);
+  const [customStakeInput, setCustomStakeInput] = useState<string>('');
   const navigate = useNavigate();
   
   // const baseUrl = import.meta.env.VITE_BACKEND_URL
@@ -19,6 +22,18 @@ export const LandingPage: React.FC = () => {
   React.useEffect(() => {
     if (displayName) setDisplayNameInput(displayName);
   }, [displayName]);
+
+  React.useEffect(() => {
+    (async () => {
+      try {
+        const cfg = await getConfig();
+        setCommission(cfg.commission_flat);
+        setMinStake(cfg.min_stake_amount || 1000);
+      } catch (e) {
+        // ignore if not available
+      }
+    })();
+  }, []);
 
   const generateRandomName = () => {
     const adjectives = ["Lucky", "Swift", "Brave", "Jolly", "Mighty", "Quiet", "Clever", "Happy", "Kitenge", "Zesty"];
@@ -51,6 +66,14 @@ export const LandingPage: React.FC = () => {
     }
   };
 
+  const handleCustomStakeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value.replace(/[^0-9]/g, '');
+    setCustomStakeInput(val);
+    if (val === '') return;
+    const n = Number(val);
+    if (!Number.isNaN(n)) setStake(n);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -59,6 +82,11 @@ export const LandingPage: React.FC = () => {
 
     if (!validatePhone(full)) {
       setPhoneError('Please enter a valid Ugandan phone number (9 digits after 256)');
+      return;
+    }
+
+    if (stake < minStake) {
+      setPhoneError(`Minimum stake amount is ${minStake} UGX`);
       return;
     }
 
@@ -170,8 +198,22 @@ export const LandingPage: React.FC = () => {
                   <option value={5000}>5,000 UGX</option>
                   <option value={10000}>10,000 UGX</option>
                 </select>
+
+                <div className="mt-3">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Or enter custom stake</label>
+                  <input
+                    type="number"
+                    min={minStake}
+                    value={customStakeInput}
+                    onChange={handleCustomStakeChange}
+                    placeholder={`1000 or more`}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg"
+                    disabled={!!expiredQueue}
+                  />
+                </div>
+
                 <p className="mt-1 text-sm text-gray-500">
-                  Win up to {stake * 1.8} UGX!
+                  {commission !== null ? (<span>Commission: {commission} UGX — Total payable: {stake + commission} UGX</span>) : null}
                 </p>
                 {expiredQueue && (
                   <p className="mt-2 text-sm text-yellow-600">You have pending stake UGX {expiredQueue.stake_amount}. Click Requeue to retry.</p>

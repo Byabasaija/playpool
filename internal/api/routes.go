@@ -70,5 +70,8 @@ func SetupRoutes(router *gin.Engine, db *sqlx.DB, rdb *redis.Client, cfg *config
 			player.PUT(":phone/display-name", handlers.UpdateDisplayName(db))
 			player.POST(":phone/requeue", handlers.RequeueStake(db, rdb, cfg))
 		}
+
+		// Config endpoint
+		v1.GET("/config", handlers.GetConfig(cfg))
 	}
 }

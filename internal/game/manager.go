@@ -178,8 +178,22 @@ func (gm *GameManager) JoinQueue(playerID, phoneNumber string, stakeAmount int, 
 					if err != nil {
 						log.Printf("[DB] Failed to create game_session: %v", err)
 					} else {
-						game.SessionID = sessionID
-						log.Printf("[DB] Created game_session %d for game %s", sessionID, gameID)
+						// Update both queue rows with matched status and session id (match by queue_token)
+						if _, err := gm.db.Exec(`UPDATE matchmaking_queue SET status='matched', matched_at=NOW(), session_id=$1 WHERE queue_token=$2`, sessionID, opponent.QueueToken); err != nil {
+							log.Printf("[DB] Failed to update opponent queue (%s): %v", opponent.QueueToken, err)
+						}
+						if _, err := gm.db.Exec(`UPDATE matchmaking_queue SET status='matched', matched_at=NOW(), session_id=$1 WHERE queue_token=$2`, sessionID, playerID); err != nil {
+							log.Printf("[DB] Failed to update my queue (%s): %v", playerID, err)
+						}
+						// Attach session id to in-memory game and persist
+						if sessionID > 0 {
+							if g, ok := gm.games[gameID]; ok {
+								g.SessionID = sessionID
+								go g.SaveToRedis()
+							}
+						}
+						// Save game to redis (already set)
+						gm.saveGameToRedis(game)
 					}
 				}
 
@@ -845,6 +859,8 @@ func (gm *GameManager) SaveFinalGameState(g *GameState) {
 		return
 	}
 
+	log.Printf("[DB] SaveFinalGameState called for session=%d status=%s winner=%s", g.SessionID, g.Status, g.Winner)
+
 	data, err := json.Marshal(g)
 	if err != nil {
 		log.Printf("[DB] Failed to marshal final game state for session %d: %v", g.SessionID, err)
@@ -870,6 +886,7 @@ func (gm *GameManager) SaveFinalGameState(g *GameState) {
 				winnerDBID = p.DBPlayerID
 			}
 		}
+		log.Printf("[DB] Resolved winnerDBID=%d for winnerToken=%s (session=%d)", winnerDBID, g.Winner, g.SessionID)
 
 		if winnerDBID == 0 {
 			log.Printf("[DB] SaveFinalGameState: could not resolve winner DB id for winner=%s (session=%d)", g.Winner, g.SessionID)
@@ -1108,13 +1125,17 @@ func (gm *GameManager) TryMatchFromRedis(stakeAmount int, myQueueID int, myPhone
 		}
 
 		// Create GameState (Player1 is opponent to preserve previous ordering)
+		oppDBID := 0
+		if oppQueue.PlayerID.Valid {
+			oppDBID = int(oppQueue.PlayerID.Int64)
+		}
 		game := NewGame(
 			gameID,
 			gameToken,
 			opponentEphemeral,
 			oppQueue.PhoneNumber,
 			player1Token,
-			0, // DB ID optional (we can set if available)
+			oppDBID, // DB ID for opponent
 			oppPlayer.DisplayName,
 			myEphemeral,
 			myPhone,
@@ -1198,6 +1219,14 @@ func (gm *GameManager) TryMatchFromRedis(stakeAmount int, myQueueID int, myPhone
 								// Remove in-memory queue entries for both players (they are now matched)
 								gm.RemoveQueueEntriesByPhone(stakeAmount, oppQueue.PhoneNumber)
 								gm.RemoveQueueEntriesByPhone(stakeAmount, myPhone)
+								// Set the in-memory game session id and persist the updated state
+								gm.mu.Lock()
+								if g, ok := gm.games[gameID]; ok {
+									g.SessionID = sessionID
+									log.Printf("[DB] Session %d attached to in-memory game %s", sessionID, gameID)
+									go g.SaveToRedis()
+								}
+								gm.mu.Unlock()
 							}
 						}
 					}

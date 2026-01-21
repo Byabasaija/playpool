@@ -3,6 +3,7 @@ package accounts
 import (
 	"database/sql"
 	"fmt"
+	"log"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/playmatatu/backend/internal/models"
@@ -61,8 +62,8 @@ func Transfer(tx *sqlx.Tx, debitAccountID, creditAccountID int, amount float64, 
 
 	// Lock both accounts
 	var accounts []models.Account
-	query := `SELECT id, account_type, owner_player_id, balance, created_at, updated_at FROM accounts WHERE id = ANY($1) FOR UPDATE`
-	if err := tx.Select(&accounts, query, []int{debitAccountID, creditAccountID}); err != nil {
+	query := `SELECT id, account_type, owner_player_id, balance, created_at, updated_at FROM accounts WHERE id IN ($1,$2) FOR UPDATE`
+	if err := tx.Select(&accounts, query, debitAccountID, creditAccountID); err != nil {
 		return err
 	}
 
@@ -100,6 +101,9 @@ func Transfer(tx *sqlx.Tx, debitAccountID, creditAccountID int, amount float64, 
 	if _, err := tx.Exec(`INSERT INTO account_transactions (debit_account_id, credit_account_id, amount, reference_type, reference_id, description, created_at) VALUES ($1,$2,$3,$4,$5,$6,NOW())`, debitAccountID, creditAccountID, amount, referenceType, referenceID, description); err != nil {
 		return err
 	}
+
+	// Log successful transfer
+	log.Printf("[ACCT] Transfer completed: debit_acc=%d credit_acc=%d amount=%.2f ref_type=%s ref_id=%v desc=%s", debitAccountID, creditAccountID, amount, referenceType, referenceID, description)
 
 	return nil
 }

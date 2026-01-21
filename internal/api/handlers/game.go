@@ -147,18 +147,32 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 						log.Printf("[DB] Failed to get player fee exempt account for player %d: %v", player.ID, errGet3)
 						tx.Rollback()
 					} else {
-						// Debit settlement -> credit platform (commission)
-						if err := accounts.Transfer(tx, settlementAcc.ID, platformAcc.ID, commission, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Commission (flat)"); err != nil {
-							log.Printf("[DB] Failed to transfer commission: %v", err)
+						// Credit settlement account with the gross amount (stake + commission) so transfers can debit it
+						gross := float64(req.StakeAmount + cfg.CommissionFlat)
+						if _, err := tx.Exec(`UPDATE accounts SET balance = balance + $1, updated_at = NOW() WHERE id = $2`, gross, settlementAcc.ID); err != nil {
+							log.Printf("[DB] Failed to credit settlement account: %v", err)
 							tx.Rollback()
 						} else {
-							// Debit settlement -> credit player fee exempt (net amount)
-							if err := accounts.Transfer(tx, settlementAcc.ID, playerFeeAcc.ID, netAmount, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Deposit (net)"); err != nil {
-								log.Printf("[DB] Failed to credit player fee exempt: %v", err)
+							// Record deposit as an account transaction (external -> settlement)
+							if _, err := tx.Exec(`INSERT INTO account_transactions (debit_account_id, credit_account_id, amount, reference_type, reference_id, description, created_at) VALUES ($1,$2,$3,$4,$5,$6,NOW())`, nil, settlementAcc.ID, gross, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Deposit (gross)"); err != nil {
+								log.Printf("[DB] Failed to insert settlement deposit account_transaction: %v", err)
 								tx.Rollback()
 							} else {
-								if err := tx.Commit(); err != nil {
-									log.Printf("[DB] Commit failed for stake deposit tx: %v", err)
+								log.Printf("[DB] Credited settlement account id=%d amount=%.2f (tx=%d)", settlementAcc.ID, gross, txID)
+								// Debit settlement -> credit platform (commission)
+								if err := accounts.Transfer(tx, settlementAcc.ID, platformAcc.ID, commission, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Commission (flat)"); err != nil {
+									log.Printf("[DB] Failed to transfer commission: %v", err)
+									tx.Rollback()
+								} else {
+									// Debit settlement -> credit player fee exempt (net amount)
+									if err := accounts.Transfer(tx, settlementAcc.ID, playerFeeAcc.ID, netAmount, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Deposit (net)"); err != nil {
+										log.Printf("[DB] Failed to credit player fee exempt: %v", err)
+										tx.Rollback()
+									} else {
+										if err := tx.Commit(); err != nil {
+											log.Printf("[DB] Commit failed for stake deposit tx: %v", err)
+										}
+									}
 								}
 							}
 						}
