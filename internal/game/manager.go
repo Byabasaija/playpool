@@ -1012,15 +1012,29 @@ func (gm *GameManager) UpdateDisplayName(phone, name string) []string {
 // into Redis and returns (nil, nil).
 func (gm *GameManager) TryMatchFromRedis(stakeAmount int, myQueueID int, myPhone string, myDBPlayerID int, myDisplayName string) (*MatchResult, error) {
 	if gm.rdb == nil || gm.db == nil {
+		log.Printf("[MATCH] TryMatchFromRedis skipped: rdb==nil? %v db==nil? %v", gm.rdb == nil, gm.db == nil)
 		// No Redis or DB available - nothing to do
 		return nil, nil
 	}
 
 	ctx := context.Background()
 	key := fmt.Sprintf("queue:stake:%d", stakeAmount)
+	// DEBUG: log current list contents to help diagnose matching issues
+	if llen, err := gm.rdb.LLen(ctx, key).Result(); err == nil {
+		if llen > 0 {
+			if items, err := gm.rdb.LRange(ctx, key, 0, -1).Result(); err == nil {
+				log.Printf("[MATCH DEBUG] Redis list %s len=%d items=%v", key, llen, items)
+			}
+		} else {
+			log.Printf("[MATCH DEBUG] Redis list %s is empty (len=0)", key)
+		}
+	} else {
+		log.Printf("[MATCH DEBUG] Failed to LLen %s: %v", key, err)
+	}
 	// Try to pop an opponent from Redis. If none, push our own queue id and return.
 	for attempts := 0; attempts < 5; attempts++ {
 		oppID, err := gm.claimJobFromRedis(stakeAmount)
+		log.Printf("[MATCH] claimJobFromRedis returned id=%d for stake=%d (attempt=%d)", oppID, stakeAmount, attempts)
 		if err != nil {
 			log.Printf("[MATCH] Redis claim error on stake %d: %v", stakeAmount, err)
 			// push own id as a best-effort
@@ -1034,8 +1048,25 @@ func (gm *GameManager) TryMatchFromRedis(stakeAmount int, myQueueID int, myPhone
 			// No opponent - claim script returned no id; push own id and return
 			if err := gm.rdb.LPush(ctx, key, myQueueID).Err(); err != nil {
 				log.Printf("[MATCH] Failed to push own queue id %d to Redis key %s: %v", myQueueID, key, err)
+			} else {
+				log.Printf("[MATCH] Pushed my queue id %d into Redis for stake %d", myQueueID, stakeAmount)
+				// Quick, single retry to handle simultaneous arrivals: if list length >=2, attempt one more claim
+				if llen, err := gm.rdb.LLen(ctx, key).Result(); err == nil && llen >= 2 {
+					log.Printf("[MATCH] Detected potential race: list %s len=%d; attempting quick claim retry", key, llen)
+					time.Sleep(50 * time.Millisecond)
+					retryID, err := gm.claimJobFromRedis(stakeAmount)
+					log.Printf("[MATCH] Quick retry claim returned id=%d err=%v", retryID, err)
+					if err == nil && retryID != 0 {
+						oppID = retryID
+						// fall through to DB claim handling below
+					} else {
+						return nil, nil
+					}
+				}
 			}
-			return nil, nil
+			if oppID == 0 {
+				return nil, nil
+			}
 		}
 
 		// Try to claim the opponent row in the DB atomically by changing status to 'matching'
@@ -1051,6 +1082,7 @@ func (gm *GameManager) TryMatchFromRedis(stakeAmount int, myQueueID int, myPhone
 		if err != nil {
 			// Race - someone else claimed it or it was removed - cleanup processing entry then try next
 			if err == sql.ErrNoRows {
+				log.Printf("[MATCH] DB claim returned no rows for id %d (possibly raced), will cleanup and retry", oppID)
 				// cleanup processing entry (remove from processing list and zset)
 				processingKey := fmt.Sprintf("processing:stake:%d", stakeAmount)
 				processingTsKey := fmt.Sprintf("processing_ts:stake:%d", stakeAmount)
@@ -1077,6 +1109,8 @@ func (gm *GameManager) TryMatchFromRedis(stakeAmount int, myQueueID int, myPhone
 			}
 			return nil, nil
 		}
+
+		log.Printf("[MATCH] DB claim successful for oppID=%d phone=%s", oppQueue.ID, oppQueue.PhoneNumber)
 
 		// Avoid self-match if popped our own row unexpectedly
 		if oppQueue.PhoneNumber == myPhone {
@@ -1154,6 +1188,9 @@ func (gm *GameManager) TryMatchFromRedis(stakeAmount int, myQueueID int, myPhone
 
 		// Persist a game_sessions row if we have DB player ids
 		var sessionID int
+		if gm.db != nil && (!oppQueue.PlayerID.Valid || myDBPlayerID <= 0) {
+			log.Printf("[DB] Skipping DB session creation for in-memory match (oppPlayerID.Valid=%v, myDBPlayerID=%d) — game will remain in-memory", oppQueue.PlayerID.Valid, myDBPlayerID)
+		}
 		if gm.db != nil && oppQueue.PlayerID.Valid && myDBPlayerID > 0 {
 			tx, err := gm.db.Beginx()
 			if err != nil {

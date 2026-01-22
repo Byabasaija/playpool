@@ -197,6 +197,7 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 
 		// Try to match immediately using Redis (pop-before-push). If no match, push our queue id into Redis.
 		if game.Manager != nil {
+			log.Printf("[MATCH] Attempting immediate Redis match for queue_id=%d stake=%d phone=%s", queueID, req.StakeAmount, phone)
 			matchResult, err := game.Manager.TryMatchFromRedis(req.StakeAmount, queueID, phone, player.ID, player.DisplayName)
 			if err != nil {
 				log.Printf("[ERROR] TryMatchFromRedis failed: %v", err)
