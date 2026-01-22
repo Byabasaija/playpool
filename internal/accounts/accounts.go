@@ -16,6 +16,7 @@ const (
 	AccountPlatform        = "platform"
 	AccountEscrow          = "escrow"
 	AccountSettlement      = "settlement"
+	AccountTax             = "tax"
 )
 
 // GetOrCreateAccount returns an account for the given owner and type, creating it if missing

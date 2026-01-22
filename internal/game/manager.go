@@ -905,16 +905,16 @@ func (gm *GameManager) SaveFinalGameState(g *GameState) {
 			} else {
 				// Ensure accounts exist
 				escrowAcc, err1 := accounts.GetOrCreateAccount(gm.db, accounts.AccountEscrow, nil)
-				platformAcc, err2 := accounts.GetOrCreateAccount(gm.db, accounts.AccountPlatform, nil)
+				taxAcc, err2 := accounts.GetOrCreateAccount(gm.db, accounts.AccountTax, nil)
 				winnerAcc, err3 := accounts.GetOrCreateAccount(gm.db, accounts.AccountPlayerWinnings, &winnerDBID)
 				if err1 != nil || err2 != nil || err3 != nil {
 					log.Printf("[DB] Failed to resolve accounts for payout session %d: %v %v %v", g.SessionID, err1, err2, err3)
 					tx.Rollback()
 				} else {
-					// Debit ESCROW -> PLATFORM (payout tax)
+					// Debit ESCROW -> TAX (payout tax)
 					if payoutTax > 0 {
-						if err := accounts.Transfer(tx, escrowAcc.ID, platformAcc.ID, payoutTax, "SESSION", sql.NullInt64{Int64: int64(g.SessionID), Valid: true}, "Payout tax"); err != nil {
-							log.Printf("[DB] Failed to transfer payout tax for session %d: %v", g.SessionID, err)
+						if err := accounts.Transfer(tx, escrowAcc.ID, taxAcc.ID, payoutTax, "SESSION", sql.NullInt64{Int64: int64(g.SessionID), Valid: true}, "Payout tax"); err != nil {
+							log.Printf("[DB] Failed to transfer payout tax for session %d to tax account: %v", g.SessionID, err)
 							tx.Rollback()
 						} else {
 							// Debit ESCROW -> WINNER
