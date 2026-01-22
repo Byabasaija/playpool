@@ -113,6 +113,15 @@ func (h *Hub) Run() {
 							"message": "Failed to initialize game",
 						})
 					} else {
+						// Persist session start if we have a DB session id
+						if g.SessionID > 0 && game.Manager != nil {
+							if g.StartedAt != nil {
+								if err := game.Manager.MarkSessionStarted(g.SessionID, *g.StartedAt); err != nil {
+									log.Printf("[DB] MarkSessionStarted failed for session %d: %v", g.SessionID, err)
+								}
+							}
+						}
+
 						// Broadcast game start
 						h.BroadcastToGame(client.gameID, map[string]interface{}{
 							"type":    "game_starting",

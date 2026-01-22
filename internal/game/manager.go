@@ -961,12 +961,41 @@ func (gm *GameManager) SaveFinalGameState(g *GameState) {
 				log.Printf("[DB] Failed to update games_played for session %d: %v", g.SessionID, err)
 			}
 		}
+
+		// Ensure the game_sessions row reflects the final state (set winner, started_at if missing and completed_at)
+		var winnerParam interface{}
+		if winnerDBID > 0 {
+			winnerParam = winnerDBID
+		} else {
+			winnerParam = nil
+		}
+		var startedAtParam interface{}
+		if g.StartedAt != nil {
+			startedAtParam = *g.StartedAt
+		} else {
+			startedAtParam = nil
+		}
+		if _, err := gm.db.Exec(`UPDATE game_sessions SET status=$1, winner_id=$2, started_at = COALESCE(started_at, $3), completed_at = NOW() WHERE id = $4`, string(StatusCompleted), winnerParam, startedAtParam, g.SessionID); err != nil {
+			log.Printf("[DB] Failed to update game_sessions for session %d to completed: %v", g.SessionID, err)
+		}
 	} else {
 		_, err = gm.db.Exec(`UPDATE game_sessions SET status=$1 WHERE id=$2`, string(g.Status), g.SessionID)
 		if err != nil {
 			log.Printf("[DB] Failed to update game_sessions status for %d: %v", g.SessionID, err)
 		}
 	}
+}
+
+// MarkSessionStarted updates the session row to IN_PROGRESS and sets started_at if it wasn't set.
+func (gm *GameManager) MarkSessionStarted(sessionID int, startedAt time.Time) error {
+	if gm == nil || gm.db == nil || sessionID == 0 {
+		return nil
+	}
+	_, err := gm.db.Exec(`UPDATE game_sessions SET status=$1, started_at = COALESCE(started_at, $2) WHERE id=$3`, string(StatusInProgress), startedAt, sessionID)
+	if err != nil {
+		log.Printf("[DB] Failed to mark session %d as IN_PROGRESS: %v", sessionID, err)
+	}
+	return err
 }
 
 // UpdateDisplayName updates queue entries and in-memory game player display names for the given phone.
