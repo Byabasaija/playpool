@@ -11,13 +11,16 @@ export const LandingPage: React.FC = () => {
   const [commission, setCommission] = useState<number | null>(null);
   const [minStake, setMinStake] = useState<number>(1000);
   const [customStakeInput, setCustomStakeInput] = useState<string>('');
+  const [isPrivate, setIsPrivate] = useState(false);
+  const [matchCodeInput, setMatchCodeInput] = useState('');
   const navigate = useNavigate();
   
   // const baseUrl = import.meta.env.VITE_BACKEND_URL
-  const { stage, gameLink, isLoading, startGame, startPolling, reset, displayName, error } = useMatchmaking();
+  const { stage, gameLink, isLoading, startGame, startPolling, reset, displayName, error, privateMatch } = useMatchmaking();
 
   const [displayNameInput, setDisplayNameInput] = useState<string>('');
   const [expiredQueue, setExpiredQueue] = useState<{id:number, stake_amount:number} | null>(null);
+  const [timeLeft, setTimeLeft] = useState<number | null>(null);
 
   React.useEffect(() => {
     if (displayName) setDisplayNameInput(displayName);
@@ -90,6 +93,15 @@ export const LandingPage: React.FC = () => {
       return;
     }
 
+    // If match code is supplied, validate format
+    if (matchCodeInput) {
+      const code = matchCodeInput.trim().toUpperCase();
+      if (!/^[A-Z2-9]{6}$/.test(code)) {
+        setPhoneError('Invalid match code format (expect 6 chars, letters and digits)');
+        return;
+      }
+    }
+
     setPhoneError('');
 
     if (expiredQueue) {
@@ -111,7 +123,11 @@ export const LandingPage: React.FC = () => {
       return;
     }
 
-    await startGame(full, stake, displayNameInput || generateRandomName());
+    const opts: any = {};
+    if (isPrivate) opts.create_private = true;
+    if (matchCodeInput) opts.match_code = matchCodeInput.trim().toUpperCase();
+
+    await startGame(full, stake, displayNameInput || generateRandomName(), opts);
   };
 
 
@@ -126,6 +142,55 @@ export const LandingPage: React.FC = () => {
       }
     }
   }, [stage, gameLink, navigate]);
+
+  React.useEffect(() => {
+    let timer: any;
+    if (privateMatch?.expires_at) {
+      const expireTs = new Date(privateMatch.expires_at).getTime();
+      const update = () => {
+        const now = Date.now();
+        const diff = Math.max(0, Math.floor((expireTs - now) / 1000));
+        setTimeLeft(diff);
+        if (diff <= 0) {
+          clearInterval(timer);
+        }
+      };
+      update();
+      timer = setInterval(update, 1000);
+    } else {
+      setTimeLeft(null);
+    }
+    return () => clearInterval(timer);
+  }, [privateMatch]);
+
+  const handleShare = async () => {
+    if (!privateMatch) return;
+    const text = `Join my PlayMatatu private match. Code: ${privateMatch.match_code}. Expires: ${privateMatch.expires_at ? new Date(privateMatch.expires_at).toLocaleString() : ''}`;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: 'PlayMatatu Invite', text });
+        return;
+      } catch (e) {
+        // fallthrough to clipboard fallback
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(`${text}`);
+      alert('Code copied to clipboard. Share it with your friend!');
+    } catch (e) {
+      // as last resort, open sms: on mobile
+      window.location.href = `sms:?body=${encodeURIComponent(text)}`;
+    }
+  };
+
+  const handleWaitForFriend = async () => {
+    if (!privateMatch?.queue_token) {
+      alert('Queue token not available for polling');
+      return;
+    }
+    // start polling using manager hook
+    startPolling(privateMatch.queue_token, displayNameInput || generateRandomName());
+  };
 
   const renderContent = () => {
     switch (stage) {
@@ -220,6 +285,27 @@ export const LandingPage: React.FC = () => {
                 )}
               </div>
 
+              <div className="mt-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">Match Options</label>
+                <div className="flex items-center space-x-3 mb-2">
+                  <input type="checkbox" checked={isPrivate} onChange={(e) => setIsPrivate(e.target.checked)} disabled={!!matchCodeInput} id="create-private" />
+                  <label htmlFor="create-private" className="text-sm">Create a private match (generate code)</label>
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-700 mb-1">Or join with a code</label>
+                  <input
+                    type="text"
+                    value={matchCodeInput}
+                    onChange={(e) => setMatchCodeInput(e.target.value.toUpperCase().replace(/[^A-Z2-9]/g, ''))}
+                    placeholder="Enter 6-character code"
+                    maxLength={6}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg"
+                    disabled={isPrivate}
+                  />
+                  <p className="mt-1 text-sm text-gray-500">Either create a private match or provide a friend’s code to join directly.</p>
+                </div>
+              </div>
+
               <button
                 type="submit"
                 disabled={isLoading}
@@ -281,6 +367,34 @@ export const LandingPage: React.FC = () => {
             >
               Try Again
             </button>
+          </div>
+        );
+
+      case 'private_created':
+        return (
+          <div className="max-w-md mx-auto rounded-2xl p-8 text-center">
+            <div className="mb-6">
+              <div className="h-12 w-12 bg-[#373536] rounded-full mx-auto flex items-center justify-center">
+                <span className="text-white text-xl">🔒</span>
+              </div>
+            </div>
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">Private Match Created</h2>
+            <p className="text-gray-600 mb-4">Share this code with your friend to join the match:</p>
+            <div className="bg-gray-100 p-4 rounded-lg inline-block">
+              <div className="text-2xl font-mono" id="private-code">{privateMatch?.match_code}</div>
+              {privateMatch?.expires_at && (
+                <div className="text-sm text-gray-500">Expires: {new Date(privateMatch.expires_at).toLocaleString()}</div>
+              )}
+              {timeLeft !== null && timeLeft > 0 && (
+                <div className="text-sm text-gray-600 mt-2">Time remaining: {Math.floor(timeLeft/60)}:{String(timeLeft%60).padStart(2,'0')}</div>
+              )}
+            </div>
+            <div className="mt-6">
+              <button onClick={handleShare} className="px-4 py-2 bg-[#22c55e] text-white rounded-lg mr-3">Share</button>
+              <button onClick={() => { navigator.clipboard?.writeText(privateMatch?.match_code || ''); }} className="px-4 py-2 bg-[#373536] text-white rounded-lg mr-3">Copy Code</button>
+              <button onClick={handleWaitForFriend} disabled={!privateMatch?.queue_token} className="px-4 py-2 bg-[#0ea5e9] text-white rounded-lg mr-3">Wait for Friend</button>
+              <button onClick={() => { reset(); }} className="px-4 py-2 border rounded-lg">Done</button>
+            </div>
           </div>
         );
 

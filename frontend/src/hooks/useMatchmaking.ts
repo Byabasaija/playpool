@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { initiateStake, pollMatchStatus } from '../utils/apiClient';
 
-export type MatchmakingStage = 'form' | 'payment' | 'matching' | 'found' | 'error';
+export type MatchmakingStage = 'form' | 'payment' | 'matching' | 'found' | 'error' | 'private_created';
 
 export function useMatchmaking() {
   const [stage, setStage] = useState<MatchmakingStage>('form');
@@ -15,6 +15,7 @@ export function useMatchmaking() {
       return null;
     }
   });
+  const [privateMatch, setPrivateMatch] = useState<{ match_code: string; expires_at?: string; queue_id?: number; queue_token?: string } | null>(null);
 
   const setDisplayName = useCallback((name: string | null) => {
     setDisplayNameState(name);
@@ -26,15 +27,23 @@ export function useMatchmaking() {
     }
   }, []);
 
-  const startGame = useCallback(async (phone: string, stake: number, displayName?: string) => {
+  const startGame = useCallback(async (phone: string, stake: number, displayName?: string, opts?: { create_private?: boolean; match_code?: string }) => {
     setIsLoading(true);
     setError(null);
     setStage('payment');
 
     try {
       // Initiate stake
-      const stakeResult = await initiateStake(phone, stake, displayName);
+      const stakeResult = await initiateStake(phone, stake, displayName, opts);
       
+      // Handle private-created flow
+      if (stakeResult.status === 'private_created') {
+        setPrivateMatch({ match_code: stakeResult.match_code || '', expires_at: stakeResult.expires_at, queue_id: stakeResult.queue_id, queue_token: stakeResult.queue_token });
+        setStage('private_created' as MatchmakingStage);
+        setIsLoading(false);
+        return;
+      }
+
       // Store player ID (queue token)
       sessionStorage.setItem('queueToken', stakeResult.queue_token || stakeResult.player_id);
 
@@ -146,6 +155,7 @@ export function useMatchmaking() {
     setGameLink(null);
     setIsLoading(false);
     setDisplayName(null);
+    setPrivateMatch(null);
     // Clear session-scoped queue token
     try { sessionStorage.removeItem('queueToken'); } catch (e) {}
   }, [setDisplayName]);
@@ -158,6 +168,7 @@ export function useMatchmaking() {
     startGame,
     startPolling,
     reset,
-    displayName
+    displayName,
+    privateMatch,
   };
 }

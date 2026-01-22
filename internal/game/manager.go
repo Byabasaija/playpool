@@ -740,7 +740,7 @@ func (gm *GameManager) RehydrateQueueFromDB() error {
 
 	ctx := context.Background()
 	// Load queued rows grouped by stake
-	rows, err := gm.db.Queryx(`SELECT id, stake_amount FROM matchmaking_queue WHERE status='queued' AND expires_at > NOW() ORDER BY created_at`)
+	rows, err := gm.db.Queryx(`SELECT id, stake_amount FROM matchmaking_queue WHERE status='queued' AND is_private = FALSE AND expires_at > NOW() ORDER BY created_at`)
 	if err != nil {
 		log.Printf("[REHYDRATE] Failed to fetch queued rows from DB: %v", err)
 		return err
@@ -1485,4 +1485,200 @@ func (gm *GameManager) RemoveQueueEntriesByPhone(stakeAmount int, phone string) 
 	}
 	gm.matchmakingQueue[stakeAmount] = newQueue
 	return removed
+}
+
+// JoinPrivateMatch attempts to atomically claim a queued private entry identified by matchCode
+// and pairs it with the provided myQueueID (the joiner's queued row). It creates a game session
+// and reserves both stakes inside a DB transaction, returning a MatchResult on success.
+func (gm *GameManager) JoinPrivateMatch(matchCode string, myQueueID int, myPhone string, myDBPlayerID int, myDisplayName string, stakeAmount int) (*MatchResult, error) {
+	if gm.db == nil {
+		return nil, fmt.Errorf("db not available")
+	}
+
+	// Begin a DB transaction to claim the private entry and create the session atomically
+	tx, err := gm.db.Beginx()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin tx: %v", err)
+	}
+	defer func() {
+		if err != nil {
+			tx.Rollback()
+		}
+	}()
+
+	var oppQueue struct {
+		ID            int            `db:"id"`
+		PlayerID      sql.NullInt64  `db:"player_id"`
+		PhoneNumber   string         `db:"phone_number"`
+		TransactionID sql.NullInt64  `db:"transaction_id"`
+		QueueToken    sql.NullString `db:"queue_token"`
+		StakeAmount   float64        `db:"stake_amount"`
+	}
+
+	// Claim the private queued row by changing status to 'matching'
+	if err = tx.Get(&oppQueue, `UPDATE matchmaking_queue SET status='matching' WHERE match_code=$1 AND status='queued' AND is_private=TRUE AND expires_at > NOW() RETURNING id, player_id, phone_number, transaction_id, queue_token, stake_amount`, matchCode); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("match code not found or expired")
+		}
+		return nil, fmt.Errorf("db claim error: %v", err)
+	}
+
+	// Prevent self-join
+	if oppQueue.PhoneNumber == myPhone {
+		return nil, fmt.Errorf("cannot join your own match")
+	}
+
+	// Ensure stake parity
+	if int(oppQueue.StakeAmount) != stakeAmount {
+		return nil, fmt.Errorf("stake mismatch: code requires %d", int(oppQueue.StakeAmount))
+	}
+
+	// Load opponent player info
+	var oppPlayer models.Player
+	oppDBID := 0
+	if oppQueue.PlayerID.Valid {
+		oppDBID = int(oppQueue.PlayerID.Int64)
+		if err := tx.Get(&oppPlayer, `SELECT id, phone_number, display_name FROM players WHERE id=$1`, oppDBID); err != nil {
+			log.Printf("[MATCH] Failed to load opponent player %d: %v", oppDBID, err)
+		}
+	} else {
+		// If opponent has no DB identity, abort to avoid inconsistent financial operations
+		return nil, fmt.Errorf("opponent identity not available")
+	}
+
+	// Prepare in-memory game similar to TryMatchFromRedis
+	gameID := generateGameID()
+	gameToken := generateToken(16)
+	player1Token := generateToken(16)
+	player2Token := generateToken(16)
+
+	opponentEphemeral := "player_" + oppQueue.PhoneNumber[len(oppQueue.PhoneNumber)-4:] + "_" + generateToken(4)
+	myEphemeral := "player_" + myPhone[len(myPhone)-4:] + "_" + generateToken(4)
+
+	if oppQueue.QueueToken.Valid && oppQueue.QueueToken.String != "" {
+		opponentEphemeral = oppQueue.QueueToken.String
+	}
+
+	var myQueueTok struct {
+		QueueToken sql.NullString `db:"queue_token"`
+	}
+	if err2 := gm.db.Get(&myQueueTok, `SELECT queue_token FROM matchmaking_queue WHERE id=$1`, myQueueID); err2 == nil && myQueueTok.QueueToken.Valid && myQueueTok.QueueToken.String != "" {
+		myEphemeral = myQueueTok.QueueToken.String
+	}
+
+	// Create GameState (opponent is player1 to preserve existing ordering)
+	game := NewGame(
+		gameID,
+		gameToken,
+		opponentEphemeral,
+		oppQueue.PhoneNumber,
+		player1Token,
+		oppDBID,
+		oppPlayer.DisplayName,
+		myEphemeral,
+		myPhone,
+		player2Token,
+		myDBPlayerID,
+		myDisplayName,
+		stakeAmount,
+	)
+
+	// Save to memory
+	gm.mu.Lock()
+	gm.games[gameID] = game
+	gm.playerToGame[opponentEphemeral] = gameID
+	gm.playerToGame[myEphemeral] = gameID
+	gm.mu.Unlock()
+
+	// Persist session row and reserve stakes inside the transaction
+	var sessionID int
+	if err = tx.QueryRowx(`INSERT INTO game_sessions (game_token, player1_id, player2_id, stake_amount, status, created_at, expiry_time) VALUES ($1, $2, $3, $4, $5, NOW(), $6) RETURNING id`, gameToken, oppDBID, myDBPlayerID, stakeAmount, string(StatusWaiting), game.ExpiresAt).Scan(&sessionID); err != nil {
+		log.Printf("[DB] Failed to create game_session for private match: %v", err)
+		tx.Rollback()
+		// Attempt to reset opponent row to queued
+		if _, err2 := gm.db.Exec(`UPDATE matchmaking_queue SET status='queued' WHERE id=$1`, oppQueue.ID); err2 != nil {
+			log.Printf("[DB] Failed to reset opponent queue %d after session insert failure: %v", oppQueue.ID, err2)
+		}
+		return nil, fmt.Errorf("failed to create session")
+	}
+
+	// Reserve opponent stake
+	if err = gm.reserveStakeForSession(tx, oppDBID, oppQueue.ID, sessionID, stakeAmount); err != nil {
+		log.Printf("[DB] Failed to reserve opponent stake for private match: %v", err)
+		tx.Rollback()
+		if _, err2 := gm.db.Exec(`UPDATE matchmaking_queue SET status='queued' WHERE id=$1`, oppQueue.ID); err2 != nil {
+			log.Printf("[DB] Failed to reset opponent queue %d after reserve failure: %v", oppQueue.ID, err2)
+		}
+		return nil, fmt.Errorf("failed to reserve opponent stake")
+	}
+
+	// Reserve my stake
+	if err = gm.reserveStakeForSession(tx, myDBPlayerID, myQueueID, sessionID, stakeAmount); err != nil {
+		log.Printf("[DB] Failed to reserve my stake for private match: %v", err)
+		tx.Rollback()
+		if _, err2 := gm.db.Exec(`UPDATE matchmaking_queue SET status='queued' WHERE id=$1`, oppQueue.ID); err2 != nil {
+			log.Printf("[DB] Failed to reset opponent queue %d after my reserve failure: %v", oppQueue.ID, err2)
+		}
+		return nil, fmt.Errorf("failed to reserve my stake")
+	}
+
+	// All good - update both queue rows and commit
+	if _, err = tx.Exec(`UPDATE matchmaking_queue SET status='matched', matched_at=NOW(), session_id=$1 WHERE id=$2`, sessionID, oppQueue.ID); err != nil {
+		log.Printf("[DB] Failed to update opponent queue %d: %v", oppQueue.ID, err)
+		tx.Rollback()
+		if _, err2 := gm.db.Exec(`UPDATE matchmaking_queue SET status='queued' WHERE id=$1`, myQueueID); err2 != nil {
+			log.Printf("[DB] Failed to reset my queue row after update failure: %v", err2)
+		}
+		return nil, fmt.Errorf("failed to update opponent queue")
+	}
+	if _, err = tx.Exec(`UPDATE matchmaking_queue SET status='matched', matched_at=NOW(), session_id=$1 WHERE id=$2`, sessionID, myQueueID); err != nil {
+		log.Printf("[DB] Failed to update my queue %d: %v", myQueueID, err)
+		tx.Rollback()
+		if _, err2 := gm.db.Exec(`UPDATE matchmaking_queue SET status='queued' WHERE id=$1`, oppQueue.ID); err2 != nil {
+			log.Printf("[DB] Failed to reset opponent queue row after update failure: %v", err2)
+		}
+		return nil, fmt.Errorf("failed to update my queue")
+	}
+
+	if err = tx.Commit(); err != nil {
+		log.Printf("[DB] Failed to commit private match initialization: %v", err)
+		if _, err2 := gm.db.Exec(`UPDATE matchmaking_queue SET status='queued' WHERE id IN ($1,$2)`, oppQueue.ID, myQueueID); err2 != nil {
+			log.Printf("[DB] Failed to reset queue rows after commit failure: %v", err2)
+		}
+		return nil, fmt.Errorf("failed to commit match initialization")
+	}
+
+	// Remove in-memory queue entries for both players (they are now matched)
+	gm.RemoveQueueEntriesByPhone(stakeAmount, oppQueue.PhoneNumber)
+	gm.RemoveQueueEntriesByPhone(stakeAmount, myPhone)
+
+	// Attach session id to in-memory game and persist
+	gm.mu.Lock()
+	if g, ok := gm.games[gameID]; ok {
+		g.SessionID = sessionID
+		log.Printf("[DB] Session %d attached to in-memory game %s (private match)", sessionID, gameID)
+		go g.SaveToRedis()
+	}
+	gm.mu.Unlock()
+
+	// Build match result
+	baseURL := gm.config.FrontendURL
+	player1Link := baseURL + "/g/" + gameToken + "?pt=" + player1Token
+	player2Link := baseURL + "/g/" + gameToken + "?pt=" + player2Token
+
+	return &MatchResult{
+		GameID:             gameID,
+		GameToken:          gameToken,
+		Player1ID:          opponentEphemeral,
+		Player1Token:       player1Token,
+		Player1Link:        player1Link,
+		Player1DisplayName: oppPlayer.DisplayName,
+		Player2ID:          myEphemeral,
+		Player2Token:       player2Token,
+		Player2Link:        player2Link,
+		Player2DisplayName: myDisplayName,
+		StakeAmount:        stakeAmount,
+		ExpiresAt:          game.ExpiresAt,
+		SessionID:          sessionID,
+	}, nil
 }

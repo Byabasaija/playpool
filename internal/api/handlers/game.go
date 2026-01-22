@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"math/big"
 	"net/http"
 	"regexp"
 	"strings"
@@ -28,14 +29,33 @@ func generateQueueToken() string {
 	return hex.EncodeToString(b)
 }
 
+// generateMatchCode returns a short, human-friendly match code using Crockford-style base32
+func generateMatchCode(length int) string {
+	const charset = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+	var out strings.Builder
+	for i := 0; i < length; i++ {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		if err != nil {
+			// fallback using time
+			idx := int(time.Now().UnixNano() % int64(len(charset)))
+			out.WriteByte(charset[idx])
+			continue
+		}
+		out.WriteByte(charset[n.Int64()])
+	}
+	return out.String()
+}
+
 // InitiateStake handles stake initiation from web
 // For development: This is a DUMMY payment - no actual Mobile Money integration
 func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			PhoneNumber string `json:"phone_number" binding:"required"`
-			StakeAmount int    `json:"stake_amount" binding:"required"`
-			DisplayName string `json:"display_name,omitempty"`
+			PhoneNumber   string `json:"phone_number" binding:"required"`
+			StakeAmount   int    `json:"stake_amount" binding:"required"`
+			DisplayName   string `json:"display_name,omitempty"`
+			CreatePrivate bool   `json:"create_private,omitempty"`
+			MatchCode     string `json:"match_code,omitempty"`
 		}
 
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -97,6 +117,22 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 					player.DisplayName = name
 				}
 			}
+		}
+
+		// Validate match_code if provided (join-by-code path)
+		const defaultMatchCodeLength = 6
+		if req.MatchCode != "" {
+			code := strings.ToUpper(strings.TrimSpace(req.MatchCode))
+			if len(code) != defaultMatchCodeLength {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid match_code"})
+				return
+			}
+			// basic charset check
+			if matched, _ := regexp.MatchString(`^[A-Z2-9]{6}$`, code); !matched {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid match_code format"})
+				return
+			}
+			req.MatchCode = code
 		}
 
 		log.Printf("[INFO] InitiateStake - player: id=%d phone=%s display_name=%s", player.ID, player.PhoneNumber, player.DisplayName)
@@ -185,14 +221,110 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 		var queueID int
 		expiresAt := time.Now().Add(time.Duration(cfg.QueueExpiryMinutes) * time.Minute)
 		if db != nil {
+			// CREATE PRIVATE: generate a unique match code and mark row private
+			if req.CreatePrivate {
+				// Attempt to generate and insert a unique match code several times on conflict
+				attempts := 0
+				var inserted bool
+				for attempts < 5 && !inserted {
+					attempts++
+					code := generateMatchCode(defaultMatchCodeLength)
+					insertQ := `INSERT INTO matchmaking_queue (player_id, phone_number, stake_amount, transaction_id, queue_token, status, created_at, expires_at, match_code, is_private) VALUES ($1,$2,$3,$4,$5,'queued',NOW(),$6,$7, TRUE) RETURNING id`
+					if err := db.QueryRowx(insertQ, player.ID, phone, float64(req.StakeAmount), txID, queueToken, expiresAt, code).Scan(&queueID); err != nil {
+						if strings.Contains(err.Error(), "duplicate key") {
+							log.Printf("[DB] match_code collision on attempt %d, retrying", attempts)
+							continue
+						}
+						log.Printf("[DB] Failed to insert private matchmaking_queue for player %d: %v", player.ID, err)
+						c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create private match"})
+						return
+					}
+					inserted = true
+					if game.Manager != nil {
+						entry := game.QueueEntry{
+							QueueToken:  queueToken,
+							PhoneNumber: phone,
+							StakeAmount: req.StakeAmount,
+							DBPlayerID:  player.ID,
+							DisplayName: player.DisplayName,
+							JoinedAt:    time.Now(),
+						}
+						game.Manager.AddQueueEntry(req.StakeAmount, entry)
+					}
+					c.JSON(http.StatusOK, gin.H{
+						"status":       "private_created",
+						"match_code":   code,
+						"expires_at":   expiresAt,
+						"queue_id":     queueID,
+						"queue_token":  queueToken,
+						"message":      "Private match created. Share the code with a friend.",
+						"player_token": player.PlayerToken,
+					})
+				}
+				if !inserted {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate unique match code, try again"})
+				}
+				return
+			}
+
+			// NORMAL / JOINER PATH: regular insert (we still include match_code if supplied by the client as a join attempt but not for public queueing)
 			insertQ := `INSERT INTO matchmaking_queue (player_id, phone_number, stake_amount, transaction_id, queue_token, status, created_at, expires_at) VALUES ($1,$2,$3,$4,$5,'queued',NOW(),$6) RETURNING id`
 			if err := db.QueryRowx(insertQ, player.ID, phone, float64(req.StakeAmount), txID, queueToken, expiresAt).Scan(&queueID); err != nil {
 				log.Printf("[DB] Failed to insert matchmaking_queue for player %d: %v", player.ID, err)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to queue player"})
 				return
 			}
+		}
 
-			// Note: STAKE_IN is created at match initialization (when a session is created and funds move to ESCROW)
+		// If client provided a match code, attempt to claim it atomically and create a private match
+		if req.MatchCode != "" {
+			if game.Manager == nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "match service unavailable"})
+				return
+			}
+			log.Printf("[MATCH] Attempting join-by-code for code=%s queue_id=%d phone=%s", req.MatchCode, queueID, phone)
+			matchResult, err := game.Manager.JoinPrivateMatch(req.MatchCode, queueID, phone, player.ID, player.DisplayName, req.StakeAmount)
+			if err != nil {
+				log.Printf("[MATCH] JoinPrivateMatch failed for code %s: %v", req.MatchCode, err)
+				// cleanup our inserted queue row to avoid leaving user in normal queue when join-by-code failed
+				if _, err2 := db.Exec(`DELETE FROM matchmaking_queue WHERE id=$1`, queueID); err2 != nil {
+					log.Printf("[DB] Failed to delete my queue row after JoinPrivateMatch failure: %v", err2)
+				}
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+
+			// Successful private join - return matched response (same structure as immediate match)
+			var myLink string
+			var myDisplayName, opponentDisplayName string
+			if matchResult.Player2ID == queueToken {
+				myLink = matchResult.Player2Link
+				myDisplayName = matchResult.Player2DisplayName
+				opponentDisplayName = matchResult.Player1DisplayName
+			} else {
+				myLink = matchResult.Player1Link
+				myDisplayName = matchResult.Player1DisplayName
+				opponentDisplayName = matchResult.Player2DisplayName
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"status":                "matched",
+				"game_id":               matchResult.GameID,
+				"game_token":            matchResult.GameToken,
+				"player_id":             queueToken, // legacy field (kept for compatibility)
+				"queue_token":           queueToken,
+				"player_token":          player.PlayerToken,
+				"game_link":             myLink,
+				"stake_amount":          req.StakeAmount,
+				"prize_amount":          int(float64(req.StakeAmount*2) * 0.9), // 10% commission
+				"expires_at":            matchResult.ExpiresAt,
+				"message":               "Opponent found! Click link to start game.",
+				"transaction_id":        transactionID,
+				"my_display_name":       myDisplayName,
+				"opponent_display_name": opponentDisplayName,
+				"session_id":            matchResult.SessionID,
+			})
+			return
 		}
 
 		// Try to match immediately using Redis (pop-before-push). If no match, push our queue id into Redis.

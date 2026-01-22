@@ -3,13 +3,15 @@ import { formatPhone } from './phoneUtils';
 
 const API_BASE = '/api/v1';
 
-export async function initiateStake(phone: string, stake: number, displayName?: string): Promise<StakeResponse> {
+export async function initiateStake(phone: string, stake: number, displayName?: string, opts?: { create_private?: boolean; match_code?: string }): Promise<StakeResponse> {
   const body:any = {
     phone_number: formatPhone(phone),
     stake_amount: stake
   } as StakeRequest
 
   if (displayName) body.display_name = displayName
+  if (opts?.create_private) body.create_private = true
+  if (opts?.match_code) body.match_code = opts.match_code
 
   const response = await fetch(`${API_BASE}/game/stake`, {
     method: 'POST',
@@ -34,6 +36,10 @@ export async function initiateStake(phone: string, stake: number, displayName?: 
     display_name: data.display_name,
     my_display_name: data.my_display_name,
     opponent_display_name: data.opponent_display_name,
+    queue_token: data.queue_token,
+    match_code: data.match_code,
+    expires_at: data.expires_at,
+    queue_id: data.queue_id,
   } as StakeResponse;
 }
 
