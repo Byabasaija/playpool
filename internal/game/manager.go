@@ -17,6 +17,7 @@ import (
 	"github.com/playmatatu/backend/internal/accounts"
 	"github.com/playmatatu/backend/internal/config"
 	"github.com/playmatatu/backend/internal/models"
+	"github.com/playmatatu/backend/internal/sms"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -1293,33 +1294,65 @@ func (gm *GameManager) TryMatchFromRedis(stakeAmount int, myQueueID int, myPhone
 									go g.SaveToRedis()
 								}
 								gm.mu.Unlock()
+
+								// Send match SMS notifications if we have a persisted session
+								if sessionID > 0 && sms.Default != nil {
+									oppName := oppPlayer.DisplayName
+									if oppName == "" {
+										oppName = oppQueue.PhoneNumber
+									}
+									myName := myDisplayName
+									if myName == "" {
+										myName = myPhone
+									}
+
+									baseURL := gm.config.FrontendURL
+									player1Link := baseURL + "/g/" + gameToken + "?pt=" + player1Token
+									player2Link := baseURL + "/g/" + gameToken + "?pt=" + player2Token
+
+									go func(oppPhone, joinerPhone, link1, link2, oppName, joinerName string, stake int) {
+										ctx := context.Background()
+										msgOpp := fmt.Sprintf("Matched on PlayMatatu vs %s! Stake %d UGX. Join: %s", joinerName, stake, link1)
+										if msgID, err := sms.SendSMS(ctx, oppPhone, msgOpp); err != nil {
+											log.Printf("[SMS] Failed to send match SMS to %s: %v", oppPhone, err)
+										} else {
+											log.Printf("[SMS] Match SMS sent to %s msg_id=%s", oppPhone, msgID)
+										}
+										msgMe := fmt.Sprintf("Matched on PlayMatatu vs %s! Stake %d UGX. Join: %s", oppName, stake, link2)
+										if msgID, err := sms.SendSMS(ctx, joinerPhone, msgMe); err != nil {
+											log.Printf("[SMS] Failed to send match SMS to %s: %v", joinerPhone, err)
+										} else {
+											log.Printf("[SMS] Match SMS sent to %s msg_id=%s", joinerPhone, msgID)
+										}
+									}(oppQueue.PhoneNumber, myPhone, player1Link, player2Link, oppName, myName, stakeAmount)
+								}
 							}
 						}
 					}
 				}
+
+				// Build match result
+				baseURL := gm.config.FrontendURL
+				player1Link := baseURL + "/g/" + gameToken + "?pt=" + player1Token
+				player2Link := baseURL + "/g/" + gameToken + "?pt=" + player2Token
+
+				return &MatchResult{
+					GameID:             gameID,
+					GameToken:          gameToken,
+					Player1ID:          opponentEphemeral,
+					Player1Token:       player1Token,
+					Player1Link:        player1Link,
+					Player1DisplayName: oppPlayer.DisplayName,
+					Player2ID:          myEphemeral,
+					Player2Token:       player2Token,
+					Player2Link:        player2Link,
+					Player2DisplayName: myDisplayName,
+					StakeAmount:        stakeAmount,
+					ExpiresAt:          game.ExpiresAt,
+					SessionID:          sessionID,
+				}, nil
 			}
 		}
-
-		// Build match result
-		baseURL := gm.config.FrontendURL
-		player1Link := baseURL + "/g/" + gameToken + "?pt=" + player1Token
-		player2Link := baseURL + "/g/" + gameToken + "?pt=" + player2Token
-
-		return &MatchResult{
-			GameID:             gameID,
-			GameToken:          gameToken,
-			Player1ID:          opponentEphemeral,
-			Player1Token:       player1Token,
-			Player1Link:        player1Link,
-			Player1DisplayName: oppPlayer.DisplayName,
-			Player2ID:          myEphemeral,
-			Player2Token:       player2Token,
-			Player2Link:        player2Link,
-			Player2DisplayName: myDisplayName,
-			StakeAmount:        stakeAmount,
-			ExpiresAt:          game.ExpiresAt,
-			SessionID:          sessionID,
-		}, nil
 	}
 
 	// Nothing matched after attempts — push own id and return
@@ -1660,6 +1693,38 @@ func (gm *GameManager) JoinPrivateMatch(matchCode string, myQueueID int, myPhone
 		go g.SaveToRedis()
 	}
 	gm.mu.Unlock()
+
+	// Send match SMS notifications for private matches (best-effort)
+	if sessionID > 0 && sms.Default != nil {
+		oppName := oppPlayer.DisplayName
+		if oppName == "" {
+			oppName = oppQueue.PhoneNumber
+		}
+		myName := myDisplayName
+		if myName == "" {
+			myName = myPhone
+		}
+
+		baseURL := gm.config.FrontendURL
+		player1Link := baseURL + "/g/" + gameToken + "?pt=" + player1Token
+		player2Link := baseURL + "/g/" + gameToken + "?pt=" + player2Token
+
+		go func(oppPhone, joinerPhone, link1, link2, oppName, joinerName string, stake int) {
+			ctx := context.Background()
+			msgOpp := fmt.Sprintf("Private match found with %s! Stake %d UGX. Join: %s", joinerName, stake, link1)
+			if msgID, err := sms.SendSMS(ctx, oppPhone, msgOpp); err != nil {
+				log.Printf("[SMS] Failed to send private match SMS to %s: %v", oppPhone, err)
+			} else {
+				log.Printf("[SMS] Private match SMS sent to %s msg_id=%s", oppPhone, msgID)
+			}
+			msgMe := fmt.Sprintf("Private match found with %s! Stake %d UGX. Join: %s", oppName, stake, link2)
+			if msgID, err := sms.SendSMS(ctx, joinerPhone, msgMe); err != nil {
+				log.Printf("[SMS] Failed to send private match SMS to %s: %v", joinerPhone, err)
+			} else {
+				log.Printf("[SMS] Private match SMS sent to %s msg_id=%s", joinerPhone, msgID)
+			}
+		}(oppQueue.PhoneNumber, myPhone, player1Link, player2Link, oppName, myName, stakeAmount)
+	}
 
 	// Build match result
 	baseURL := gm.config.FrontendURL

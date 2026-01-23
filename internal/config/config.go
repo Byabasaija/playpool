@@ -43,6 +43,13 @@ type Config struct {
 	AfricasTalkingUsername string
 	AfricasTalkingAPIKey   string
 
+	// SMS (DMark)
+	SMSServiceBaseURL       string
+	SMSServiceUsername      string
+	SMSServicePassword      string
+	SMSRateLimitSeconds     int
+	SMSTokenFallbackSeconds int
+
 	// Mobile Money
 	MomoAPIKey          string
 	MomoAPISecret       string
@@ -93,6 +100,13 @@ func Load() *Config {
 		SMSSenderID:            getEnv("SMS_SENDER_ID", "PlayMatatu"),
 		AfricasTalkingUsername: getEnv("AFRICAS_TALKING_USERNAME", ""),
 		AfricasTalkingAPIKey:   getEnv("AFRICAS_TALKING_API_KEY", ""),
+
+		// DMark SMS (minimal config)
+		SMSServiceBaseURL:       getEnv("SMS_SERVICE_BASE_URL", ""),
+		SMSServiceUsername:      getEnv("SMS_SERVICE_USERNAME", ""),
+		SMSServicePassword:      getEnv("SMS_SERVICE_PASSWORD", ""),
+		SMSRateLimitSeconds:     getEnvInt("SMS_RATE_LIMIT_SECONDS", 30),
+		SMSTokenFallbackSeconds: getEnvInt("SMS_TOKEN_FALLBACK_SECONDS", 3000),
 
 		// Mobile Money
 		MomoAPIKey:          getEnv("MOMO_API_KEY", ""),

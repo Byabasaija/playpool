@@ -1,13 +1,16 @@
 package handlers
 
 import (
+	"context"
+	"fmt"
 	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
-	"github.com/redis/go-redis/v9"
 	"github.com/playmatatu/backend/internal/config"
+	"github.com/playmatatu/backend/internal/sms"
+	"github.com/redis/go-redis/v9"
 )
 
 // MomoCallbackRequest represents Mobile Money callback payload
@@ -37,10 +40,27 @@ func HandleMomoCallback(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.
 			// TODO: Update transaction status in DB
 			// TODO: Add player to matchmaking queue
 			// TODO: Trigger matchmaking
+			// Notify payer via SMS (best-effort)
+			if callback.PhoneNumber != "" && sms.Default != nil {
+				go func(phone string, amount int) {
+					msg := fmt.Sprintf("Payment of %d UGX received. Searching for opponent...", amount)
+					if _, err := sms.SendSMS(context.Background(), phone, msg); err != nil {
+						log.Printf("[SMS] Failed to send payment success SMS to %s: %v", phone, err)
+					}
+				}(callback.PhoneNumber, callback.Amount)
+			}
 
 		case "FAILED":
 			// TODO: Update transaction status in DB
 			// TODO: Notify player via SMS
+			if callback.PhoneNumber != "" && sms.Default != nil {
+				go func(phone string, amount int) {
+					msg := fmt.Sprintf("Payment of %d UGX failed. Please retry or contact support.", amount)
+					if _, err := sms.SendSMS(context.Background(), phone, msg); err != nil {
+						log.Printf("[SMS] Failed to send payment failure SMS to %s: %v", phone, err)
+					}
+				}(callback.PhoneNumber, callback.Amount)
+			}
 
 		default:
 			log.Printf("Unknown MoMo callback status: %s", callback.Status)

@@ -3,7 +3,7 @@ import { formatPhone } from './phoneUtils';
 
 const API_BASE = '/api/v1';
 
-export async function initiateStake(phone: string, stake: number, displayName?: string, opts?: { create_private?: boolean; match_code?: string }): Promise<StakeResponse> {
+export async function initiateStake(phone: string, stake: number, displayName?: string, opts?: { create_private?: boolean; match_code?: string; invite_phone?: string }): Promise<StakeResponse> {
   const body:any = {
     phone_number: formatPhone(phone),
     stake_amount: stake
@@ -12,6 +12,7 @@ export async function initiateStake(phone: string, stake: number, displayName?: 
   if (displayName) body.display_name = displayName
   if (opts?.create_private) body.create_private = true
   if (opts?.match_code) body.match_code = opts.match_code
+  if (opts?.invite_phone) body.invite_phone = formatPhone(opts.invite_phone)
 
   const response = await fetch(`${API_BASE}/game/stake`, {
     method: 'POST',

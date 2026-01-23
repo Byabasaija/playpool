@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
@@ -17,6 +18,7 @@ import (
 	"github.com/playmatatu/backend/internal/accounts"
 	"github.com/playmatatu/backend/internal/config"
 	"github.com/playmatatu/backend/internal/game"
+	"github.com/playmatatu/backend/internal/sms"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -56,6 +58,7 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 			DisplayName   string `json:"display_name,omitempty"`
 			CreatePrivate bool   `json:"create_private,omitempty"`
 			MatchCode     string `json:"match_code,omitempty"`
+			InvitePhone   string `json:"invite_phone,omitempty"`
 		}
 
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -251,14 +254,33 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 						}
 						game.Manager.AddQueueEntry(req.StakeAmount, entry)
 					}
+
+					// If the creator supplied an invite phone, send an invite SMS asynchronously (best-effort)
+					var smsInviteQueued bool
+					if strings.TrimSpace(req.InvitePhone) != "" && sms.Default != nil {
+						invitePhone := normalizePhone(req.InvitePhone)
+						if invitePhone != "" {
+							smsInviteQueued = true
+							go func(code string, invite string, stake int) {
+								msg := fmt.Sprintf("Join my PlayMatatu private match! Code: %s. Stake: %d UGX. Expires: %s. Visit: %s", code, stake, expiresAt.Format(time.RFC1123), cfg.FrontendURL)
+								if msgID, err := sms.SendSMS(context.Background(), invite, msg); err != nil {
+									log.Printf("[SMS] Failed to send invite to %s: %v", invite, err)
+								} else {
+									log.Printf("[SMS] Invite sent to %s msg_id=%s", invite, msgID)
+								}
+							}(code, invitePhone, req.StakeAmount)
+						}
+					}
+
 					c.JSON(http.StatusOK, gin.H{
-						"status":       "private_created",
-						"match_code":   code,
-						"expires_at":   expiresAt,
-						"queue_id":     queueID,
-						"queue_token":  queueToken,
-						"message":      "Private match created. Share the code with a friend.",
-						"player_token": player.PlayerToken,
+						"status":            "private_created",
+						"match_code":        code,
+						"expires_at":        expiresAt,
+						"queue_id":          queueID,
+						"queue_token":       queueToken,
+						"sms_invite_queued": smsInviteQueued,
+						"message":           "Private match created. Share the code with a friend.",
+						"player_token":      player.PlayerToken,
 					})
 				}
 				if !inserted {

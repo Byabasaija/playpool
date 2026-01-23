@@ -13,6 +13,7 @@ export const LandingPage: React.FC = () => {
   const [customStakeInput, setCustomStakeInput] = useState<string>('');
   const [isPrivate, setIsPrivate] = useState(false);
   const [matchCodeInput, setMatchCodeInput] = useState('');
+  const [invitePhoneInput, setInvitePhoneInput] = useState<string>('');
   const navigate = useNavigate();
   
   // const baseUrl = import.meta.env.VITE_BACKEND_URL
@@ -126,6 +127,7 @@ export const LandingPage: React.FC = () => {
     const opts: any = {};
     if (isPrivate) opts.create_private = true;
     if (matchCodeInput) opts.match_code = matchCodeInput.trim().toUpperCase();
+    if (invitePhoneInput) opts.invite_phone = invitePhoneInput;
 
     await startGame(full, stake, displayNameInput || generateRandomName(), opts);
   };
@@ -289,7 +291,7 @@ export const LandingPage: React.FC = () => {
                 <label className="block text-sm font-medium text-gray-700 mb-2">Match Options</label>
                 <div className="flex items-center space-x-3 mb-2">
                   <input type="checkbox" checked={isPrivate} onChange={(e) => setIsPrivate(e.target.checked)} disabled={!!matchCodeInput} id="create-private" />
-                  <label htmlFor="create-private" className="text-sm">Create a private match (generate code)</label>
+                  <label htmlFor="create-private" className="text-sm">Invite a friend (generate code)</label>
                 </div>
                 <div>
                   <label className="block text-sm text-gray-700 mb-1">Or join with a code</label>
@@ -302,7 +304,19 @@ export const LandingPage: React.FC = () => {
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg"
                     disabled={isPrivate}
                   />
-                  <p className="mt-1 text-sm text-gray-500">Either create a private match or provide a friend’s code to join directly.</p>
+                  <p className="mt-1 text-sm text-gray-500">Either invite a friend or provide a friend’s code to join directly.</p>
+                </div>
+
+                <div style={{ display: isPrivate ? 'block' : 'none' }} className="mt-3">
+                  <label className="block text-sm text-gray-700 mb-1">Invite phone (optional)</label>
+                  <input
+                    type="tel"
+                    value={invitePhoneInput}
+                    onChange={(e) => setInvitePhoneInput(e.target.value)}
+                    placeholder="7XX XXX XXX or +2567XXXXXXXX"
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg"
+                  />
+                  <p className="mt-1 text-sm text-gray-500">If you provide a phone, we'll send the code via SMS.</p>
                 </div>
               </div>
 

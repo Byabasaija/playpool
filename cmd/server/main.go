@@ -12,6 +12,7 @@ import (
 	"github.com/playmatatu/backend/internal/game"
 	"github.com/playmatatu/backend/internal/migrations"
 	"github.com/playmatatu/backend/internal/redis"
+	"github.com/playmatatu/backend/internal/sms"
 )
 
 func main() {
@@ -47,6 +48,17 @@ func main() {
 
 	// Initialize Game Manager with Redis and config
 	game.InitializeManager(db, rdb, cfg)
+
+	// Initialize DMark SMS client (if configured)
+	if cfg.SMSServiceBaseURL != "" && cfg.SMSServiceUsername != "" && cfg.SMSServicePassword != "" {
+		smsClient := sms.NewClient(cfg, rdb)
+		if smsClient != nil {
+			sms.SetDefault(smsClient)
+			log.Printf("[SMS] DMark SMS client initialized (base=%s)", cfg.SMSServiceBaseURL)
+		}
+	} else {
+		log.Printf("[SMS] SMS is not configured (SMS_SERVICE_BASE_URL/SMS_SERVICE_USERNAME missing)")
+	}
 
 	// Set up Gin router
 	if cfg.Environment == "production" {

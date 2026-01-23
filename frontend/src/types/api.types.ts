@@ -4,6 +4,7 @@ export interface StakeRequest {
   display_name?: string;
   create_private?: boolean;
   match_code?: string;
+  invite_phone?: string;
 }
 
 export interface StakeResponse {
