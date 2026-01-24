@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useMatchmaking } from '../hooks/useMatchmaking';
 import { formatPhone, validatePhone } from '../utils/phoneUtils';
-import { getPlayerProfile } from '../utils/apiClient';
 
 function generateRandomName() {
   const adjectives = ["Lucky", "Swift", "Brave", "Jolly", "Mighty", "Quiet", "Clever", "Happy", "Kitenge", "Zesty"];
@@ -13,7 +13,16 @@ function generateRandomName() {
 }
 
 export const JoinPage: React.FC = () => {
-  const { startGame, isLoading, error } = useMatchmaking();
+  const { startGame, isLoading, error, stage, gameLink } = useMatchmaking();
+  const navigate = useNavigate();
+
+  // Redirect when game is found (for join flow)
+  useEffect(() => {
+    if (stage === 'found' && gameLink) {
+      navigate(gameLink);
+    }
+  }, [stage, gameLink, navigate]);
+
   const [phoneRest, setPhoneRest] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [stake, setStake] = useState<number>(1000);

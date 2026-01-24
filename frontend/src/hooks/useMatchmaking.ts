@@ -60,6 +60,18 @@ export function useMatchmaking() {
 
       // Check if immediately matched
       if (stakeResult.status === 'matched' && stakeResult.game_link) {
+        // Persist the player token from the game_link (pt query param) for reconnect fallback
+        try {
+          const u = new URL(stakeResult.game_link);
+          const pt = u.searchParams.get('pt');
+          const match = u.pathname.match(/\/g\/([^/?]+)/);
+          if (pt && match && match[1]) {
+            localStorage.setItem('playerToken_' + match[1], pt);
+          }
+        } catch (e) {
+          // ignore URL parsing errors
+        }
+
         setGameLink(stakeResult.game_link);
         setStage('found');
         setIsLoading(false);
@@ -81,6 +93,16 @@ export function useMatchmaking() {
         if (result.my_display_name) setDisplayName(result.my_display_name);
 
         if (result.status === 'matched' && result.game_link) {
+          // Persist player token from the returned game_link
+          try {
+            const u = new URL(result.game_link);
+            const pt = u.searchParams.get('pt');
+            const match = u.pathname.match(/\/g\/([^/?]+)/);
+            if (pt && match && match[1]) {
+              localStorage.setItem('playerToken_' + match[1], pt);
+            }
+          } catch (e) { }
+
           setGameLink(result.game_link);
           setStage('found');
           setIsLoading(false);
@@ -128,6 +150,16 @@ export function useMatchmaking() {
         if (result.my_display_name) setDisplayName(result.my_display_name);
 
         if (result.status === 'matched' && result.game_link) {
+          // Persist player token from the returned game_link
+          try {
+            const u = new URL(result.game_link);
+            const pt = u.searchParams.get('pt');
+            const match = u.pathname.match(/\/g\/([^/?]+)/);
+            if (pt && match && match[1]) {
+              localStorage.setItem('playerToken_' + match[1], pt);
+            }
+          } catch (e) { }
+
           setGameLink(result.game_link);
           setStage('found');
           setIsLoading(false);

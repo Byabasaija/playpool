@@ -104,39 +104,51 @@ func (h *Hub) Run() {
 
 				// Check if both players are now connected AND game hasn't started yet
 				if g.Status == game.StatusWaiting && g.BothPlayersConnected() {
-					log.Printf("✓ Both players connected - initializing game %s", g.ID)
+					log.Printf("✓ Both players connected - scheduling initialization of game %s", g.ID)
 
-					if err := g.Initialize(); err != nil {
-						log.Printf("❌ Init failed: %v", err)
-						h.SendToPlayer(client.playerID, map[string]interface{}{
-							"type":    "error",
-							"message": "Failed to initialize game",
-						})
-					} else {
+					// Short debounce to allow any racing reconnect/replace operations to settle
+					go func(gRef *game.GameState, gameClient *Client) {
+						time.Sleep(150 * time.Millisecond)
+						// Re-check conditions
+						if gRef.Status != game.StatusWaiting || !gRef.BothPlayersConnected() {
+							log.Printf("[INIT] Delayed init aborted for %s - status=%s both_connected=%v", gRef.ID, gRef.Status, gRef.BothPlayersConnected())
+							return
+						}
+
+						if err := gRef.Initialize(); err != nil {
+							log.Printf("❌ Init failed: %v", err)
+							h.SendToPlayer(gameClient.playerID, map[string]interface{}{
+								"type":    "error",
+								"message": "Failed to initialize game",
+							})
+							return
+						}
+
 						// Persist session start if we have a DB session id
-						if g.SessionID > 0 && game.Manager != nil {
-							if g.StartedAt != nil {
-								if err := game.Manager.MarkSessionStarted(g.SessionID, *g.StartedAt); err != nil {
-									log.Printf("[DB] MarkSessionStarted failed for session %d: %v", g.SessionID, err)
+						if gRef.SessionID > 0 && game.Manager != nil {
+							if gRef.StartedAt != nil {
+								if err := game.Manager.MarkSessionStarted(gRef.SessionID, *gRef.StartedAt); err != nil {
+									log.Printf("[DB] MarkSessionStarted failed for session %d: %v", gRef.SessionID, err)
 								}
 							}
 						}
 
 						// Broadcast game start
-						h.BroadcastToGame(client.gameID, map[string]interface{}{
+						h.BroadcastToGame(gameClient.gameID, map[string]interface{}{
 							"type":    "game_starting",
 							"message": "Both players connected! Dealing cards...",
 						})
 
 						// Send game state to both players
-						p1State := g.GetGameStateForPlayer(g.Player1.ID)
+						p1State := gRef.GetGameStateForPlayer(gRef.Player1.ID)
 						p1State["type"] = "game_state"
-						p2State := g.GetGameStateForPlayer(g.Player2.ID)
+						p2State := gRef.GetGameStateForPlayer(gRef.Player2.ID)
 						p2State["type"] = "game_state"
 
-						h.SendToPlayer(g.Player1.ID, p1State)
-						h.SendToPlayer(g.Player2.ID, p2State)
-					}
+						h.SendToPlayer(gRef.Player1.ID, p1State)
+						h.SendToPlayer(gRef.Player2.ID, p2State)
+					}(g, client)
+
 				} else if g.Status == game.StatusWaiting {
 					// Still waiting for opponent - send waiting message
 					h.SendToPlayer(client.playerID, map[string]interface{}{
@@ -181,13 +193,20 @@ func (h *Hub) Run() {
 				if g, err := game.Manager.GetGameByToken(client.gameToken); err == nil {
 					g.SetPlayerDisconnected(client.playerID)
 
-					// Only notify if game is in progress
+					// Only notify if game is in progress — delay short notifications to avoid flapping
 					if g.Status == game.StatusInProgress {
-						h.BroadcastToGame(client.gameID, map[string]interface{}{
-							"type":    "player_disconnected",
-							"player":  client.playerID,
-							"message": "Opponent disconnected. Waiting 2 minutes...",
-						})
+						go func(token, gameID, playerID string) {
+							time.Sleep(500 * time.Millisecond)
+							if g2, err := game.Manager.GetGameByToken(token); err == nil {
+								if p := g2.GetPlayerByID(playerID); p != nil && !p.Connected && p.DisconnectedAt != nil && time.Since(*p.DisconnectedAt) >= 500*time.Millisecond {
+									h.BroadcastToGame(gameID, map[string]interface{}{
+										"type":    "player_disconnected",
+										"player":  playerID,
+										"message": "Opponent disconnected. Waiting 2 minutes...",
+									})
+								}
+							}
+						}(client.gameToken, client.gameID, client.playerID)
 					}
 				}
 			}

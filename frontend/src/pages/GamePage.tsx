@@ -21,27 +21,81 @@ export const GamePage: React.FC = () => {
   const { gameState, gameOver, updateFromWSMessage, setCanPass, addCardsToHand, updateOpponentCardCount, setTokens } = useGameState();
   
   const [notice, setNotice] = useState<string | null>(null);
+  const disconnectedTimerRef = useRef<number | null>(null);
   useEffect(() => {
     if (gameState.opponentConnected === true) {
+      // Clear any pending 'opponent disconnected' debounce
+      if (disconnectedTimerRef.current) {
+        window.clearTimeout(disconnectedTimerRef.current);
+        disconnectedTimerRef.current = null;
+      }
       setNotice('Opponent online');
       setTimeout(() => setNotice(null), 3000);
     } else if (gameState.opponentConnected === false) {
-      setNotice('Opponent disconnected');
-      setTimeout(() => setNotice(null), 3000);
+      // Debounce short-lived disconnects (e.g., dev StrictMode or brief network flaps)
+      if (disconnectedTimerRef.current) {
+        window.clearTimeout(disconnectedTimerRef.current);
+      }
+      disconnectedTimerRef.current = window.setTimeout(() => {
+        setNotice('Opponent disconnected');
+        setTimeout(() => setNotice(null), 3000);
+        disconnectedTimerRef.current = null;
+      }, 2000);
     }
+
+    return () => {
+      if (disconnectedTimerRef.current) {
+        window.clearTimeout(disconnectedTimerRef.current);
+        disconnectedTimerRef.current = null;
+      }
+    };
   }, [gameState.opponentConnected]);
   
   const playClick = useSound('/play.mp3');
 
   // Extract tokens from URL parameters
   useEffect(() => {
-    
     console.log(gameTokenMatch, playerToken, "yes", urlParams.get("pt"), )
 
-    if (gt && playerToken) {
-      setTokens(gt, playerToken);
+    // prefer explicit pt param, fallback to saved token in localStorage
+    let tokenToUse = playerToken;
+    if (!tokenToUse && gt) {
+      try {
+        tokenToUse = localStorage.getItem('playerToken_' + gt) || '';
+        if (tokenToUse) console.log('[RECOVER] Using saved playerToken from localStorage');
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    if (gt && tokenToUse) {
+      setTokens(gt, tokenToUse);
     }
   }, [playerToken, setTokens, gt]);
+
+  const handleOpen = useCallback(async () => {
+    console.log('WebSocket connected');
+
+    // If game hasn't started yet, try a REST snapshot to recover any missed initial game_state
+    if (!gameStarted && gt) {
+      const tokenToUse = playerToken || (typeof window !== 'undefined' ? (localStorage.getItem('playerToken_' + gt) || '') : '');
+      if (!tokenToUse) return;
+
+      try {
+        const resp = await fetch(`/api/v1/game/${gt}?pt=${tokenToUse}`);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (data && Object.keys(data).length > 0) {
+          updateFromWSMessage({ type: 'game_state', ...(data as any) } as any);
+          if ((data as any).my_hand && (data as any).my_hand.length > 0) {
+            setGameStarted(true);
+          }
+        }
+      } catch (e) {
+        console.error('Snapshot fetch on WS open failed:', e);
+      }
+    }
+  }, [gameStarted, gt, playerToken, updateFromWSMessage]);
 
   const handleWSMessage = useCallback((message: WSMessage) => {
     console.log('Received message:', message);
@@ -123,7 +177,7 @@ export const GamePage: React.FC = () => {
     gameToken: gt,
     playerToken: playerToken || '',
     onMessage: handleWSMessage,
-    onOpen: useCallback(() => console.log('WebSocket connected'), []),
+    onOpen: handleOpen,
     onClose: useCallback(() => console.log('WebSocket disconnected'), []),
     onError: useCallback((error: Event) => console.error('WebSocket error:', error), []),
     autoReconnect: true
@@ -206,10 +260,6 @@ export const GamePage: React.FC = () => {
 
   if (gameOver) {
     const youWon = gameOver.isWinner;
-    const winType = gameOver.winType || 'classic';
-    const playerPoints = gameOver.playerPoints ?? 0;
-    const opponentPoints = gameOver.opponentPoints ?? 0;
-    const diff = Math.abs((playerPoints || 0) - (opponentPoints || 0));
 
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -225,19 +275,6 @@ export const GamePage: React.FC = () => {
           <h2 className="text-3xl font-bold text-gray-900 mb-4">
             {youWon ? 'You Won!' : 'You Lost'}
           </h2>
-
-          {/* {winType === 'chop' ? (
-            <div className="space-y-3 text-gray-700">
-              <p className="font-semibold">Chop result</p>
-              <p>Your points: <span className="font-bold">{playerPoints}</span></p>
-              <p>Opponent points: <span className="font-bold">{opponentPoints}</span></p>
-              <p className="text-sm text-gray-500">{youWon ? `You won by ${diff} points` : `Opponent won by ${diff} points`}</p>
-            </div>
-          ) : (
-            <div className="space-y-3 text-gray-700">
-              <p className="font-semibold">Classic win</p>
-            </div>
-          )} */}
 
           <button
             onClick={() => window.location.href = '/'}

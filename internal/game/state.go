@@ -152,6 +152,12 @@ func (g *GameState) Initialize() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	// If game is already in progress (or previously started), no-op — prevents double init races
+	if g.Status == StatusInProgress || g.StartedAt != nil {
+		log.Printf("[INIT] Game %s already initialized, skipping", g.ID)
+		return nil
+	}
+
 	// Deal 7 cards to each player (classic Ugandan Matatu)
 	for i := 0; i < 7; i++ {
 		card1, err := g.Deck.Draw()
