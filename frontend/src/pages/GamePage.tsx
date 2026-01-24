@@ -276,12 +276,25 @@ export const GamePage: React.FC = () => {
             {youWon ? 'You Won!' : 'You Lost'}
           </h2>
 
-          <button
-            onClick={() => window.location.href = '/'}
-            className="mt-6 bg-[#373536] text-white py-3 px-6 rounded-lg font-semibold hover:bg-[#2c2b2a] transition-colors"
-          >
-            Play Again
-          </button>
+          <div className="space-y-3 text-gray-700">
+            <p className="font-semibold">{youWon ? 'Classic win' : 'Better luck next time'}</p>
+          </div>
+
+          <div className="flex gap-3 mt-6">
+            <button
+              onClick={() => window.location.href = '/'}
+              className="flex-1 bg-[#373536] text-white py-2 px-4 rounded-md text-sm font-semibold hover:bg-[#2c2b2a] transition-colors"
+            >
+              New game
+            </button>
+
+            <button
+              onClick={() => window.location.href = '/profile'}
+              className="flex-1 bg-white border py-2 px-4 rounded-md text-sm font-semibold hover:bg-gray-50 transition-colors"
+            >
+              Profile
+            </button>
+          </div>
         </div>
       </div>
     );
