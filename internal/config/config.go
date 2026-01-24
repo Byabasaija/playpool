@@ -64,6 +64,11 @@ type Config struct {
 	OTPTokenTTLSeconds         int
 	OTPRequestRateLimitSeconds int
 	OTPMaxVerifyAttempts       int
+
+	// Idle detection and forfeit
+	IdleWarningSeconds     int
+	IdleForfeitSeconds     int
+	IdleWorkerPollInterval int
 }
 
 func Load() *Config {
@@ -128,6 +133,11 @@ func Load() *Config {
 		OTPTokenTTLSeconds:         getEnvInt("OTP_TTL_SECONDS", 300),
 		OTPRequestRateLimitSeconds: getEnvInt("OTP_RATE_LIMIT_SECONDS", 60),
 		OTPMaxVerifyAttempts:       getEnvInt("OTP_MAX_VERIFY_ATTEMPTS", 5),
+
+		// Idle detection and forfeit
+		IdleWarningSeconds:     getEnvInt("IDLE_WARNING_SECONDS", 45),
+		IdleForfeitSeconds:     getEnvInt("IDLE_FORFEIT_SECONDS", 90),
+		IdleWorkerPollInterval: getEnvInt("IDLE_WORKER_POLL_INTERVAL", 1),
 	}
 }
 

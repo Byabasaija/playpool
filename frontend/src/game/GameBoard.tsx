@@ -48,6 +48,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   myConnected,
   opponentConnected
 }) => {
+  console.log('[UI] DiscardPile type in GameBoard:', typeof DiscardPile, DiscardPile);
   const [showSuitSelector, setShowSuitSelector] = useState(false);
   const [pendingAce, setPendingAce] = useState<CardType | null>(null);
 

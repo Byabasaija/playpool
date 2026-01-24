@@ -136,6 +136,18 @@ export const GamePage: React.FC = () => {
         // Clear any pending pass state when a play happens
         drawPendingRef.current = false;
         setCanPass(false);
+
+        // If the idle player actually played, clear the idle banner
+        try {
+          const actingPlayer = (message as any).player as string | undefined;
+          if (actingPlayer && idlePlayer && actingPlayer === idlePlayer) {
+            setIdleForfeitAt(null);
+            setIdlePlayer(null);
+            setIdleRemaining(null);
+          }
+        } catch (e) {
+          // ignore
+        }
         break;
 
       case 'cards_drawn':
@@ -146,6 +158,15 @@ export const GamePage: React.FC = () => {
         // After drawing, player should be able to pass if they choose
         drawPendingRef.current = true;
         setCanPass(true);
+
+        // If I (the drawer) was the idle player, clear the idle banner
+        try {
+          if (idlePlayer && idlePlayer === (gameState as any).playerId) {
+            setIdleForfeitAt(null);
+            setIdlePlayer(null);
+            setIdleRemaining(null);
+          }
+        } catch (e) {}
         break;
 
       case 'opponent_drew':
@@ -166,6 +187,43 @@ export const GamePage: React.FC = () => {
 
       case 'error':
         console.error('Game error:', message.message);
+        break;
+
+      case 'player_idle_warning':
+        // payload: { player, forfeit_at }
+        try {
+          const fa = (message as any).forfeit_at || (message as any).forfeitAt;
+          const remaining = (message as any).remaining_seconds || (message as any).remainingSeconds;
+          const player = (message as any).player as string | undefined;
+          if (remaining != null) {
+            // Use server-reported remaining seconds to avoid clock skew
+            setIdleForfeitAt(Date.now() + Number(remaining) * 1000);
+            setIdlePlayer(player || null);
+            setIdleRemaining(Number(remaining));
+          } else if (fa) {
+            setIdleForfeitAt(new Date(fa).getTime());
+            setIdlePlayer(player || null);
+          }
+        } catch (e) {
+          // ignore
+        }
+        break;
+
+      case 'player_forfeit':
+        // final case: refresh a snapshot to pick up final state
+        try {
+          (async () => {
+            if (!gt || !playerToken) return;
+            const resp = await fetch(`/api/v1/game/${gt}?pt=${playerToken}`);
+            if (!resp.ok) return;
+            const data = await resp.json();
+            updateFromWSMessage({ type: 'game_state', ...(data as any) } as any);
+            setIdleForfeitAt(null);
+            setIdlePlayer(null);
+          })();
+        } catch (e) {
+          console.error('Failed to refresh state after forfeit:', e);
+        }
         break;
 
       default:
@@ -203,6 +261,30 @@ export const GamePage: React.FC = () => {
   }, [sendWSMessage, setCanPass, playClick]);
 
   const drawPendingRef = useRef(false);
+  const [idleForfeitAt, setIdleForfeitAt] = useState<number | null>(null);
+  const [idlePlayer, setIdlePlayer] = useState<string | null>(null);
+  const [idleRemaining, setIdleRemaining] = useState<number | null>(null);
+
+  // Countdown tick for idle forfeit
+  useEffect(() => {
+    if (!idleForfeitAt) {
+      setIdleRemaining(null);
+      return;
+    }
+    const update = () => {
+      const now = Date.now();
+      const rem = Math.max(0, Math.ceil((idleForfeitAt - now) / 1000));
+      setIdleRemaining(rem);
+      if (rem <= 0) {
+        setIdleForfeitAt(null);
+        setIdlePlayer(null);
+        setIdleRemaining(null);
+      }
+    };
+    update();
+    const t = window.setInterval(update, 1000);
+    return () => window.clearInterval(t);
+  }, [idleForfeitAt]);
 
   // Fetch an immediate REST snapshot of the game state on mount as a fallback
   React.useEffect(() => {
@@ -325,6 +407,17 @@ export const GamePage: React.FC = () => {
       {notice && (
         <div className="fixed top-6 right-6 bg-black bg-opacity-60 text-white px-4 py-2 rounded">
           {notice}
+        </div>
+      )}
+
+      {/* Idle warning banner (non-blocking, minimal) */}
+      {idleRemaining !== null && (
+        <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-yellow-100 text-black px-4 py-2 rounded">
+          {idlePlayer && idlePlayer === (gameState as any).playerId ? (
+            <span>You are inactive — will forfeit in {idleRemaining}s</span>
+          ) : (
+            <span>{(gameState as any).opponentDisplayName || 'Opponent'} inactive — will forfeit in {idleRemaining}s</span>
+          )}
         </div>
       )}
     </div>

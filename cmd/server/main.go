@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/playmatatu/backend/internal/migrations"
 	"github.com/playmatatu/backend/internal/redis"
 	"github.com/playmatatu/backend/internal/sms"
+	"github.com/playmatatu/backend/internal/ws"
 )
 
 func main() {
@@ -59,6 +61,13 @@ func main() {
 	} else {
 		log.Printf("[SMS] SMS is not configured (SMS_SERVICE_BASE_URL/SMS_SERVICE_USERNAME missing)")
 	}
+
+	// Wire Redis and start idle event subscriber in WS layer
+	ws.SetRedisClient(rdb, cfg)
+	ws.StartIdleEventSubscriber(context.Background())
+
+	// Start idle worker (warning -> forfeit) for idle detection
+	game.StartIdleWorker(context.Background(), db, rdb, cfg)
 
 	// Set up Gin router
 	if cfg.Environment == "production" {

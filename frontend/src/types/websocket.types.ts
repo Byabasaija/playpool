@@ -11,6 +11,9 @@ export type WSMessageType =
   | 'turn_passed'
   | 'player_connected'
   | 'player_disconnected'
+  | 'player_idle_warning'
+  | 'player_forfeit'
+  | 'game_over'
   | 'error';
 
 export interface WSMessage {
@@ -41,10 +44,9 @@ export interface WSMessage {
   cards?: Card[];
   count?: number;
   player?: string;
-
-  // Display names for this player and opponent (optional)
   my_display_name?: string;
   opponent_display_name?: string;
+  forfeit_at?: string;
 }
 
 export interface PlayCardMessage {

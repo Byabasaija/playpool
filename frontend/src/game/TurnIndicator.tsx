@@ -15,13 +15,13 @@ export const TurnIndicator: React.FC<TurnIndicatorProps> = ({
   if (!myTurn) {
     return (
       <div className="relative w-24 h-24 flex items-center justify-center">
-        <button
+        {/* <button
           className="relative w-24 h-24 rounded-full bg-gray-600 text-white font-bold text-lg flex items-center justify-center shadow-2xl cursor-default"
           disabled
           aria-label="Wait"
         >
-          WAIT
-        </button>
+          YOUR TURN
+        </button> */}
       </div>
     );
   }
@@ -51,7 +51,7 @@ export const TurnIndicator: React.FC<TurnIndicatorProps> = ({
         disabled
         aria-label="Play"
       >
-        PLAY
+        YOUR TURN 
       </button>
     </div>
   );

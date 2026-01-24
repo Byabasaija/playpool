@@ -899,8 +899,12 @@ func (g *GameState) ForfeitByDisconnect(disconnectedPlayerID string) {
 	// Record forfeit move for auditing
 	if Manager != nil {
 		var disconnectedDB int
-		if p := g.GetPlayerByID(disconnectedPlayerID); p != nil {
-			disconnectedDB = p.DBPlayerID
+		// Avoid calling GetPlayerByID() while holding the write lock:
+		// GetPlayerByID uses RLock(), which would block here and cause a deadlock.
+		if g.Player1 != nil && g.Player1.ID == disconnectedPlayerID {
+			disconnectedDB = g.Player1.DBPlayerID
+		} else if g.Player2 != nil && g.Player2.ID == disconnectedPlayerID {
+			disconnectedDB = g.Player2.DBPlayerID
 		}
 		if disconnectedDB > 0 {
 			Manager.RecordMove(g.SessionID, disconnectedDB, "FORFEIT", "", "")

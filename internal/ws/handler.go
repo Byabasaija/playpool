@@ -1,11 +1,15 @@
 package ws
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -261,8 +265,12 @@ func (h *Hub) SendToPlayer(playerID string, message interface{}) {
 	if client, exists := h.clients[playerID]; exists {
 		select {
 		case client.send <- data:
+			// sent
 		default:
+			log.Printf("[WS] SendToPlayer dropped message for player %s (buffer full)", playerID)
 		}
+	} else {
+		log.Printf("[WS] SendToPlayer no client for player %s", playerID)
 	}
 }
 
@@ -359,6 +367,18 @@ func (c *Client) readPump() {
 				log.Printf("WebSocket read error for player %s: %v", c.playerID, err)
 			}
 			break
+		}
+
+		// Update last-active and schedule warning/forfeit times in Redis (if configured)
+		if rdbClient != nil && wsConfig != nil {
+			ctx := context.Background()
+			member := fmt.Sprintf("g:%s:p:%s", c.gameToken, c.playerID)
+			now := time.Now().Unix()
+			// store last active
+			rdbClient.Set(ctx, "last_active:"+member, fmt.Sprintf("%d", now), 0)
+			// schedule warning and forfeit
+			rdbClient.ZAdd(ctx, "idle_warning", redis.Z{Score: float64(now + int64(wsConfig.IdleWarningSeconds)), Member: member})
+			rdbClient.ZAdd(ctx, "idle_forfeit", redis.Z{Score: float64(now + int64(wsConfig.IdleForfeitSeconds)), Member: member})
 		}
 
 		var msg WSMessage
