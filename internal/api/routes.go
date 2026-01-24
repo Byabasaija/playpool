@@ -71,6 +71,13 @@ func SetupRoutes(router *gin.Engine, db *sqlx.DB, rdb *redis.Client, cfg *config
 			player.POST(":phone/requeue", handlers.RequeueStake(db, rdb, cfg))
 		}
 
+		// Auth endpoints (OTP)
+		v1.POST("/auth/request-otp", handlers.RequestOTP(db, rdb, cfg))
+		v1.POST("/auth/verify-otp", handlers.VerifyOTP(db, rdb, cfg))
+
+		// Protected profile endpoint
+		v1.GET("/me", handlers.AuthMiddleware(cfg), handlers.GetMe(db))
+
 		// Config endpoint
 		v1.GET("/config", handlers.GetConfig(cfg))
 	}

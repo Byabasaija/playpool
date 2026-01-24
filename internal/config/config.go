@@ -59,6 +59,11 @@ type Config struct {
 	// Security
 	JWTSecret         string
 	SessionTimeoutMin int
+
+	// OTP configuration
+	OTPTokenTTLSeconds         int
+	OTPRequestRateLimitSeconds int
+	OTPMaxVerifyAttempts       int
 }
 
 func Load() *Config {
@@ -117,6 +122,12 @@ func Load() *Config {
 		// Security
 		JWTSecret:         getEnv("JWT_SECRET", "change-me-in-production"),
 		SessionTimeoutMin: getEnvInt("SESSION_TIMEOUT_MINUTES", 30),
+
+		// OTP settings
+		// Default TTL 5 minutes
+		OTPTokenTTLSeconds:         getEnvInt("OTP_TTL_SECONDS", 300),
+		OTPRequestRateLimitSeconds: getEnvInt("OTP_RATE_LIMIT_SECONDS", 60),
+		OTPMaxVerifyAttempts:       getEnvInt("OTP_MAX_VERIFY_ATTEMPTS", 5),
 	}
 }
 

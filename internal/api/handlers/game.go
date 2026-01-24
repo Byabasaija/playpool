@@ -531,16 +531,70 @@ func GetPlayerStats(db *sqlx.DB, cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		phone := c.Param("phone")
 
-		// TODO: Get actual player stats from database
-		// For now, return mock stats
+		// Load player record
+		var p struct {
+			ID               int     `db:"id"`
+			TotalGamesPlayed int     `db:"total_games_played"`
+			TotalGamesWon    int     `db:"total_games_won"`
+			TotalWinnings    float64 `db:"total_winnings"`
+		}
+		if err := db.Get(&p, `SELECT id, total_games_played, total_games_won, total_winnings FROM players WHERE phone_number=$1`, phone); err != nil {
+			// If no player found, return defaults
+			c.JSON(http.StatusOK, gin.H{
+				"phone_number":   phone,
+				"games_played":   0,
+				"games_won":      0,
+				"win_rate":       0.0,
+				"total_winnings": 0,
+				"current_streak": 0,
+				"rank":           "Bronze",
+			})
+			return
+		}
+
+		// Compute win rate
+		winRate := 0.0
+		if p.TotalGamesPlayed > 0 {
+			winRate = (float64(p.TotalGamesWon) / float64(p.TotalGamesPlayed)) * 100.0
+		}
+
+		// Compute current streak (consecutive wins from most recent completed games)
+		rows, err := db.Queryx(`SELECT winner_id FROM game_sessions WHERE (player1_id=$1 OR player2_id=$1) AND status='COMPLETED' ORDER BY completed_at DESC LIMIT 50`, p.ID)
+		if err != nil {
+			log.Printf("Failed to query recent games for streak: %v", err)
+		}
+		streak := 0
+		for rows != nil && rows.Next() {
+			var winnerID sql.NullInt64
+			if err := rows.Scan(&winnerID); err != nil {
+				break
+			}
+			if winnerID.Valid && int(winnerID.Int64) == p.ID {
+				streak++
+			} else {
+				break
+			}
+		}
+		if rows != nil {
+			rows.Close()
+		}
+
+		// Derive a simple rank from total winnings
+		rank := "Bronze"
+		if p.TotalWinnings >= 20000 {
+			rank = "Gold"
+		} else if p.TotalWinnings >= 5000 {
+			rank = "Silver"
+		}
+
 		c.JSON(http.StatusOK, gin.H{
 			"phone_number":   phone,
-			"games_played":   5,
-			"games_won":      3,
-			"win_rate":       60.0,
-			"total_winnings": 5400,
-			"current_streak": 2,
-			"rank":           "Bronze",
+			"games_played":   p.TotalGamesPlayed,
+			"games_won":      p.TotalGamesWon,
+			"win_rate":       winRate,
+			"total_winnings": p.TotalWinnings,
+			"current_streak": streak,
+			"rank":           rank,
 		})
 	}
 }
