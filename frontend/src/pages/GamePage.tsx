@@ -150,6 +150,32 @@ export const GamePage: React.FC = () => {
 
   const drawPendingRef = useRef(false);
 
+  // Fetch an immediate REST snapshot of the game state on mount as a fallback
+  React.useEffect(() => {
+    if (!gt || !playerToken) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const resp = await fetch(`/api/v1/game/${gt}?pt=${playerToken}`);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (cancelled) return;
+        // If server returned player-specific state, apply it as a 'game_state' message
+        if (data && Object.keys(data).length > 0) {
+          updateFromWSMessage({ type: 'game_state', ...(data as any) } as any);
+          if ((data as any).my_hand && (data as any).my_hand.length > 0) {
+            setGameStarted(true);
+          }
+        }
+      } catch (e) {
+        console.error('Failed to fetch game snapshot:', e);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [gt, playerToken, updateFromWSMessage]);
+
   if (!connected) {
     return (
       <div className="min-h-screen flex items-center justify-center">

@@ -1,12 +1,14 @@
 package handlers
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"github.com/playmatatu/backend/internal/config"
 	"github.com/playmatatu/backend/internal/game"
 	"github.com/playmatatu/backend/internal/models"
+	"github.com/playmatatu/backend/internal/sms"
 	"github.com/playmatatu/backend/internal/ws"
 	"github.com/redis/go-redis/v9"
 )
@@ -244,15 +247,17 @@ func GetPlayerProfile(db *sqlx.DB) gin.HandlerFunc {
 		var expired struct {
 			ID          int     `db:"id"`
 			StakeAmount float64 `db:"stake_amount"`
+			MatchCode   string  `db:"match_code"`
+			IsPrivate   bool    `db:"is_private"`
 		}
 		hasExpired := false
-		if err := db.Get(&expired, `SELECT id, stake_amount FROM matchmaking_queue WHERE player_id=$1 AND status='expired' ORDER BY created_at DESC LIMIT 1`, p.ID); err == nil {
+		if err := db.Get(&expired, `SELECT id, stake_amount, match_code, is_private FROM matchmaking_queue WHERE player_id=$1 AND status='expired' ORDER BY created_at DESC LIMIT 1`, p.ID); err == nil {
 			hasExpired = true
 		}
 
 		resp := gin.H{"display_name": p.DisplayName, "fee_exempt_balance": feeBalance, "player_token": p.PlayerToken}
 		if hasExpired {
-			resp["expired_queue"] = gin.H{"id": expired.ID, "stake_amount": int(expired.StakeAmount)}
+			resp["expired_queue"] = gin.H{"id": expired.ID, "stake_amount": int(expired.StakeAmount), "match_code": expired.MatchCode, "is_private": expired.IsPrivate}
 		}
 
 		c.JSON(http.StatusOK, resp)
@@ -275,8 +280,10 @@ func RequeueStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handle
 		}
 
 		var req struct {
-			QueueID     *int `json:"queue_id,omitempty"`
-			StakeAmount *int `json:"stake_amount,omitempty"`
+			QueueID     *int   `json:"queue_id,omitempty"`
+			StakeAmount *int   `json:"stake_amount,omitempty"`
+			Mode        string `json:"mode,omitempty"` // "private" to retry private invite
+			InvitePhone string `json:"invite_phone,omitempty"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			// allow empty body
@@ -330,6 +337,74 @@ func RequeueStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handle
 		var existingCount int
 		if err := db.Get(&existingCount, `SELECT COUNT(*) FROM matchmaking_queue WHERE player_id=$1 AND status IN ('queued','processing','matching')`, player.ID); err == nil && existingCount > 0 {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "player already has an active queue entry"})
+			return
+		}
+
+		// If caller asked to retry private, insert a private matchmaking_queue and optionally send invite SMS
+		if strings.ToLower(req.Mode) == "private" {
+			// Insert private match code with retries on collision
+			attempts := 0
+			var inserted bool
+			var queueID int
+			var code string
+			expiresAt := time.Now().Add(time.Duration(cfg.QueueExpiryMinutes) * time.Minute)
+			qToken := generateQueueToken()
+			for attempts < 5 && !inserted {
+				attempts++
+				code = generateMatchCode(6)
+				if err := db.QueryRowx(`INSERT INTO matchmaking_queue (player_id, phone_number, stake_amount, transaction_id, queue_token, status, created_at, expires_at, match_code, is_private) VALUES ($1,$2,$3,null,$4,'queued',NOW(),$5,$6, TRUE) RETURNING id`, player.ID, phone, float64(stakeAmount), qToken, expiresAt, code).Scan(&queueID); err != nil {
+					if strings.Contains(err.Error(), "duplicate key") {
+						log.Printf("[DB] match_code collision on requeue attempt %d, retrying", attempts)
+						continue
+					}
+					log.Printf("[DB] Failed to insert private matchmaking_queue for player %d on requeue: %v", player.ID, err)
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create private match"})
+					return
+				}
+				inserted = true
+				// Add to in-memory queue for visibility
+				if game.Manager != nil {
+					entry := game.QueueEntry{
+						QueueToken:  qToken,
+						PhoneNumber: phone,
+						StakeAmount: stakeAmount,
+						DBPlayerID:  player.ID,
+						DisplayName: player.DisplayName,
+						JoinedAt:    time.Now(),
+					}
+					game.Manager.AddQueueEntry(stakeAmount, entry)
+				}
+			}
+
+			// Optionally send invite SMS to provided number
+			var smsInviteQueued bool
+			if strings.TrimSpace(req.InvitePhone) != "" && sms.Default != nil {
+				invite := normalizePhone(req.InvitePhone)
+				if invite != "" {
+					smsInviteQueued = true
+					joinLink := fmt.Sprintf("%s/join?match_code=%s&stake=%d&invite_phone=%s", cfg.FrontendURL, code, stakeAmount, url.QueryEscape(invite))
+					go func(code string, invite string, stake int, link string) {
+						msg := fmt.Sprintf("Join my PlayMatatu private match! Code: %s. Stake: %d UGX. Join: %s", code, stake, link)
+						if msgID, err := sms.SendSMS(context.Background(), invite, msg); err != nil {
+							log.Printf("[SMS] Failed to send invite to %s on requeue: %v", invite, err)
+						} else {
+							log.Printf("[SMS] Invite sent to %s msg_id=%s", invite, msgID)
+						}
+					}(code, invite, stakeAmount, joinLink)
+				}
+			}
+
+			// Return private_created payload
+			c.JSON(http.StatusOK, gin.H{
+				"status":            "private_created",
+				"match_code":        code,
+				"expires_at":        expiresAt,
+				"queue_id":          queueID,
+				"queue_token":       qToken,
+				"sms_invite_queued": smsInviteQueued,
+				"message":           "Private match recreated. Share the code with a friend.",
+				"player_token":      player.PlayerToken,
+			})
 			return
 		}
 

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMatchmaking } from '../hooks/useMatchmaking';
-import { validatePhone } from '../utils/phoneUtils';
+import { validatePhone, formatPhone } from '../utils/phoneUtils';
 import { getPlayerProfile, requeuePlayer, getConfig } from '../utils/apiClient';
 
 export const LandingPage: React.FC = () => {
@@ -11,21 +11,44 @@ export const LandingPage: React.FC = () => {
   const [commission, setCommission] = useState<number | null>(null);
   const [minStake, setMinStake] = useState<number>(1000);
   const [customStakeInput, setCustomStakeInput] = useState<string>('');
+  const [useCustomStake, setUseCustomStake] = useState<boolean>(false);
+  const [selectedPredefinedStake, setSelectedPredefinedStake] = useState<number>(1000);
   const [isPrivate, setIsPrivate] = useState(false);
   const [matchCodeInput, setMatchCodeInput] = useState('');
-  const [invitePhoneInput, setInvitePhoneInput] = useState<string>('');
+  const [invitePhoneRest, setInvitePhoneRest] = useState<string>('');
+  const invitePhoneRef = React.useRef<HTMLInputElement | null>(null);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [showRetryPrivate, setShowRetryPrivate] = useState(false);
+  const [retryInvitePhoneRest, setRetryInvitePhoneRest] = useState<string>('');
+  const [retryLoading, setRetryLoading] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
+  const [recentPrivate, setRecentPrivate] = useState<{match_code: string; expires_at?: string; queue_token?: string} | null>(null);
   const navigate = useNavigate();
   
   // const baseUrl = import.meta.env.VITE_BACKEND_URL
   const { stage, gameLink, isLoading, startGame, startPolling, reset, displayName, error, privateMatch } = useMatchmaking();
 
   const [displayNameInput, setDisplayNameInput] = useState<string>('');
-  const [expiredQueue, setExpiredQueue] = useState<{id:number, stake_amount:number} | null>(null);
+  const [expiredQueue, setExpiredQueue] = useState<{id:number, stake_amount:number, match_code?: string, is_private?: boolean} | null>(null);
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
 
   React.useEffect(() => {
     if (displayName) setDisplayNameInput(displayName);
   }, [displayName]);
+
+  // If player has a pending/expired stake, hide private-invite option and clear isPrivate
+  React.useEffect(() => {
+    if (expiredQueue && isPrivate) {
+      setIsPrivate(false);
+    }
+  }, [expiredQueue]);
+
+  // Focus invite phone input when private invite toggle is enabled
+  React.useEffect(() => {
+    if (isPrivate && invitePhoneRef.current) {
+      setTimeout(() => invitePhoneRef.current?.focus(), 50);
+    }
+  }, [isPrivate]);
 
   React.useEffect(() => {
     (async () => {
@@ -37,6 +60,56 @@ export const LandingPage: React.FC = () => {
         // ignore if not available
       }
     })();
+  }, []);
+
+  React.useEffect(() => {
+    // Prefill from URL (join links): ?match_code=ABC123&stake=5000&invite_phone=2567...
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const code = params.get('match_code');
+      const stakeParam = params.get('stake');
+      const invitePhoneParam = params.get('invite_phone');
+      if (code) {
+        setMatchCodeInput(code.toUpperCase());
+      }
+      if (invitePhoneParam) {
+        // store the rest portion (strip leading 256)
+        const normalized = formatPhone(invitePhoneParam);
+        if (normalized && normalized.startsWith('256')) {
+          setInvitePhoneRest(normalized.slice(3));
+        } else {
+          setInvitePhoneRest(invitePhoneParam);
+        }
+        // Try to load profile for the prefilled invite phone to prefill display name
+        (async () => {
+          try {
+            const profile = await getPlayerProfile(formatPhone(invitePhoneParam));
+            if (profile && profile.display_name) {
+              setDisplayNameInput(profile.display_name);
+            } else {
+              setDisplayNameInput(generateRandomName());
+            }
+            if (profile && profile.expired_queue) setExpiredQueue(profile.expired_queue);
+          } catch (e) {
+            setDisplayNameInput(generateRandomName());
+          }
+        })();
+      }
+      if (stakeParam) {
+        const s = Number(stakeParam);
+        if ([1000, 2000, 5000, 10000].includes(s)) {
+          setSelectedPredefinedStake(s);
+          setStake(s);
+          setUseCustomStake(false);
+        } else if (!Number.isNaN(s) && s > 0) {
+          setUseCustomStake(true);
+          setCustomStakeInput(String(s));
+          setStake(s);
+        }
+      }
+    } catch (e) {
+      // ignore malformed params
+    }
   }, []);
 
   const generateRandomName = () => {
@@ -103,6 +176,17 @@ export const LandingPage: React.FC = () => {
       }
     }
 
+    const opts: any = {};
+    // If private invite, require an invite phone and validate it
+    if (isPrivate) {
+      const formattedInvite = formatPhone(invitePhoneRest || '');
+      if (!validatePhone(formattedInvite)) {
+        setPhoneError('Invite phone is required and must be a valid Ugandan number');
+        return;
+      }
+      opts.invite_phone = formattedInvite;
+      opts.create_private = true;
+    }
     setPhoneError('');
 
     if (expiredQueue) {
@@ -124,10 +208,7 @@ export const LandingPage: React.FC = () => {
       return;
     }
 
-    const opts: any = {};
-    if (isPrivate) opts.create_private = true;
     if (matchCodeInput) opts.match_code = matchCodeInput.trim().toUpperCase();
-    if (invitePhoneInput) opts.invite_phone = invitePhoneInput;
 
     await startGame(full, stake, displayNameInput || generateRandomName(), opts);
   };
@@ -165,8 +246,18 @@ export const LandingPage: React.FC = () => {
     return () => clearInterval(timer);
   }, [privateMatch]);
 
+  const buildInviteLink = (matchCode?: string, stakeAmount?: number, invitePhoneRestParam?: string) => {
+    const base = window.location.origin + '/join';
+    const params = new URLSearchParams();
+    if (matchCode) params.set('match_code', matchCode);
+    if (stakeAmount) params.set('stake', String(stakeAmount));
+    if (invitePhoneRestParam) params.set('invite_phone', formatPhone(invitePhoneRestParam));
+    return base + '?' + params.toString();
+  };
+
   const handleShare = async () => {
     if (!privateMatch) return;
+    const link = buildInviteLink(privateMatch.match_code, stake, invitePhoneRest || undefined);
     const text = `Join my PlayMatatu private match. Code: ${privateMatch.match_code}. Expires: ${privateMatch.expires_at ? new Date(privateMatch.expires_at).toLocaleString() : ''}`;
     if (navigator.share) {
       try {
@@ -177,10 +268,12 @@ export const LandingPage: React.FC = () => {
       }
     }
     try {
-      await navigator.clipboard.writeText(`${text}`);
-      alert('Code copied to clipboard. Share it with your friend!');
+      await navigator.clipboard.writeText(link);
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2000);
+      alert('Link copied to clipboard. Share it with your friend!');
     } catch (e) {
-      // as last resort, open sms: on mobile
+      // fallback open sms
       window.location.href = `sms:?body=${encodeURIComponent(text)}`;
     }
   };
@@ -214,6 +307,7 @@ export const LandingPage: React.FC = () => {
                 <div className="flex">
                   <span className="inline-flex items-center px-3 rounded-l-md border border-r-0 bg-gray-100 text-gray-700">256</span>
                   <input
+                    name="phone"
                     type="tel"
                     value={phoneRest}
                     onChange={(e) => setPhoneRest(e.target.value)}
@@ -254,79 +348,173 @@ export const LandingPage: React.FC = () => {
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Stake Amount (UGX)
                 </label>
-                <select
-                  value={stake}
-                  onChange={(e) => setStake(Number(e.target.value))}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg"
-                  disabled={!!expiredQueue}
-                >
-                  <option value={1000}>1,000 UGX</option>
-                  <option value={2000}>2,000 UGX</option>
-                  <option value={5000}>5,000 UGX</option>
-                  <option value={10000}>10,000 UGX</option>
-                </select>
+				<div className="grid grid-cols-2 gap-2">
+				  {[1000, 2000, 5000, 10000].map((opt) => (
+						<label key={opt} className={`flex items-center space-x-2 px-3 py-2 border rounded-lg cursor-pointer ${selectedPredefinedStake === opt && !useCustomStake ? 'border-[#373536] bg-gray-50' : 'border-gray-300 bg-white'}`}>
+						  <input
+								type="radio"
+								name="stake"
+								value={opt}
+								checked={selectedPredefinedStake === opt && !useCustomStake}
+								onChange={() => { setSelectedPredefinedStake(opt); setStake(opt); setUseCustomStake(false); setCustomStakeInput(''); }}
+								disabled={!!expiredQueue}
+								className="accent-[#373536]"
+							  />
+							  <span>{opt.toLocaleString()} UGX</span>
+						</label>
+				  ))}
+				</div>
 
-                <div className="mt-3">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Or enter custom stake</label>
-                  <input
-                    type="number"
-                    min={minStake}
-                    value={customStakeInput}
-                    onChange={handleCustomStakeChange}
-                    placeholder={`1000 or more`}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg"
-                    disabled={!!expiredQueue}
-                  />
-                </div>
+				<div className="mt-3 flex items-center">
+				  <input id="stake-other" type="checkbox" checked={useCustomStake} onChange={(e) => {
+					const checked = e.target.checked;
+					setUseCustomStake(checked);
+					if (checked) {
+						setCustomStakeInput(String(selectedPredefinedStake));
+						setStake(Number(selectedPredefinedStake));
+					} else {
+						setStake(selectedPredefinedStake);
+					}
+				  }} disabled={!!expiredQueue} className="mr-2" />
+				  <label htmlFor="stake-other" className="text-sm">Stake other?</label>
+				</div>
 
-                <p className="mt-1 text-sm text-gray-500">
+				<div style={{ display: useCustomStake ? 'block' : 'none' }} className="mt-3">
+				  <label className="block text-sm font-medium text-gray-700 mb-2">Enter custom stake</label>
+				  <input
+					  type="number"
+					  min={minStake}
+					  value={customStakeInput}
+					  onChange={handleCustomStakeChange}
+					  placeholder={`1000 or more`}
+					  className="w-full px-4 py-3 border border-gray-300 rounded-lg"
+					  disabled={!!expiredQueue}
+				  />
+				</div>
+
+                <div className="mt-1 text-sm text-gray-500">
                   {commission !== null ? (<span>Commission: {commission} UGX — Total payable: {stake + commission} UGX</span>) : null}
-                </p>
+                </div>
                 {expiredQueue && (
-                  <p className="mt-2 text-sm text-yellow-600">You have pending stake UGX {expiredQueue.stake_amount}. Click Requeue to retry.</p>
-                )}
+                  <div className="mt-2 text-sm text-yellow-600">
+                    <div>You have pending stake UGX {expiredQueue.stake_amount}.</div>
+                    <div className="mt-2 flex items-center space-x-2">
+                      {expiredQueue.is_private ? (
+                        <>
+                          <button onClick={async () => {
+                            // requeue public (small action)
+                            setRetryError(null);
+                            try {
+                              const myPhone = '256' + phoneRest.replace(/\D/g, '');
+                              const res = await requeuePlayer(myPhone, expiredQueue.id);
+                              if (res && res.status === 'queued') {
+                                const token = res.queue_token || res.player_id;
+                                try { sessionStorage.setItem('queueToken', token); } catch (e) {}
+                                startPolling(token, displayNameInput || generateRandomName());
+                              }
+                            } catch (err:any) {
+                              setRetryError(err.message || String(err));
+                            }
+                          }} className="px-3 py-1 bg-[#373536] text-white rounded">Requeue public</button>
+
+                          <button onClick={() => { setShowRetryPrivate((s)=>!s); setRetryError(null); }} className="px-3 py-1 bg-yellow-500 text-black rounded">Retry private (resend invite)</button>
+                        </>
+                      ) : null}
+                    </div>
+                    {showRetryPrivate && (
+                      <div className="mt-3">
+                        <label className="block text-sm text-gray-700 mb-1">Invite phone to send to</label>
+                        <div className="flex">
+                          <span className="inline-flex items-center px-3 rounded-l-md border border-r-0 bg-gray-100 text-gray-700">256</span>
+                          <input type="tel" value={retryInvitePhoneRest} onChange={(e)=>setRetryInvitePhoneRest(e.target.value)} placeholder="7XX XXX XXX" className="w-full px-4 py-3 border border-gray-300 rounded-r-lg" />
+                        </div>
+                        <div className="mt-2 flex items-center space-x-2">
+                          <button onClick={async () => {
+                            // perform requeue private
+                            setRetryLoading(true); setRetryError(null);
+                            const myPhone = '256' + phoneRest.replace(/\D/g, '');
+                            const inviteFull = retryInvitePhoneRest ? ('256' + retryInvitePhoneRest.replace(/\D/g, '')) : undefined;
+                            try {
+                              const res = await requeuePlayer(myPhone, expiredQueue.id, undefined, { mode: 'private', invite_phone: inviteFull });
+                              if (res && res.status === 'private_created') {
+                                setRecentPrivate({ match_code: res.match_code, expires_at: res.expires_at, queue_token: res.queue_token });
+                                if (res.queue_token) {
+                                  startPolling(res.queue_token, displayNameInput || generateRandomName());
+                                }
+                                setShowRetryPrivate(false);
+                              } else {
+                                setRetryError('Failed to recreate private match');
+                              }
+                            } catch (err:any) {
+                              setRetryError(err.message || String(err));
+                            } finally {
+                              setRetryLoading(false);
+                            }
+                          }} disabled={retryLoading} className="px-3 py-2 bg-[#373536] text-white rounded">{retryLoading ? 'Retrying...' : 'Retry private'}</button>
+                          <button onClick={() => setShowRetryPrivate(false)} className="px-3 py-2 bg-white border rounded">Cancel</button>
+                        </div>
+                        {retryError && <div className="mt-2 text-sm text-red-600">{retryError}</div>}
+                      </div>
+                    )}
+                    {recentPrivate && (
+                      <div className="mt-3">
+                        <div className="bg-gray-100 p-3 rounded-lg inline-block">
+                          <div className="font-mono text-lg">{recentPrivate.match_code}</div>
+                          {recentPrivate.expires_at && <div className="text-sm text-gray-500">Expires: {new Date(recentPrivate.expires_at).toLocaleString()}</div>}
+                        </div>
+                        <div className="mt-2">
+                          <div className="flex items-center">
+                            <input readOnly value={buildInviteLink(recentPrivate.match_code, stake, retryInvitePhoneRest || undefined)} className="px-3 py-2 border rounded-l-lg w-72 bg-white text-sm" />
+                            <button onClick={async () => { await navigator.clipboard.writeText(buildInviteLink(recentPrivate.match_code, stake, retryInvitePhoneRest || undefined)); setCopiedLink(true); setTimeout(() => setCopiedLink(false), 2000); }} className="px-3 py-2 bg-gray-100 rounded-r-lg border">{copiedLink ? 'Copied' : 'Copy'}</button>
+                          </div>
+                          <div className="mt-2">
+                            <button onClick={handleShare} className="px-4 py-2 bg-gray-100 rounded-lg border">Share</button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                 )}
               </div>
 
               <div className="mt-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">Match Options</label>
-                <div className="flex items-center space-x-3 mb-2">
-                  <input type="checkbox" checked={isPrivate} onChange={(e) => setIsPrivate(e.target.checked)} disabled={!!matchCodeInput} id="create-private" />
-                  <label htmlFor="create-private" className="text-sm">Invite a friend (generate code)</label>
-                </div>
-                <div>
-                  <label className="block text-sm text-gray-700 mb-1">Or join with a code</label>
-                  <input
-                    type="text"
-                    value={matchCodeInput}
-                    onChange={(e) => setMatchCodeInput(e.target.value.toUpperCase().replace(/[^A-Z2-9]/g, ''))}
-                    placeholder="Enter 6-character code"
-                    maxLength={6}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg"
-                    disabled={isPrivate}
-                  />
-                  <p className="mt-1 text-sm text-gray-500">Either invite a friend or provide a friend’s code to join directly.</p>
-                </div>
-
+                
+                {!expiredQueue && (
+                  <>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Match Options</label>
+                  <div className="flex items-center space-x-3 mb-2">
+                    <input type="checkbox" checked={isPrivate} onChange={(e) => setIsPrivate(e.target.checked)} disabled={!!matchCodeInput} id="create-private" />
+                    <label htmlFor="create-private" className="text-sm">Invite a friend (generate code)</label>
+                  </div>
+                  </>
+                )}
                 <div style={{ display: isPrivate ? 'block' : 'none' }} className="mt-3">
-                  <label className="block text-sm text-gray-700 mb-1">Invite phone (optional)</label>
-                  <input
-                    type="tel"
-                    value={invitePhoneInput}
-                    onChange={(e) => setInvitePhoneInput(e.target.value)}
-                    placeholder="7XX XXX XXX or +2567XXXXXXXX"
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg"
-                  />
-                  <p className="mt-1 text-sm text-gray-500">If you provide a phone, we'll send the code via SMS.</p>
-                </div>
+                  <label className="block text-sm text-gray-700 mb-1">Invite phone (required)</label>
+                  <div className="flex">
+                    <span className="inline-flex items-center px-3 rounded-l-md border border-r-0 bg-gray-100 text-gray-700">256</span>
+                    <input
+                      type="tel"
+                      value={invitePhoneRest}
+                      onChange={(e) => setInvitePhoneRest(e.target.value)}
+                      ref={invitePhoneRef}
+                      placeholder="7XX XXX XXX"
+                      className="w-full px-4 py-3 border border-gray-300 rounded-r-lg"
+                    />
+                  </div>
+                   <p className="mt-1 text-sm text-gray-500">We will send the code to this number via SMS and also show the link to you so you can copy it if SMS fails.</p>
+                 </div>
               </div>
 
-              <button
-                type="submit"
-                disabled={isLoading}
-                className="w-full bg-[#373536] text-white py-3 px-6 rounded-lg font-semibold  transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isLoading ? 'Processing...' : (expiredQueue ? 'Requeue' : 'Play Now')}
-              </button>
+              {/* main submit button: hide when expired private (we show small actions instead) */}
+              {!(expiredQueue && expiredQueue.is_private) && (
+                <button
+                  type="submit"
+                  disabled={isLoading}
+                  className="w-full bg-[#373536] text-white py-3 px-6 rounded-lg font-semibold  transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isLoading ? 'Processing...' : (expiredQueue ? 'Requeue' : 'Play Now')}
+                </button>
+              )}
             </form>
           </div>
         );
@@ -343,6 +531,38 @@ export const LandingPage: React.FC = () => {
         );
 
       case 'matching':
+        // If we're waiting for a private match, show the code and sharing affordance while polling
+        if (privateMatch) {
+          return (
+            <div className="max-w-md mx-auto p-8 text-center">
+              <div className="mb-6">
+                <div className="h-12 w-12 bg-[#373536] rounded-full mx-auto flex items-center justify-center animate-pulse">
+                  <span className="text-white text-xl">🔒</span>
+                </div>
+              </div>
+              <h2 className="text-2xl font-bold text-gray-900 mb-2">Waiting for Friend</h2>
+              <p className="text-gray-600 mb-4">We've sent the invite — waiting for your friend to join.</p>
+              <div className="bg-gray-100 p-4 rounded-lg inline-block">
+                <div className="text-2xl font-mono">{privateMatch.match_code}</div>
+                {privateMatch.expires_at && (
+                  <div className="text-sm text-gray-500">Expires: {new Date(privateMatch.expires_at).toLocaleString()}</div>
+                )}
+              </div>
+              <div className="mt-4 flex flex-col items-center space-y-3">
+                <div className="flex items-center space-x-2">
+                  <input readOnly value={buildInviteLink(privateMatch.match_code, stake, invitePhoneRest || undefined)} className="px-3 py-2 border rounded-l-lg w-72 bg-white text-sm" />
+                  <button onClick={async () => { await navigator.clipboard.writeText(buildInviteLink(privateMatch.match_code, stake, invitePhoneRest || undefined)); setCopiedLink(true); setTimeout(() => setCopiedLink(false), 2000); }} className="px-3 py-2 bg-gray-100 rounded-r-lg border">{copiedLink ? 'Copied' : 'Copy'}</button>
+                </div>
+                <div className="flex space-x-3">
+                  <button onClick={handleShare} className="px-4 py-2 bg-gray-100 rounded-lg border">Share</button>
+                  <button onClick={() => { reset(); }} className="px-4 py-2 bg-white rounded-lg border">Cancel</button>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        // Default public matching UI
         return (
           <div className="max-w-md mx-auto p-8 text-center">
             <div className="mb-6">

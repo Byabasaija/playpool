@@ -44,10 +44,12 @@ export async function initiateStake(phone: string, stake: number, displayName?: 
   } as StakeResponse;
 }
 
-export async function requeuePlayer(phone: string, queueId?: number, stakeAmount?: number): Promise<any> {
+export async function requeuePlayer(phone: string, queueId?: number, stakeAmount?: number, opts?: { mode?: 'private', invite_phone?: string }): Promise<any> {
   const body: any = {};
   if (queueId) body.queue_id = queueId;
   if (stakeAmount) body.stake_amount = stakeAmount;
+  if (opts?.mode) body.mode = opts.mode;
+  if (opts?.invite_phone) body.invite_phone = formatPhone(opts.invite_phone);
 
   const response = await fetch(`${API_BASE}/player/${formatPhone(phone)}/requeue`, {
     method: 'POST',
@@ -95,7 +97,7 @@ export async function updateDisplayName(phone: string, name: string): Promise<{ 
   return { display_name: data.display_name };
 }
 
-export async function getPlayerProfile(phone: string): Promise<{display_name?: string, fee_exempt_balance?: number, expired_queue?: {id:number, stake_amount:number}} | null> {
+export async function getPlayerProfile(phone: string): Promise<{display_name?: string, fee_exempt_balance?: number, expired_queue?: {id:number, stake_amount:number, match_code?: string, is_private?: boolean}} | null> {
   const response = await fetch(`${API_BASE}/player/${formatPhone(phone)}`);
   if (response.status === 404) return null;
 

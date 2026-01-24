@@ -39,8 +39,14 @@ export function useMatchmaking() {
       // Handle private-created flow
       if (stakeResult.status === 'private_created') {
         setPrivateMatch({ match_code: stakeResult.match_code || '', expires_at: stakeResult.expires_at, queue_id: stakeResult.queue_id, queue_token: stakeResult.queue_token });
-        setStage('private_created' as MatchmakingStage);
         setIsLoading(false);
+        // Auto-start waiting for inviter if queue_token is available
+        if (stakeResult.queue_token) {
+          // startPolling will set stage to 'matching'
+          startPolling(stakeResult.queue_token, displayName);
+        } else {
+          setStage('private_created' as MatchmakingStage);
+        }
         return;
       }
 

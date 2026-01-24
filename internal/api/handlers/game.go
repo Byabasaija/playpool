@@ -9,6 +9,7 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -226,6 +227,16 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 		if db != nil {
 			// CREATE PRIVATE: generate a unique match code and mark row private
 			if req.CreatePrivate {
+				// Require invite phone for private matches
+				if strings.TrimSpace(req.InvitePhone) == "" {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "invite_phone required for private matches"})
+					return
+				}
+				invitePhoneNorm := normalizePhone(req.InvitePhone)
+				if invitePhoneNorm == "" {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "invalid invite_phone format"})
+					return
+				}
 				// Attempt to generate and insert a unique match code several times on conflict
 				attempts := 0
 				var inserted bool
@@ -261,14 +272,15 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 						invitePhone := normalizePhone(req.InvitePhone)
 						if invitePhone != "" {
 							smsInviteQueued = true
-							go func(code string, invite string, stake int) {
-								msg := fmt.Sprintf("Join my PlayMatatu private match! Code: %s. Stake: %d UGX. Expires: %s. Visit: %s", code, stake, expiresAt.Format(time.RFC1123), cfg.FrontendURL)
+							joinLink := fmt.Sprintf("%s/join?match_code=%s&stake=%d&invite_phone=%s", cfg.FrontendURL, code, req.StakeAmount, url.QueryEscape(invitePhone))
+							go func(code string, invite string, stake int, link string) {
+								msg := fmt.Sprintf("Join my PlayMatatu private match! Code: %s. Stake: %d UGX. Join: %s (You can change phone before paying)", code, stake, link)
 								if msgID, err := sms.SendSMS(context.Background(), invite, msg); err != nil {
 									log.Printf("[SMS] Failed to send invite to %s: %v", invite, err)
 								} else {
 									log.Printf("[SMS] Invite sent to %s msg_id=%s", invite, msgID)
 								}
-							}(code, invitePhone, req.StakeAmount)
+							}(code, invitePhone, req.StakeAmount, joinLink)
 						}
 					}
 
