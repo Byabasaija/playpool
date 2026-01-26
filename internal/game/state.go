@@ -103,7 +103,8 @@ type GameState struct {
 	CompletedAt  *time.Time `json:"completed_at,omitempty"`
 	LastActivity time.Time  `json:"last_activity"`
 	SessionID    int        `json:"session_id,omitempty"`
-	mu           sync.RWMutex
+	// (final points are computed on-demand for completed games)
+	mu sync.RWMutex
 }
 
 // NewGame creates a new game state
@@ -460,6 +461,7 @@ func (g *GameState) PlayCard(playerID string, card Card, declaredSuit Suit) (*Pl
 			g.WinType = "draw"
 		}
 
+		// Populate result so the immediate caller gets final info
 		result.GameOver = true
 		result.Winner = g.Winner
 		result.WinType = g.WinType
@@ -824,6 +826,25 @@ func (g *GameState) GetGameStateForPlayer(playerID string) map[string]interface{
 		"stake_amount":          g.StakeAmount,
 		"winner":                g.Winner,
 		"win_type":              g.WinType,
+		// Provide final points when the game is completed; otherwise nil
+		"player_points": func() interface{} {
+			if g.Status == StatusCompleted {
+				if myID == g.Player1.ID {
+					return g.calculateHandPoints(g.Player1.Hand)
+				}
+				return g.calculateHandPoints(g.Player2.Hand)
+			}
+			return nil
+		}(),
+		"opponent_points": func() interface{} {
+			if g.Status == StatusCompleted {
+				if myID == g.Player1.ID {
+					return g.calculateHandPoints(g.Player2.Hand)
+				}
+				return g.calculateHandPoints(g.Player1.Hand)
+			}
+			return nil
+		}(),
 	}
 }
 
