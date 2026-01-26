@@ -362,27 +362,39 @@ export const GamePage: React.FC = () => {
 
   if (gameOver) {
     const youWon = gameOver.isWinner;
+    const isDraw = (gameOver as any).isDraw === true;
 
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="p-8 text-center max-w-md mx-auto">
           <div className="mb-6">
             <div className={`h-20 w-20 rounded-full mx-auto flex items-center justify-center text-4xl ${
-              youWon ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'
+              isDraw ? 'bg-gray-100 text-gray-700' : (youWon ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600')
             }`}>
-              {youWon ? '🎉' : '😔'}
+              {isDraw ? '🤝' : (youWon ? '🎉' : '😔')}
             </div>
           </div>
 
           <h2 className="text-3xl font-bold text-gray-900 mb-4">
-            {youWon ? 'You Won!' : 'You Lost'}
+            {isDraw ? 'It\'s a draw' : (youWon ? 'You Won!' : 'You Lost')}
           </h2>
 
           <div className="space-y-3 text-gray-700">
-            <p className="font-semibold">{youWon ? 'Classic win' : 'Better luck next time'}</p>
+            {isDraw ? (
+              <p className="font-semibold">Stakes refunded to your account</p>
+            ) : (
+              <p className="font-semibold">{youWon ? 'Classic win' : 'Better luck next time'}</p>
+            )}
           </div>
 
           <div className="flex gap-3 mt-6">
+            <button
+              onClick={() => alert('Rematch not implemented yet')}
+              className="flex-1 bg-[#111827] text-white py-2 px-4 rounded-md text-sm font-semibold hover:opacity-90 transition-colors"
+            >
+              Rematch
+            </button>
+
             <button
               onClick={() => window.location.href = '/'}
               className="flex-1 bg-[#373536] text-white py-2 px-4 rounded-md text-sm font-semibold hover:bg-[#2c2b2a] transition-colors"

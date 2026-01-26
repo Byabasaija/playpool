@@ -44,4 +44,5 @@ export interface GameOverData {
   winType: WinType;
   playerPoints?: number;
   opponentPoints?: number;
+  isDraw?: boolean;
 }

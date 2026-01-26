@@ -134,12 +134,18 @@ func NewGame(id, token string,
 			Connected:   false,
 			ShowedUp:    false,
 		},
-		Deck:         NewDeck(),
-		DiscardPile:  []Card{},
-		DrawStack:    0,
-		Status:       StatusWaiting,
-		StakeAmount:  stakeAmount,
-		ExpiresAt:    time.Now().Add(10 * time.Minute), // 10 minutes to join
+		Deck:        NewDeck(),
+		DiscardPile: []Card{},
+		DrawStack:   0,
+		Status:      StatusWaiting,
+		StakeAmount: stakeAmount,
+		// ExpiresAt configurable via GameManager config (defaults to 3 minutes)
+		ExpiresAt: time.Now().Add(time.Duration(func() int {
+			if Manager != nil && Manager.config != nil {
+				return Manager.config.GameExpiryMinutes
+			}
+			return 3
+		}()) * time.Minute),
 		CreatedAt:    time.Now(),
 		LastActivity: time.Now(),
 	}
@@ -444,17 +450,19 @@ func (g *GameState) PlayCard(playerID string, card Card, declaredSuit Suit) (*Pl
 		// Winner is player with LOWEST points
 		if playerPoints < opponentPoints {
 			g.Winner = playerID
+			g.WinType = "chop"
 		} else if opponentPoints < playerPoints {
 			g.Winner = opponent.ID
+			g.WinType = "chop"
 		} else {
-			// Tie - player who chopped wins
-			g.Winner = playerID
+			// Exact tie - this is a draw: no winner, full refund semantics handled by manager
+			g.Winner = ""
+			g.WinType = "draw"
 		}
-		g.WinType = "chop"
 
 		result.GameOver = true
 		result.Winner = g.Winner
-		result.WinType = "chop"
+		result.WinType = g.WinType
 		result.PlayerPoints = playerPoints
 		result.OpponentPoints = opponentPoints
 		result.Effect = &SpecialEffect{
@@ -462,7 +470,11 @@ func (g *GameState) PlayCard(playerID string, card Card, declaredSuit Suit) (*Pl
 			Message: "Game Chopped! Counting points...",
 		}
 		result.NextTurn = ""
-		log.Printf("[GAME] PlayCard - chop ended game, winner=%s", g.Winner)
+		if g.WinType == "draw" {
+			log.Printf("[GAME] PlayCard - chop ended in draw (playerPoints=%d opponentPoints=%d)", playerPoints, opponentPoints)
+		} else {
+			log.Printf("[GAME] PlayCard - chop ended game, winner=%s", g.Winner)
+		}
 
 		// Persist final game state
 		if Manager != nil {

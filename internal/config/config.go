@@ -95,7 +95,7 @@ func Load() *Config {
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
 
 		// Game Settings
-		GameExpiryMinutes:         getEnvInt("GAME_EXPIRY_MINUTES", 10),
+		GameExpiryMinutes:         getEnvInt("GAME_EXPIRY_MINUTES", 3),
 		QueueExpiryMinutes:        getEnvInt("QUEUE_EXPIRY_MINUTES", 10),
 		QueueProcessingVisibility: getEnvInt("QUEUE_PROCESSING_VISIBILITY_SECONDS", 30),
 		DisconnectGracePeriodSecs: getEnvInt("DISCONNECT_GRACE_PERIOD_SECONDS", 120),

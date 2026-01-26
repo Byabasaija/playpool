@@ -652,38 +652,138 @@ func (gm *GameManager) StartExpiryChecker() {
 
 // checkExpiredGames checks all WAITING games for expiry
 func (gm *GameManager) checkExpiredGames() {
-	gm.mu.Lock()
-	defer gm.mu.Unlock()
-
+	// Collect candidates under read lock
+	gm.mu.RLock()
 	now := time.Now()
-	for gameID, game := range gm.games {
+	var expiredGames []*GameState
+	for _, game := range gm.games {
 		if game.Status == StatusWaiting && now.After(game.ExpiresAt) {
-			// Game expired - apply no-show penalties
-			log.Printf("[EXPIRY] Game %s expired", gameID)
-			p1ShowedUp := game.Player1.ShowedUp
-			p2ShowedUp := game.Player2.ShowedUp
+			expiredGames = append(expiredGames, game)
+		}
+	}
+	gm.mu.RUnlock()
 
-			if p1ShowedUp && !p2ShowedUp {
-				// Player 1 showed up, Player 2 no-show
-				// TODO: Full refund to P1, P2 pays 5% fee
-				// log.Printf("[DUMMY REFUND] Full refund to %s, 95%% refund to %s (no-show fee)", game.Player1.PhoneNumber, game.Player2.PhoneNumber)
-			} else if !p1ShowedUp && p2ShowedUp {
-				// Player 2 showed up, Player 1 no-show
-				// log.Printf("[DUMMY REFUND] Full refund to %s, 95%% refund to %s (no-show fee)", game.Player2.PhoneNumber, game.Player1.PhoneNumber)
-			} else {
-				// Both no-show or both showed but didn't start
-				// log.Printf("[DUMMY REFUND] Full refund to both %s and %s", game.Player1.PhoneNumber, game.Player2.PhoneNumber)
+	for _, g := range expiredGames {
+		// Re-check under lock to avoid races
+		g.mu.RLock()
+		isWaiting := g.Status == StatusWaiting
+		g.mu.RUnlock()
+		if !isWaiting {
+			continue
+		}
+
+		log.Printf("[EXPIRY] Game %s expired; processing cancellation", g.ID)
+
+		// Attempt DB refund if persisted
+		if gm.db != nil && g.SessionID > 0 {
+			p1ID := 0
+			p2ID := 0
+			if g.Player1 != nil {
+				p1ID = g.Player1.DBPlayerID
 			}
+			if g.Player2 != nil {
+				p2ID = g.Player2.DBPlayerID
+			}
+			if p1ID > 0 && p2ID > 0 {
+				tx, err := gm.db.Beginx()
+				if err != nil {
+					log.Printf("[DB] Failed to begin tx for expiry refund session %d: %v", g.SessionID, err)
+				} else {
+					// Idempotency: skip if SESSION_CANCEL already exists
+					var cnt int
+					if err := tx.Get(&cnt, `SELECT COUNT(*) FROM escrow_ledger WHERE session_id=$1 AND entry_type='SESSION_CANCEL'`, g.SessionID); err != nil {
+						log.Printf("[DB] Failed to check existing session cancel ledger for session %d: %v", g.SessionID, err)
+						tx.Rollback()
+					} else if cnt > 0 {
+						log.Printf("[DB] Session cancel already processed for session %d", g.SessionID)
+						tx.Rollback()
+					} else {
+						// Resolve accounts
+						escrowAcc, err1 := accounts.GetOrCreateAccount(gm.db, accounts.AccountEscrow, nil)
+						p1Acc, err2 := accounts.GetOrCreateAccount(gm.db, accounts.AccountPlayerFeeExempt, &p1ID)
+						p2Acc, err3 := accounts.GetOrCreateAccount(gm.db, accounts.AccountPlayerFeeExempt, &p2ID)
+						if err1 != nil || err2 != nil || err3 != nil {
+							log.Printf("[DB] Failed to resolve accounts for expiry refund session %d: %v %v %v", g.SessionID, err1, err2, err3)
+							tx.Rollback()
+						} else {
+							amount := float64(g.StakeAmount)
+							// Refund to player 1
+							if err := accounts.Transfer(tx, escrowAcc.ID, p1Acc.ID, amount, "SESSION", sql.NullInt64{Int64: int64(g.SessionID), Valid: true}, "SESSION_CANCEL"); err != nil {
+								log.Printf("[DB] Failed to transfer expiry refund to player %d for session %d: %v", p1ID, g.SessionID, err)
+								tx.Rollback()
+							} else {
+								if _, err := tx.Exec(`INSERT INTO escrow_ledger (session_id, entry_type, player_id, amount, balance_after, description, created_at) VALUES ($1,$2,$3,$4,$5,$6,NOW())`, g.SessionID, "SESSION_CANCEL", p1ID, amount, 0.0, "Session expired - refund to player"); err != nil {
+									log.Printf("[DB] Failed to insert escrow_ledger for session cancel (p1) session %d: %v", g.SessionID, err)
+									tx.Rollback()
+									goto cancel_end
+								}
+								if _, err := tx.Exec(`INSERT INTO transactions (player_id, transaction_type, amount, status, created_at) VALUES ($1,'REFUND',$2,'COMPLETED',NOW())`, p1ID, amount); err != nil {
+									log.Printf("[DB] Failed to insert transaction for expiry refund p1 session %d: %v", g.SessionID, err)
+								}
+							}
 
-			game.Status = StatusCancelled
-			now := time.Now()
-			game.CompletedAt = &now
+							// Refund to player 2
+							if err := accounts.Transfer(tx, escrowAcc.ID, p2Acc.ID, amount, "SESSION", sql.NullInt64{Int64: int64(g.SessionID), Valid: true}, "SESSION_CANCEL"); err != nil {
+								log.Printf("[DB] Failed to transfer expiry refund to player %d for session %d: %v", p2ID, g.SessionID, err)
+								tx.Rollback()
+							} else {
+								if _, err := tx.Exec(`INSERT INTO escrow_ledger (session_id, entry_type, player_id, amount, balance_after, description, created_at) VALUES ($1,$2,$3,$4,$5,$6,NOW())`, g.SessionID, "SESSION_CANCEL", p2ID, amount, 0.0, "Session expired - refund to player"); err != nil {
+									log.Printf("[DB] Failed to insert escrow_ledger for session cancel (p2) session %d: %v", g.SessionID, err)
+									tx.Rollback()
+									goto cancel_end
+								}
+								if _, err := tx.Exec(`INSERT INTO transactions (player_id, transaction_type, amount, status, created_at) VALUES ($1,'REFUND',$2,'COMPLETED',NOW())`, p2ID, amount); err != nil {
+									log.Printf("[DB] Failed to insert transaction for expiry refund p2 session %d: %v", g.SessionID, err)
+								}
+							}
 
-			// Clean up
-			delete(gm.playerToGame, game.Player1.ID)
-			delete(gm.playerToGame, game.Player2.ID)
-			// Keep game in memory for a bit for stats/logging
-			// TODO: Move to database archive
+							// Commit
+							if err := tx.Commit(); err != nil {
+								log.Printf("[DB] Failed to commit expiry refund tx for session %d: %v", g.SessionID, err)
+								tx.Rollback()
+							} else {
+								log.Printf("[DB] Expiry refund processed for session %d", g.SessionID)
+							}
+						}
+					}
+				cancel_end: // label
+				}
+			} else {
+				log.Printf("[DB] Cannot process expiry refund - missing DB player ids for game %s session %d", g.ID, g.SessionID)
+			}
+		} else {
+			log.Printf("[EXPIRY] Skipping DB refund - no DB session for game %s", g.ID)
+		}
+
+		// After attempting DB refund, mark game cancelled in memory and DB and notify clients
+		now2 := time.Now()
+		gm.mu.Lock()
+		g.Status = StatusCancelled
+		g.CompletedAt = &now2
+		delete(gm.playerToGame, g.Player1.ID)
+		delete(gm.playerToGame, g.Player2.ID)
+		gm.mu.Unlock()
+
+		if gm.db != nil && g.SessionID > 0 {
+			if _, err := gm.db.Exec(`UPDATE game_sessions SET status=$1, completed_at=NOW() WHERE id=$2`, string(StatusCancelled), g.SessionID); err != nil {
+				log.Printf("[DB] Failed to update game_sessions for session %d to cancelled: %v", g.SessionID, err)
+			}
+		}
+
+		// Publish session_cancelled event to notify clients (if Redis configured)
+		if gm.rdb != nil {
+			p1State := g.GetGameStateForPlayer(g.Player1.ID)
+			p2State := g.GetGameStateForPlayer(g.Player2.ID)
+			payload := map[string]interface{}{"type": "session_cancelled", "game_token": g.Token, "game_id": g.ID, "message": "Game cancelled due to expiry; stakes returned to players.", "player1_state": p1State, "player2_state": p2State}
+			if b, err := json.Marshal(payload); err != nil {
+				log.Printf("[DB] Failed to marshal session_cancelled event for session %d: %v", g.SessionID, err)
+			} else {
+				if n, err := gm.rdb.Publish(context.Background(), "game_events", b).Result(); err != nil {
+					log.Printf("[DB] publish session_cancelled failed: %v", err)
+				} else {
+					log.Printf("[DB] published session_cancelled: session=%d subscribers=%d", g.SessionID, n)
+				}
+			}
 		}
 	}
 }
@@ -893,65 +993,103 @@ func (gm *GameManager) SaveFinalGameState(g *GameState) {
 			log.Printf("[DB] SaveFinalGameState: could not resolve winner DB id for winner=%s (session=%d)", g.Winner, g.SessionID)
 		}
 
-		if winnerDBID > 0 {
-			prize := int(float64(g.StakeAmount*2) * 0.9) // 10% commission (legacy placeholder)
-			// Create payout transaction and perform account transfers: debit ESCROW -> PLATFORM (payout tax) and ESCROW -> PLAYER_WINNINGS (net)
-			payoutTax := float64(g.StakeAmount*2) * float64(gm.config.PayoutTaxPercent) / 100.0
-			winnerAmount := float64(g.StakeAmount*2) - payoutTax
-
-			// Perform transfers inside a transaction
-			tx, err := gm.db.Beginx()
-			if err != nil {
-				log.Printf("[DB] Failed to begin tx for payout for session %d: %v", g.SessionID, err)
-			} else {
-				// Ensure accounts exist
-				escrowAcc, err1 := accounts.GetOrCreateAccount(gm.db, accounts.AccountEscrow, nil)
-				taxAcc, err2 := accounts.GetOrCreateAccount(gm.db, accounts.AccountTax, nil)
-				winnerAcc, err3 := accounts.GetOrCreateAccount(gm.db, accounts.AccountPlayerWinnings, &winnerDBID)
-				if err1 != nil || err2 != nil || err3 != nil {
-					log.Printf("[DB] Failed to resolve accounts for payout session %d: %v %v %v", g.SessionID, err1, err2, err3)
-					tx.Rollback()
-				} else {
-					// Debit ESCROW -> TAX (payout tax)
-					if payoutTax > 0 {
-						if err := accounts.Transfer(tx, escrowAcc.ID, taxAcc.ID, payoutTax, "SESSION", sql.NullInt64{Int64: int64(g.SessionID), Valid: true}, "Payout tax"); err != nil {
-							log.Printf("[DB] Failed to transfer payout tax for session %d to tax account: %v", g.SessionID, err)
+		// Handle draw: refund stakes back to both players (no tax)
+		if g.Status == StatusCompleted && g.WinType == "draw" {
+			// Only attempt DB refund if we have a session persisted
+			if gm.db != nil && g.SessionID > 0 {
+				p1ID := 0
+				p2ID := 0
+				if g.Player1 != nil {
+					p1ID = g.Player1.DBPlayerID
+				}
+				if g.Player2 != nil {
+					p2ID = g.Player2.DBPlayerID
+				}
+				if p1ID > 0 && p2ID > 0 {
+					tx, err := gm.db.Beginx()
+					if err != nil {
+						log.Printf("[DB] Failed to begin tx for draw refund session %d: %v", g.SessionID, err)
+					} else {
+						// Idempotency: skip if a DRAW_REFUND already exists for this session
+						var cnt int
+						if err := tx.Get(&cnt, `SELECT COUNT(*) FROM escrow_ledger WHERE session_id=$1 AND entry_type='DRAW_REFUND'`, g.SessionID); err != nil {
+							log.Printf("[DB] Failed to check existing draw refunds for session %d: %v", g.SessionID, err)
+							tx.Rollback()
+						} else if cnt > 0 {
+							log.Printf("[DB] Draw refund already processed for session %d", g.SessionID)
 							tx.Rollback()
 						} else {
-							// Debit ESCROW -> WINNER
-							if err := accounts.Transfer(tx, escrowAcc.ID, winnerAcc.ID, winnerAmount, "SESSION", sql.NullInt64{Int64: int64(g.SessionID), Valid: true}, "Payout to winner"); err != nil {
-								log.Printf("[DB] Failed to transfer winner payout for session %d: %v", g.SessionID, err)
+							// Resolve accounts
+							escrowAcc, err1 := accounts.GetOrCreateAccount(gm.db, accounts.AccountEscrow, nil)
+							p1Acc, err2 := accounts.GetOrCreateAccount(gm.db, accounts.AccountPlayerFeeExempt, &p1ID)
+							p2Acc, err3 := accounts.GetOrCreateAccount(gm.db, accounts.AccountPlayerFeeExempt, &p2ID)
+							if err1 != nil || err2 != nil || err3 != nil {
+								log.Printf("[DB] Failed to resolve accounts for draw refund session %d: %v %v %v", g.SessionID, err1, err2, err3)
 								tx.Rollback()
 							} else {
-								// Insert payout transaction row
-								if _, err := tx.Exec(`INSERT INTO transactions (player_id, transaction_type, amount, status, created_at) VALUES ($1,'PAYOUT',$2,'COMPLETED',NOW())`, winnerDBID, winnerAmount); err != nil {
-									log.Printf("[DB] Failed to insert payout transaction for session %d: %v", g.SessionID, err)
+								amount := float64(g.StakeAmount)
+								// Transfer to player1
+								if err := accounts.Transfer(tx, escrowAcc.ID, p1Acc.ID, amount, "SESSION", sql.NullInt64{Int64: int64(g.SessionID), Valid: true}, "DRAW_REFUND"); err != nil {
+									log.Printf("[DB] Failed to transfer draw refund to player %d for session %d: %v", p1ID, g.SessionID, err)
+									tx.Rollback()
+								} else {
+									if _, err := tx.Exec(`INSERT INTO escrow_ledger (session_id, entry_type, player_id, amount, balance_after, description, created_at) VALUES ($1,$2,$3,$4,$5,$6,NOW())`, g.SessionID, "DRAW_REFUND", p1ID, amount, 0.0, "Draw refund to player"); err != nil {
+										log.Printf("[DB] Failed to insert escrow_ledger for draw refund (p1) session %d: %v", g.SessionID, err)
+										tx.Rollback()
+										goto draw_refund_end
+									}
+									if _, err := tx.Exec(`INSERT INTO transactions (player_id, transaction_type, amount, status, created_at) VALUES ($1,'REFUND',$2,'COMPLETED',NOW())`, p1ID, amount); err != nil {
+										log.Printf("[DB] Failed to insert transaction for draw refund p1 session %d: %v", g.SessionID, err)
+									}
 								}
+
+								// Transfer to player2
+								if err := accounts.Transfer(tx, escrowAcc.ID, p2Acc.ID, amount, "SESSION", sql.NullInt64{Int64: int64(g.SessionID), Valid: true}, "DRAW_REFUND"); err != nil {
+									log.Printf("[DB] Failed to transfer draw refund to player %d for session %d: %v", p2ID, g.SessionID, err)
+									tx.Rollback()
+								} else {
+									if _, err := tx.Exec(`INSERT INTO escrow_ledger (session_id, entry_type, player_id, amount, balance_after, description, created_at) VALUES ($1,$2,$3,$4,$5,$6,NOW())`, g.SessionID, "DRAW_REFUND", p2ID, amount, 0.0, "Draw refund to player"); err != nil {
+										log.Printf("[DB] Failed to insert escrow_ledger for draw refund (p2) session %d: %v", g.SessionID, err)
+										tx.Rollback()
+										goto draw_refund_end
+									}
+									if _, err := tx.Exec(`INSERT INTO transactions (player_id, transaction_type, amount, status, created_at) VALUES ($1,'REFUND',$2,'COMPLETED',NOW())`, p2ID, amount); err != nil {
+										log.Printf("[DB] Failed to insert transaction for draw refund p2 session %d: %v", g.SessionID, err)
+									}
+								}
+
+								// Commit
 								if err := tx.Commit(); err != nil {
-									log.Printf("[DB] Failed to commit payout tx for session %d: %v", g.SessionID, err)
+									log.Printf("[DB] Failed to commit draw refund tx for session %d: %v", g.SessionID, err)
+									tx.Rollback()
+								} else {
+									log.Printf("[DB] Draw refund processed for session %d", g.SessionID)
 								}
 							}
 						}
-					} else {
-						// No payout tax (rare) - transfer full amount
-						if err := accounts.Transfer(tx, escrowAcc.ID, winnerAcc.ID, winnerAmount, "SESSION", sql.NullInt64{Int64: int64(g.SessionID), Valid: true}, "Payout to winner"); err != nil {
-							log.Printf("[DB] Failed to transfer winner payout for session %d: %v", g.SessionID, err)
-							tx.Rollback()
-						} else {
-							if _, err := tx.Exec(`INSERT INTO transactions (player_id, transaction_type, amount, status, created_at) VALUES ($1,'PAYOUT',$2,'COMPLETED',NOW())`, winnerDBID, winnerAmount); err != nil {
-								log.Printf("[DB] Failed to insert payout transaction for session %d: %v", g.SessionID, err)
-							}
-							if err := tx.Commit(); err != nil {
-								log.Printf("[DB] Failed to commit payout tx for session %d: %v", g.SessionID, err)
-							}
-						}
+					draw_refund_end: // label for goto
 					}
+				} else {
+					log.Printf("[DB] Cannot process draw refund - missing DB player ids for game %s session %d", g.ID, g.SessionID)
 				}
+			} else {
+				log.Printf("[DB] Skipping draw refund - no DB session for game %s", g.ID)
 			}
 
-			_, err = gm.db.Exec(`UPDATE players SET total_games_won = total_games_won + 1, total_winnings = total_winnings + $2 WHERE id = $1`, winnerDBID, prize)
-			if err != nil {
-				log.Printf("[DB] Failed to update winner aggregates for player %d: %v", winnerDBID, err)
+			// Publish game draw event to notify clients (if Redis configured)
+			if gm.rdb != nil {
+				p1State := g.GetGameStateForPlayer(g.Player1.ID)
+				p2State := g.GetGameStateForPlayer(g.Player2.ID)
+				payload := map[string]interface{}{"type": "game_draw", "game_token": g.Token, "game_id": g.ID, "message": "Game ended in a draw; stakes returned to players.", "player1_state": p1State, "player2_state": p2State}
+				if b, err := json.Marshal(payload); err != nil {
+					log.Printf("[DB] Failed to marshal game_draw event for session %d: %v", g.SessionID, err)
+				} else {
+					if n, err := gm.rdb.Publish(context.Background(), "game_events", b).Result(); err != nil {
+						log.Printf("[DB] publish game_draw failed: %v", err)
+					} else {
+						log.Printf("[DB] published game_draw: session=%d subscribers=%d", g.SessionID, n)
+					}
+				}
 			}
 		}
 
@@ -1483,6 +1621,7 @@ func (gm *GameManager) reserveStakeForSession(tx *sqlx.Tx, playerDBID, queueID, 
 		return err
 	}
 	// Insert STAKE_IN escrow ledger row referencing queue and session
+
 	if _, err := tx.Exec(`INSERT INTO escrow_ledger (session_id, entry_type, player_id, amount, balance_after, description, created_at, queue_id) VALUES ($1,$2,$3,$4,$5,$6,NOW(),$7)`, sessionID, "STAKE_IN", playerDBID, float64(stakeAmount), 0.0, "Stake moved to escrow on match init", queueID); err != nil {
 		return err
 	}

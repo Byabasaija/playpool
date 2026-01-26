@@ -15,6 +15,7 @@ export type WSMessageType =
   | 'player_forfeit'
   | 'player_idle_canceled'
   | 'game_over'
+  | 'session_cancelled'
   | 'error';
 
 export interface WSMessage {

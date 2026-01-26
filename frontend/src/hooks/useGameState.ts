@@ -152,8 +152,22 @@ export function useGameState() {
 
       // Clear transient winner info
       dispatch({ type: 'CLEAR_WINNER' });
+      return;
     }
-  }, [state.winner, state.playerId]);
+
+    // Handle draw as game over as well (no winner)
+    if (state.winType === 'draw') {
+      setGameOver({
+        isWinner: false,
+        winType: 'chop', // draw occurred on a chop
+        playerPoints: state.lastPlayerPoints ?? undefined,
+        opponentPoints: state.lastOpponentPoints ?? undefined,
+        isDraw: true
+      });
+      // Clear transient winner/draw info
+      dispatch({ type: 'CLEAR_WINNER' });
+    }
+  }, [state.winner, state.playerId, state.winType]);
 
   const setCanPass = useCallback((canPass: boolean) => {
     dispatch({ type: 'SET_CAN_PASS', payload: canPass });
