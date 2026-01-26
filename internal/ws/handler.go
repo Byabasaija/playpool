@@ -496,6 +496,11 @@ func (c *Client) handlePlayCard(g *game.GameState, data PlayCardData) {
 		"opponent_points": result.OpponentPoints,
 	})
 
+	// Notify clients that the acting player is no longer idle (clear any idle warnings)
+	// Reset both players' timers so any previously scheduled forfeits are pushed out
+	resetIdleTimersForGame(c.gameToken, g.Player1.ID, g.Player2.ID)
+	GameHub.BroadcastToGame(c.gameID, map[string]interface{}{"type": "player_idle_canceled", "player": c.playerID})
+
 	// Send updated game state to each player
 	c.broadcastGameState(g)
 }
@@ -527,6 +532,10 @@ func (c *Client) handleDrawCard(g *game.GameState) {
 		})
 	}
 
+	// Notify clients that the drawer is no longer idle
+	resetIdleTimersForGame(c.gameToken, g.Player1.ID, g.Player2.ID)
+	GameHub.BroadcastToGame(c.gameID, map[string]interface{}{"type": "player_idle_canceled", "player": c.playerID})
+
 	c.broadcastGameState(g)
 }
 
@@ -545,6 +554,10 @@ func (c *Client) handlePassTurn(g *game.GameState) {
 		"player":    c.playerID,
 		"next_turn": g.CurrentTurn,
 	})
+
+	// Notify clients that the passer is no longer idle
+	resetIdleTimersForGame(c.gameToken, g.Player1.ID, g.Player2.ID)
+	GameHub.BroadcastToGame(c.gameID, map[string]interface{}{"type": "player_idle_canceled", "player": c.playerID})
 
 	c.broadcastGameState(g)
 }
@@ -631,4 +644,23 @@ func parseCard(cardStr string) (game.Card, error) {
 	}
 
 	return game.Card{Suit: suit, Rank: rank}, nil
+}
+
+// resetIdleTimersForGame resets last_active and ZADDs idle warning/forfeit for both players
+func resetIdleTimersForGame(gameToken string, p1ID, p2ID string) {
+	if rdbClient == nil || wsConfig == nil {
+		log.Printf("[WS] cannot reset idle timers - redis or config missing")
+		return
+	}
+	ctx := context.Background()
+	now := time.Now().Unix()
+	members := []string{fmt.Sprintf("g:%s:p:%s", gameToken, p1ID), fmt.Sprintf("g:%s:p:%s", gameToken, p2ID)}
+	for _, m := range members {
+		// store last active
+		rdbClient.Set(ctx, "last_active:"+m, fmt.Sprintf("%d", now), 0)
+		// schedule warning and forfeit
+		rdbClient.ZAdd(ctx, "idle_warning", redis.Z{Score: float64(now + int64(wsConfig.IdleWarningSeconds)), Member: m})
+		rdbClient.ZAdd(ctx, "idle_forfeit", redis.Z{Score: float64(now + int64(wsConfig.IdleForfeitSeconds)), Member: m})
+		log.Printf("[WS] reset idle timers for member=%s warning_at=%d forfeit_at=%d", m, now+int64(wsConfig.IdleWarningSeconds), now+int64(wsConfig.IdleForfeitSeconds))
+	}
 }

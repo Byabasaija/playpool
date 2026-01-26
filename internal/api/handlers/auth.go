@@ -8,14 +8,19 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"math"
 	"math/big"
 	"net/http"
+	"os"
 	"strings"
 	"time"
+
+	"database/sql"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/jmoiron/sqlx"
+	"github.com/playmatatu/backend/internal/accounts"
 	"github.com/playmatatu/backend/internal/config"
 	"github.com/playmatatu/backend/internal/sms"
 	"github.com/redis/go-redis/v9"
@@ -202,16 +207,269 @@ func GetMe(db *sqlx.DB) gin.HandlerFunc {
 			return
 		}
 
-		// Placeholder balances/stats
+		// Read aggregated stats
+		var stats struct {
+			TotalGamesPlayed int     `db:"total_games_played"`
+			TotalGamesWon    int     `db:"total_games_won"`
+			TotalWinnings    float64 `db:"total_winnings"`
+		}
+		if err := db.Get(&stats, `SELECT total_games_played, total_games_won, total_winnings FROM players WHERE id=$1`, pid); err != nil {
+			// fallback to zeros if needed
+			stats.TotalGamesPlayed = 0
+			stats.TotalGamesWon = 0
+			stats.TotalWinnings = 0
+		}
+
+		// Get fee-exempt balance and player winnings account balances
+		feeBalance := 0.0
+		winningsBalance := 0.0
+		if acc, err := accounts.GetOrCreateAccount(db, accounts.AccountPlayerFeeExempt, &player.ID); err == nil {
+			feeBalance = acc.Balance
+		}
+		if acc2, err := accounts.GetOrCreateAccount(db, accounts.AccountPlayerWinnings, &player.ID); err == nil {
+			winningsBalance = acc2.Balance
+		}
+
 		profile := gin.H{
 			"display_name":       player.DisplayName,
 			"phone":              player.PhoneNumber,
-			"fee_exempt_balance": 0,
-			"total_games_played": 0,
-			"total_games_won":    0,
-			"total_winnings":     0,
+			"fee_exempt_balance": feeBalance,
+			"player_winnings":    winningsBalance,
+			"total_games_played": stats.TotalGamesPlayed,
+			"total_games_won":    stats.TotalGamesWon,
+			"total_winnings":     stats.TotalWinnings,
 		}
 		c.JSON(http.StatusOK, profile)
+	}
+}
+
+// POST /api/v1/me/withdraw
+func RequestWithdraw(db *sqlx.DB, cfg *config.Config) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		pidI, ok := c.Get("player_id")
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		pid := pidI.(int)
+
+		var req struct {
+			Amount      float64 `json:"amount"`
+			Method      string  `json:"method"`
+			Destination string  `json:"destination"`
+		}
+		if err := c.BindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+			return
+		}
+
+		// Basic validation
+		if req.Amount <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid amount"})
+			return
+		}
+
+		// Enforce minimum withdraw amount
+		if int(req.Amount) < cfg.MinWithdrawAmount {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("minimum withdraw is %d", cfg.MinWithdrawAmount)})
+			return
+		}
+
+		// Read player's winnings account balance
+		wAcc, err := accounts.GetOrCreateAccount(db, accounts.AccountPlayerWinnings, &pid)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read account"})
+			return
+		}
+		if wAcc.Balance < req.Amount {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "insufficient winnings balance"})
+			return
+		}
+
+		// Compute provider fee (visual) but do not apply it to player_winnings (they already paid commission earlier)
+		feePct := cfg.WithdrawProviderFeePercent
+		fee := math.Round(req.Amount*float64(feePct)) / 100.0
+		net := req.Amount - fee
+
+		// Reserve funds: debit player_winnings -> settlement inside tx and create withdraw_request
+		tx, err := db.Beginx()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+			return
+		}
+
+		// Ensure settlement account exists
+		sett, err := accounts.GetOrCreateAccount(db, accounts.AccountSettlement, nil)
+		if err != nil {
+			tx.Rollback()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+			return
+		}
+
+		// Transfer player_winnings -> settlement (reserve full amount)
+		if err := accounts.Transfer(tx, wAcc.ID, sett.ID, req.Amount, "WITHDRAW_REQUEST", sql.NullInt64{Int64: 0, Valid: false}, "Withdraw request reserve"); err != nil {
+			tx.Rollback()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to reserve funds"})
+			return
+		}
+
+		// Insert withdraw_request
+		var reqID int
+		if err := tx.QueryRowx(`INSERT INTO withdraw_requests (player_id, amount, fee, net_amount, method, destination, status, created_at) VALUES ($1,$2,$3,$4,$5,$6,'PENDING',NOW()) RETURNING id`, pid, req.Amount, fee, net, req.Method, req.Destination).Scan(&reqID); err != nil {
+			tx.Rollback()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create withdraw request"})
+			return
+		}
+
+		if err := tx.Commit(); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to commit"})
+			return
+		}
+
+		// If MOCK_MODE, process immediately (synchronously) with simulated transfers
+		if cfg.MockMode {
+			go func(reqID int, amount, fee, net float64) {
+				processWithdrawMock(db, cfg, reqID, pid, amount, fee, net)
+			}(reqID, req.Amount, fee, net)
+		}
+
+		c.JSON(http.StatusOK, gin.H{"request_id": reqID, "amount": req.Amount, "fee": fee, "net": net})
+	}
+}
+
+// processWithdrawMock simulates a payout: settlement -> platform (fee) and settlement -> "payout" (net)
+func processWithdrawMock(db *sqlx.DB, cfg *config.Config, reqID, pid int, amount, fee, net float64) {
+	log.Printf("[WITHDRAW MOCK] Processing withdraw=%d amount=%.2f fee=%.2f net=%.2f", reqID, amount, fee, net)
+	// allow sim failure via env var
+	if os.Getenv("WITHDRAW_MOCK_FAIL") == "true" {
+		log.Printf("[WITHDRAW MOCK] Simulated failure for request %d", reqID)
+		// Refund: move settlement back to player_winnings
+		tx, err := db.Beginx()
+		if err != nil {
+			log.Printf("[WITHDRAW MOCK] failed to begin tx: %v", err)
+			return
+		}
+		sett, err := accounts.GetOrCreateAccount(db, accounts.AccountSettlement, nil)
+		if err != nil {
+			tx.Rollback()
+			log.Printf("[WITHDRAW MOCK] failed to get settlement account: %v", err)
+			return
+		}
+		pwAcc, err := accounts.GetOrCreateAccount(db, accounts.AccountPlayerWinnings, &pid)
+		if err != nil {
+			tx.Rollback()
+			log.Printf("[WITHDRAW MOCK] failed to get player winnings account: %v", err)
+			return
+		}
+		// refund settlement -> player winnings
+		if err := accounts.Transfer(tx, sett.ID, pwAcc.ID, amount, "WITHDRAW_REFUND", sql.NullInt64{Int64: int64(reqID), Valid: true}, "Withdraw failed - refunded"); err != nil {
+			tx.Rollback()
+			log.Printf("[WITHDRAW MOCK] refund transfer failed: %v", err)
+			return
+		}
+		// mark request FAILED
+		if _, err := tx.Exec(`UPDATE withdraw_requests SET status='FAILED', processed_at=NOW(), note=$1 WHERE id=$2`, "simulated failure", reqID); err != nil {
+			tx.Rollback()
+			log.Printf("[WITHDRAW MOCK] failed to mark request failed: %v", err)
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			log.Printf("[WITHDRAW MOCK] commit failed on refund: %v", err)
+			return
+		}
+		log.Printf("[WITHDRAW MOCK] Simulated failure handled for request %d", reqID)
+		return
+	}
+
+	// Normal path: deduct settlement by full amount (external outflow), record account_transaction debit with credit NULL
+	tx, err := db.Beginx()
+	if err != nil {
+		log.Printf("[WITHDRAW MOCK] failed to begin tx: %v", err)
+		return
+	}
+
+	// Get settlement
+	sett, err := accounts.GetOrCreateAccount(db, accounts.AccountSettlement, nil)
+	if err != nil {
+		tx.Rollback()
+		log.Printf("[WITHDRAW MOCK] failed to get settlement account: %v", err)
+		return
+	}
+
+	// Deduct settlement balance atomically and ensure sufficient funds
+	var newBal float64
+	if err := tx.Get(&newBal, `UPDATE accounts SET balance = balance - $1 WHERE id=$2 AND balance >= $1 RETURNING balance`, amount, sett.ID); err != nil {
+		tx.Rollback()
+		log.Printf("[WITHDRAW MOCK] insufficient settlement funds or update failed: %v", err)
+		// Attempt to refund to player_winnings just in case (though reservation should have ensured funds)
+		pwAcc, _ := accounts.GetOrCreateAccount(db, accounts.AccountPlayerWinnings, &pid)
+		if pwAcc != nil {
+			if rErr := accounts.Transfer(tx, sett.ID, pwAcc.ID, amount, "WITHDRAW_REFUND", sql.NullInt64{Int64: int64(reqID), Valid: true}, "Refund on insufficient settlement"); rErr != nil {
+				log.Printf("[WITHDRAW MOCK] refund attempt failed: %v", rErr)
+			}
+		}
+		return
+	}
+
+	// Insert account_transactions entry representing external payout (debit settlement, credit external)
+	if _, err := tx.Exec(`INSERT INTO account_transactions (debit_account_id, credit_account_id, amount, reference_type, reference_id, description, created_at) VALUES ($1,$2,$3,$4,$5,$6,NOW())`, sett.ID, nil, amount, "WITHDRAW", sql.NullInt64{Int64: int64(reqID), Valid: true}, "Payout to external"); err != nil {
+		tx.Rollback()
+		log.Printf("[WITHDRAW MOCK] failed to insert account_transaction: %v", err)
+		return
+	}
+
+	// Record player transaction (net amount)
+	if _, err := tx.Exec(`INSERT INTO transactions (player_id, transaction_type, amount, status, created_at) VALUES ($1,'WITHDRAW',$2,'COMPLETED',NOW())`, pid, net); err != nil {
+		tx.Rollback()
+		log.Printf("[WITHDRAW MOCK] failed to insert transaction: %v", err)
+		return
+	}
+
+	// Update withdraw_request status to COMPLETED
+	if _, err := tx.Exec(`UPDATE withdraw_requests SET status='COMPLETED', processed_at=NOW() WHERE id=$1`, reqID); err != nil {
+		tx.Rollback()
+		log.Printf("[WITHDRAW MOCK] failed to update request status: %v", err)
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Printf("[WITHDRAW MOCK] commit failed: %v", err)
+		return
+	}
+
+	log.Printf("[WITHDRAW MOCK] Completed withdraw request %d", reqID)
+}
+
+// GetMyWithdraws returns withdraw requests for the authenticated player
+func GetMyWithdraws(db *sqlx.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		pidI, ok := c.Get("player_id")
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		pid := pidI.(int)
+
+		var rows []struct {
+			ID            int            `db:"id" json:"id"`
+			Amount        float64        `db:"amount" json:"amount"`
+			Fee           float64        `db:"fee" json:"fee"`
+			NetAmount     float64        `db:"net_amount" json:"net_amount"`
+			Method        string         `db:"method" json:"method"`
+			Destination   string         `db:"destination" json:"destination"`
+			ProviderTxnID sql.NullString `db:"provider_txn_id" json:"provider_txn_id,omitempty"`
+			Status        string         `db:"status" json:"status"`
+			CreatedAt     time.Time      `db:"created_at" json:"created_at"`
+			ProcessedAt   sql.NullTime   `db:"processed_at" json:"processed_at,omitempty"`
+			Note          sql.NullString `db:"note" json:"note,omitempty"`
+		}
+
+		if err := db.Select(&rows, `SELECT id, amount, fee, net_amount, method, destination, provider_txn_id, status, created_at, processed_at, note FROM withdraw_requests WHERE player_id=$1 ORDER BY created_at DESC`, pid); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch withdraws"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"withdraws": rows})
 	}
 }
 

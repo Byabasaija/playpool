@@ -110,6 +110,11 @@ func StartIdleEventSubscriber(ctx context.Context) {
 				GameHub.mu.RUnlock()
 				GameHub.BroadcastToGame(gameID, msg)
 
+			case "player_idle_canceled":
+				log.Printf("[WS] idle_event player_idle_canceled received for game %s", gameID)
+				// nothing else to do - WS handler will have already handled broadcasted cancel
+				break
+
 			default:
 				log.Printf("[WS] unknown idle event type: %s", typeStr)
 			}

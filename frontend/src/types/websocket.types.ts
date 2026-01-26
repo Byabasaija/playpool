@@ -13,6 +13,7 @@ export type WSMessageType =
   | 'player_disconnected'
   | 'player_idle_warning'
   | 'player_forfeit'
+  | 'player_idle_canceled'
   | 'game_over'
   | 'error';
 
@@ -47,6 +48,8 @@ export interface WSMessage {
   my_display_name?: string;
   opponent_display_name?: string;
   forfeit_at?: string;
+  // player_idle_canceled has a player field (id)
+  // handled by client to clear idle banners for both sides
 }
 
 export interface PlayCardMessage {

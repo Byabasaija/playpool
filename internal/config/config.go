@@ -69,6 +69,11 @@ type Config struct {
 	IdleWarningSeconds     int
 	IdleForfeitSeconds     int
 	IdleWorkerPollInterval int
+	// Withdraw provider fee percent (telecom fee applied at payout time)
+	WithdrawProviderFeePercent int
+	// Withdraw settings
+	MockMode          bool
+	MinWithdrawAmount int
 }
 
 func Load() *Config {
@@ -138,6 +143,11 @@ func Load() *Config {
 		IdleWarningSeconds:     getEnvInt("IDLE_WARNING_SECONDS", 45),
 		IdleForfeitSeconds:     getEnvInt("IDLE_FORFEIT_SECONDS", 90),
 		IdleWorkerPollInterval: getEnvInt("IDLE_WORKER_POLL_INTERVAL", 1),
+		// Withdraw provider fee percent (e.g., telecom/MOMO fee applied at payout time)
+		WithdrawProviderFeePercent: getEnvInt("WITHDRAW_PROVIDER_FEE_PERCENT", 3),
+		// Withdraw configuration
+		MockMode:          getEnv("MOCK_MODE", "true") == "true",
+		MinWithdrawAmount: getEnvInt("MIN_WITHDRAW_AMOUNT", 1000),
 	}
 }
 

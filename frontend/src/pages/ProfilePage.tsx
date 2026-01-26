@@ -1,5 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { getConfig } from '../utils/apiClient';
+import { GetWithdrawsResponse } from '../types/api.types';
 
 export const ProfilePage: React.FC = () => {
   const [phoneRest, setPhoneRest] = useState('');
@@ -12,12 +14,47 @@ export const ProfilePage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [playerExists, setPlayerExists] = useState<boolean | null>(null);
   const [allowCreate, setAllowCreate] = useState(false);
+  const [config, setConfig] = useState<any>(null);
+  const [withdrawAmount, setWithdrawAmount] = useState<number | ''>('');
+  const [withdraws, setWithdraws] = useState<any[]>([]);
+  const [loadingWithdraws, setLoadingWithdraws] = useState(false);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [confirmLoading, setConfirmLoading] = useState(false);
+  const [amountError, setAmountError] = useState<string | null>(null);
+  const confirmBtnRef = useRef<HTMLButtonElement | null>(null);
 
   const navigate = useNavigate();
 
   useEffect(() => {
     if (token) {
       fetchProfile(token);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const cfg = await getConfig();
+        setConfig(cfg);
+      } catch (e) {
+        // ignore
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (token) {
+      (async () => {
+        setLoadingWithdraws(true);
+        try {
+          const resp = await fetch('/api/v1/me/withdraws', { headers: { Authorization: `Bearer ${token}` } });
+          if (resp.ok) {
+            const d = await resp.json() as GetWithdrawsResponse;
+            setWithdraws(d.withdraws || []);
+          }
+        } catch (e) {}
+        setLoadingWithdraws(false);
+      })();
     }
   }, [token]);
 
@@ -121,6 +158,65 @@ export const ProfilePage: React.FC = () => {
     }
   };
 
+  const feePct = config?.withdraw_provider_fee_percent ?? 0;
+  const minWithdraw = config?.min_withdraw_amount ?? 0;
+  const availableWinnings = profile?.player_winnings ?? profile?.total_winnings ?? 0;
+
+  const computeFee = (amount: number) => {
+    return Math.round(amount * feePct) / 100;
+  };
+
+  const computeNet = (amount: number) => {
+    return amount - computeFee(amount);
+  };
+
+  const openConfirm = () => {
+    setAmountError(null);
+    if (!withdrawAmount || Number(withdrawAmount) <= 0) {
+      setAmountError('Enter a positive amount');
+      return;
+    }
+    if (Number(withdrawAmount) < minWithdraw) {
+      setAmountError(`Minimum withdraw is ${minWithdraw} UGX`);
+      return;
+    }
+    if (Number(withdrawAmount) > availableWinnings) {
+      setAmountError('Amount exceeds available withdrawable balance');
+      return;
+    }
+    setShowConfirmModal(true);
+    // focus confirm button after a tick
+    setTimeout(() => confirmBtnRef.current?.focus(), 0);
+  };
+
+  const confirmWithdraw = async () => {
+    if (!token || !withdrawAmount) return;
+    setConfirmLoading(true);
+    try {
+      const resp = await fetch('/api/v1/me/withdraw', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ amount: Number(withdrawAmount), method: 'MOMO', destination: '' })
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        setMessage(data.error || 'Failed to request withdraw');
+      } else {
+        setMessage('Withdraw requested');
+        setShowConfirmModal(false);
+        setWithdrawAmount('');
+        // refresh withdraws list
+        const wresp = await fetch('/api/v1/me/withdraws', { headers: { Authorization: `Bearer ${token}` } });
+        if (wresp.ok) {
+          const d = await wresp.json() as GetWithdrawsResponse;
+          setWithdraws(d.withdraws || []);
+        }
+      }
+    } catch (e) {
+      setMessage('Network error');
+    }
+    setConfirmLoading(false);
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center">
       <div className="max-w-md mx-auto rounded-2xl p-8 bg-white shadow">
@@ -183,6 +279,9 @@ export const ProfilePage: React.FC = () => {
               <div className="font-semibold">Balances</div>
               <div>Available balance: <span className="font-bold">{profile?.fee_exempt_balance ?? 0} UGX</span></div>
               <div>Total winnings: <span className="font-bold">{profile?.total_winnings ?? 0} UGX</span></div>
+              {config?.withdraw_provider_fee_percent != null && (
+                <div className="text-xs text-gray-500">Withdrawals subject to provider fees (≈{config.withdraw_provider_fee_percent}%)</div>
+              )}
             </div>
 
             <div className="p-4 border rounded space-y-2">
@@ -192,6 +291,58 @@ export const ProfilePage: React.FC = () => {
               <div>Win rate: {(stats?.win_rate ?? 0).toFixed(1)}%</div>
               <div>Current streak: {stats?.current_streak ?? 0}</div>
               <div>Rank: {stats?.rank ?? 'Bronze'}</div>
+            </div>
+
+            <div className="p-4 border rounded space-y-2">
+              <div className="font-semibold">Withdraw</div>
+              <div className="text-sm">Available to withdraw: <span className="font-bold">{availableWinnings} UGX</span></div>
+              <div className="text-sm">Amount (UGX)</div>
+              <label htmlFor="withdraw-amount" className="sr-only">Amount in UGX</label>
+              <input id="withdraw-amount" type="number" className="w-full px-3 py-2 border rounded" value={withdrawAmount as any} onChange={(e) => setWithdrawAmount(e.target.value === '' ? '' : Number(e.target.value))} aria-describedby="withdraw-help" />
+
+              <div id="withdraw-help" className="text-xs text-gray-500">
+                {feePct ? `Provider fee: ≈${feePct}%` : null}
+                {minWithdraw ? ` — min ${minWithdraw} UGX` : null}
+              </div>
+
+              {/* Preview */}
+              {withdrawAmount && Number(withdrawAmount) > 0 && (
+                <div className="mt-2 p-2 bg-gray-50 rounded text-sm">
+                  <div>Fee: <span className="font-semibold">{computeFee(Number(withdrawAmount))} UGX</span></div>
+                  <div>Net you receive: <span className="font-semibold">{computeNet(Number(withdrawAmount))} UGX</span></div>
+                </div>
+              )}
+
+              {amountError && <div className="text-sm text-red-600">{amountError}</div>}
+
+              <div className="flex gap-3 mt-2">
+                <button className="flex-1 bg-[#373536] text-white py-2 rounded" onClick={openConfirm} disabled={!withdrawAmount || loading}>
+                  {loading ? 'Processing...' : 'Withdraw'}
+                </button>
+              </div>
+            </div>
+
+            <div className="p-4 border rounded space-y-2">
+              <div className="font-semibold">My withdraws</div>
+              {loadingWithdraws ? <div className="text-sm">Loading...</div> : (
+                <div className="space-y-2 text-sm">
+                  {withdraws.length === 0 ? <div>No withdraws</div> : withdraws.map(w => (
+                    <div key={w.id} className="p-2 bg-gray-50 rounded">
+                      <div className="flex justify-between">
+                        <div>
+                          <div className="font-medium">{new Date(w.created_at).toLocaleString()}</div>
+                          <div className="text-xs text-gray-600">Method: {w.method} {w.destination ? `— ${w.destination}` : ''}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-semibold">{w.amount} UGX</div>
+                          <div className="text-xs">Fee: {w.fee} — Net: {w.net_amount}</div>
+                          <div className="text-xs">{w.status}</div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="flex gap-3">
@@ -204,6 +355,25 @@ export const ProfilePage: React.FC = () => {
             </div>
 
             {message && <div className="text-sm text-gray-600 text-center">{message}</div>}
+          </div>
+        )}
+
+        {/* Confirmation modal */}
+        {showConfirmModal && (
+          <div className="fixed inset-0 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="withdraw-confirm-title">
+            <div className="absolute inset-0 bg-black opacity-40" onClick={() => setShowConfirmModal(false)} aria-hidden="true"></div>
+            <div className="bg-white rounded p-6 z-10 max-w-md w-full mx-4">
+              <h2 id="withdraw-confirm-title" className="text-lg font-semibold">Confirm Withdraw</h2>
+              <div className="mt-4 text-sm">
+                <div>Amount: <span className="font-semibold">{withdrawAmount} UGX</span></div>
+                <div>Fee: <span className="font-semibold">{computeFee(Number(withdrawAmount))} UGX</span></div>
+                <div>Net you will receive: <span className="font-semibold">{computeNet(Number(withdrawAmount))} UGX</span></div>
+              </div>
+              <div className="mt-6 flex gap-3">
+                <button ref={confirmBtnRef} className="flex-1 bg-[#373536] text-white py-2 rounded" onClick={confirmWithdraw} disabled={confirmLoading}>{confirmLoading ? 'Processing...' : 'Confirm'}</button>
+                <button className="flex-1 bg-white border py-2 rounded" onClick={() => setShowConfirmModal(false)} disabled={confirmLoading}>Cancel</button>
+              </div>
+            </div>
           </div>
         )}
       </div>

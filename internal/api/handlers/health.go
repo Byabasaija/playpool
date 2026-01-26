@@ -8,6 +8,7 @@ import (
 )
 
 var startTime = time.Now()
+
 const version = "2.0.0-game-links" // Updated with game link changes
 
 // HealthCheck returns server health status

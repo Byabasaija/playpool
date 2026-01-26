@@ -77,6 +77,9 @@ func SetupRoutes(router *gin.Engine, db *sqlx.DB, rdb *redis.Client, cfg *config
 
 		// Protected profile endpoint
 		v1.GET("/me", handlers.AuthMiddleware(cfg), handlers.GetMe(db))
+		// Withdraw
+		v1.POST("/me/withdraw", handlers.AuthMiddleware(cfg), handlers.RequestWithdraw(db, cfg))
+		v1.GET("/me/withdraws", handlers.AuthMiddleware(cfg), handlers.GetMyWithdraws(db))
 
 		// Config endpoint
 		v1.GET("/config", handlers.GetConfig(cfg))

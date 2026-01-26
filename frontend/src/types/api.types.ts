@@ -33,3 +33,28 @@ export interface QueueStatusResponse {
   // Human-readable server message (e.g. 'Player not in queue')
   message?: string;
 }
+
+export interface WithdrawRequestResponse {
+  request_id: number;
+  amount: number;
+  fee: number;
+  net: number;
+}
+
+export interface WithdrawRow {
+  id: number;
+  amount: number;
+  fee: number;
+  net_amount: number;
+  method: string;
+  destination: string;
+  provider_txn_id?: string | null;
+  status: string;
+  created_at: string;
+  processed_at?: string | null;
+  note?: string | null;
+}
+
+export interface GetWithdrawsResponse {
+  withdraws: WithdrawRow[];
+}

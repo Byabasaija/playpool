@@ -137,10 +137,11 @@ export const GamePage: React.FC = () => {
         drawPendingRef.current = false;
         setCanPass(false);
 
-        // If the idle player actually played, clear the idle banner
+        // If the acting player is THIS client, clear the idle banner
         try {
           const actingPlayer = (message as any).player as string | undefined;
-          if (actingPlayer && idlePlayer && actingPlayer === idlePlayer) {
+          console.log('[IDLE] card_played actingPlayer', actingPlayer, 'idlePlayerRef', idlePlayerRef.current, 'playerIdRef', playerIdRef.current);
+          if (actingPlayer && playerIdRef.current && actingPlayer === playerIdRef.current) {
             setIdleForfeitAt(null);
             setIdlePlayer(null);
             setIdleRemaining(null);
@@ -161,7 +162,8 @@ export const GamePage: React.FC = () => {
 
         // If I (the drawer) was the idle player, clear the idle banner
         try {
-          if (idlePlayer && idlePlayer === (gameState as any).playerId) {
+          console.log('[IDLE] cards_drawn received: idlePlayerRef', idlePlayerRef.current, 'playerIdRef', playerIdRef.current);
+          if (playerIdRef.current && idlePlayerRef.current && playerIdRef.current === idlePlayerRef.current) {
             setIdleForfeitAt(null);
             setIdlePlayer(null);
             setIdleRemaining(null);
@@ -195,6 +197,7 @@ export const GamePage: React.FC = () => {
           const fa = (message as any).forfeit_at || (message as any).forfeitAt;
           const remaining = (message as any).remaining_seconds || (message as any).remainingSeconds;
           const player = (message as any).player as string | undefined;
+          console.log('[IDLE] warning received', { player, fa, remaining });
           if (remaining != null) {
             // Use server-reported remaining seconds to avoid clock skew
             setIdleForfeitAt(Date.now() + Number(remaining) * 1000);
@@ -207,6 +210,17 @@ export const GamePage: React.FC = () => {
         } catch (e) {
           // ignore
         }
+        break;
+
+      case 'player_idle_canceled':
+        try {
+          const player = (message as any).player as string | undefined;
+          console.log('[IDLE] cancel received for player', player);
+          // Clear any banner regardless of which side receives it (authoritative cancel)
+          setIdleForfeitAt(null);
+          setIdlePlayer(null);
+          setIdleRemaining(null);
+        } catch (e) {}
         break;
 
       case 'player_forfeit':
@@ -264,6 +278,12 @@ export const GamePage: React.FC = () => {
   const [idleForfeitAt, setIdleForfeitAt] = useState<number | null>(null);
   const [idlePlayer, setIdlePlayer] = useState<string | null>(null);
   const [idleRemaining, setIdleRemaining] = useState<number | null>(null);
+
+  // Refs to ensure WS handlers see the latest playerId and idlePlayer without recreating callbacks
+  const playerIdRef = useRef<string | null>(null);
+  const idlePlayerRef = useRef<string | null>(null);
+  useEffect(() => { playerIdRef.current = gameState.playerId; }, [gameState.playerId]);
+  useEffect(() => { idlePlayerRef.current = idlePlayer; }, [idlePlayer]);
 
   // Countdown tick for idle forfeit
   useEffect(() => {
