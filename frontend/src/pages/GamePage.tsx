@@ -131,7 +131,7 @@ export const GamePage: React.FC = () => {
           revealTimerRef.current = window.setTimeout(() => {
             setRevealedSuit(null);
             revealTimerRef.current = null;
-          }, 5000);
+          }, 3000);
         }
         // Clear any pending pass state when a play happens
         drawPendingRef.current = false;

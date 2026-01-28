@@ -12,7 +12,7 @@ function generateRandomName() {
 
 export const RematchPage: React.FC = () => {
   const navigate = useNavigate();
-  const { stage, gameLink, isLoading, startGame, startPolling, reset, displayName, error } = useMatchmaking();
+  const { stage, gameLink, isLoading, startGame, displayName, error } = useMatchmaking();
 
   // Get opponent phone and stake from URL
   const params = new URLSearchParams(window.location.search);

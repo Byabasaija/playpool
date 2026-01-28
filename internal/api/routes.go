@@ -16,7 +16,7 @@ func SetupRoutes(router *gin.Engine, db *sqlx.DB, rdb *redis.Client, cfg *config
 	router.Use(func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
 		c.Header("Access-Control-Allow-Credentials", "true")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, X-Admin-Session")
 		c.Header("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
 
 		if c.Request.Method == "OPTIONS" {
@@ -85,5 +85,19 @@ func SetupRoutes(router *gin.Engine, db *sqlx.DB, rdb *redis.Client, cfg *config
 
 		// Config endpoint
 		v1.GET("/config", handlers.GetConfig(cfg))
+
+		// Admin endpoints
+		admin := v1.Group("/admin")
+		{
+			// Admin auth endpoints (no middleware)
+			admin.POST("/request-otp", handlers.AdminRequestOTP(db, rdb, cfg))
+			admin.POST("/verify-otp", handlers.AdminVerifyOTP(db, rdb, cfg))
+
+			// Protected admin endpoints (require session)
+			admin.GET("/accounts", handlers.AdminSessionMiddleware(rdb, db), handlers.GetAdminAccounts(db))
+			admin.GET("/account_transactions", handlers.AdminSessionMiddleware(rdb, db), handlers.GetAdminAccountTransactions(db))
+			admin.GET("/transactions", handlers.AdminSessionMiddleware(rdb, db), handlers.GetAdminTransactions(db))
+			admin.GET("/stats", handlers.AdminSessionMiddleware(rdb, db), handlers.GetAdminStats(db))
+		}
 	}
 }

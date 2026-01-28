@@ -136,11 +136,6 @@ export const ProfilePage: React.FC = () => {
     navigate('/');
   };
 
-  const simulateWithdraw = () => {
-    // placeholder only - do not perform any backend action
-    setMessage('Withdraw placeholder: no real withdrawal performed');
-  };
-
   const checkPlayerExists = async (phoneToCheckRest: string) => {
     setPlayerExists(null);
     const fullPhone = '256' + phoneToCheckRest.replace(/\D/g, '')

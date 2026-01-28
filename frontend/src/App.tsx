@@ -5,6 +5,8 @@ import { JoinPage } from './pages/JoinPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { TestPage } from './pages/TestPage';
 import { RematchPage } from './pages/RematchPage';
+import { AdminLoginPage } from './pages/AdminLoginPage';
+import { AdminDashboardPage } from './pages/AdminDashboardPage';
 
 function App() {
   return (
@@ -16,6 +18,8 @@ function App() {
         <Route path="/test" element={<TestPage />} />
         <Route path="/rematch" element={<RematchPage />} />
         <Route path="/g/:token" element={<GamePage />} />
+        <Route path="/pm-admin" element={<AdminLoginPage />} />
+        <Route path="/pm-admin/dashboard" element={<AdminDashboardPage />} />
       </Routes>
     </div>
   );
