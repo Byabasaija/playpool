@@ -297,8 +297,7 @@ export const ProfilePage: React.FC = () => {
             </div>
 
             <div className="p-4 border rounded space-y-2">
-              <div className="font-semibold">Balances</div>
-              <div>Account balance: <span className="font-bold">{profile?.fee_exempt_balance ?? 0} UGX</span></div>
+              <div className="font-semibold">Balance</div>
               <div className="flex items-center justify-between">
                 <div>Winnings: <span className="font-bold">{profile?.player_winnings ?? profile?.total_winnings ?? 0} UGX</span></div>
                 <div>

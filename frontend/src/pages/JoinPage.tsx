@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMatchmaking } from '../hooks/useMatchmaking';
 import { formatPhone, validatePhone } from '../utils/phoneUtils';
+import { getPlayerProfile } from '../utils/apiClient';
 
 function generateRandomName() {
   const adjectives = ["Lucky", "Swift", "Brave", "Jolly", "Mighty", "Quiet", "Clever", "Happy", "Kitenge", "Zesty"];
@@ -32,27 +33,41 @@ export const JoinPage: React.FC = () => {
 
   useEffect(() => {
     // Parse URL params
-    try {
-      const params = new URLSearchParams(window.location.search);
-      const code = params.get('match_code');
-      const s = params.get('stake');
-      const invitePhone = params.get('invite_phone');
-      if (code) setMatchCode(code.toUpperCase());
-      if (s && !Number.isNaN(Number(s))) setStake(Number(s));
-      if (invitePhone) {
-        // normalize and strip leading 256 for the input field
-        const normalized = formatPhone(invitePhone);
-        if (normalized && normalized.startsWith('256')) {
-          setPhoneRest(normalized.slice(3));
+    (async () => {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const code = params.get('match_code');
+        const s = params.get('stake');
+        const invitePhone = params.get('invite_phone');
+        if (code) setMatchCode(code.toUpperCase());
+        if (s && !Number.isNaN(Number(s))) setStake(Number(s));
+        if (invitePhone) {
+          // normalize and strip leading 256 for the input field
+          const normalized = formatPhone(invitePhone);
+          if (normalized && normalized.startsWith('256')) {
+            setPhoneRest(normalized.slice(3));
+          } else {
+            setPhoneRest(invitePhone);
+          }
+
+          // Fetch player profile to prefill display name
+          try {
+            const profile = await getPlayerProfile(normalized);
+            if (profile && profile.display_name) {
+              setDisplayName(profile.display_name);
+            } else {
+              setDisplayName(generateRandomName());
+            }
+          } catch (e) {
+            setDisplayName(generateRandomName());
+          }
         } else {
-          setPhoneRest(invitePhone);
+          setDisplayName(generateRandomName());
         }
-      } else {
+      } catch (e) {
         setDisplayName(generateRandomName());
       }
-    } catch (e) {
-      // ignore
-    }
+    })();
   }, []);
 
   const handleConfirm = async (e?: React.FormEvent) => {

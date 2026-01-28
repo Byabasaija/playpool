@@ -103,7 +103,7 @@ type Dispute struct {
 	ResolvedAt  sql.NullTime `db:"resolved_at" json:"resolved_at,omitempty"`
 }
 
-// Account represents an accounting bucket (player fee-exempt, winnings, platform, escrow, etc.)
+// Account represents an accounting bucket (player winnings, platform, escrow, settlement, tax, etc.)
 type Account struct {
 	ID            int           `db:"id" json:"id"`
 	AccountType   string        `db:"account_type" json:"account_type"`

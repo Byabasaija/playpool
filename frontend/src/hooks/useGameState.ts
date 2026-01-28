@@ -113,6 +113,7 @@ function reducer(state: GameState, action: Action): GameState {
 
       if (has('my_display_name')) next.myDisplayName = (data as any).my_display_name || null;
       if (has('opponent_display_name')) next.opponentDisplayName = (data as any).opponent_display_name || null;
+      if (has('opponent_phone')) next.opponentPhone = (data as any).opponent_phone || null;
 
       if (has('my_connected')) next.myConnected = (data as any).my_connected ?? next.myConnected;
       if (has('opponent_connected')) next.opponentConnected = (data as any).opponent_connected ?? next.opponentConnected;

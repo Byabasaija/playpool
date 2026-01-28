@@ -2,7 +2,7 @@
 
 -- Create account_type enum
 DO $$ BEGIN
-    CREATE TYPE account_type AS ENUM ('player_fee_exempt', 'player_winnings', 'platform', 'escrow', 'settlement');
+    CREATE TYPE account_type AS ENUM ('player_winnings', 'platform', 'escrow', 'settlement', 'tax');
 EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS account_transactions (
 -- Add converted_to_credit_at to matchmaking_queue for idempotent expiry conversions
 ALTER TABLE matchmaking_queue ADD COLUMN IF NOT EXISTS converted_to_credit_at TIMESTAMP NULL;
 
--- Seed system accounts (platform, escrow, settlement) if not present
+-- Seed system accounts (platform, escrow, settlement, tax) if not present
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM accounts WHERE account_type='platform') THEN
@@ -43,5 +43,8 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM accounts WHERE account_type='settlement') THEN
         INSERT INTO accounts (account_type, balance, created_at, updated_at) VALUES ('settlement', 0.00, NOW(), NOW());
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM accounts WHERE account_type='tax') THEN
+        INSERT INTO accounts (account_type, balance, created_at, updated_at) VALUES ('tax', 0.00, NOW(), NOW());
     END IF;
 END $$;

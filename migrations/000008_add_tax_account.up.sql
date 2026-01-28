@@ -1,11 +1,11 @@
 -- Safely add 'tax' value to account_type using a new enum type and migrate the column
 BEGIN;
 
--- Create a new enum type with the 'tax' value added
+-- Create a new enum type with the 'tax' value added (player_fee_exempt removed)
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'account_type_new') THEN
-        CREATE TYPE account_type_new AS ENUM ('player_fee_exempt', 'player_winnings', 'platform', 'escrow', 'settlement', 'tax');
+        CREATE TYPE account_type_new AS ENUM ('player_winnings', 'platform', 'escrow', 'settlement', 'tax');
     END IF;
 END $$;
 

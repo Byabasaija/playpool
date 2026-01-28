@@ -64,6 +64,21 @@ setup_app_directory() {
     sudo chmod 755 $APP_DIR
 }
 
+# Check Postgres version and warn if not 12
+check_postgres_version() {
+    if command -v psql >/dev/null 2>&1; then
+        local pv
+        pv=$(psql --version | awk '{print $3}')
+        if [[ "$pv" != 12.* ]]; then
+            log_warn "Detected Postgres version $pv. This environment expects Postgres 12; proceed with caution."
+        else
+            log_info "Postgres version 12 detected"
+        fi
+    else
+        log_warn "psql not found on PATH; ensure Postgres 12 is available on the server"
+    fi
+}
+
 # Function to backup current binary
 backup_current() {
     if [[ -f "$APP_DIR/bin/$BINARY_NAME" ]]; then
@@ -90,12 +105,36 @@ deploy_static_files() {
     sudo find $APP_DIR/web/ -type d -exec chmod 755 {} \;
 }
 
-# Function to deploy systemd service
-deploy_systemd_service() {
-    log_info "Deploying systemd service..."
-    sudo cp scripts/$SERVICE_NAME /etc/systemd/system/
-    sudo systemctl daemon-reload
-    sudo systemctl enable $SERVICE_NAME
+# Function to deploy supervisor service
+deploy_supervisor_service() {
+    log_info "Deploying supervisor service..."
+
+    # Install supervisor if missing
+    if ! command -v supervisorctl >/dev/null 2>&1; then
+        log_info "Supervisor not found, installing..."
+        sudo apt-get update && sudo apt-get install -y supervisor
+        sudo systemctl enable supervisor
+        sudo systemctl start supervisor
+    fi
+
+    # Copy supervisor config
+    if [[ -f "scripts/playmatatu.supervisor.conf" ]]; then
+        log_info "Copying supervisor config"
+        sudo cp scripts/playmatatu.supervisor.conf /etc/supervisor/conf.d/playmatatu.conf
+        sudo chown root:root /etc/supervisor/conf.d/playmatatu.conf
+
+        # Ensure logs directory exists and is writable by app user
+        sudo mkdir -p $APP_DIR/logs
+        sudo chown -R $APP_USER:$APP_USER $APP_DIR/logs
+
+        # Reread and update supervisor
+        sudo supervisorctl reread || true
+        sudo supervisorctl update || true
+        # Start the program if not started
+        sudo supervisorctl start playmatatu || true
+    else
+        log_warn "Supervisor config not found in scripts/, skipping supervisor deployment"
+    fi
 }
 
 # Function to deploy nginx configuration
@@ -130,26 +169,31 @@ run_migrations() {
     fi
 }
 
-# Function to restart service
+# Function to restart service via supervisor
 restart_service() {
-    log_info "Restarting $SERVICE_NAME..."
-    
-    if sudo systemctl is-active --quiet $SERVICE_NAME; then
-        sudo systemctl stop $SERVICE_NAME
-        sleep 2
+    log_info "Restarting playmatatu via supervisor..."
+
+    if ! command -v supervisorctl >/dev/null 2>&1; then
+        log_error "supervisorctl not available"
+        exit 1
     fi
-    
-    sudo systemctl start $SERVICE_NAME
-    
-    # Wait for service to start
+
+    # Attempt restart
+    sudo supervisorctl stop playmatatu || true
+    sleep 2
+    sudo supervisorctl start playmatatu || true
+
+    # Wait and check status
     sleep 3
-    
-    if sudo systemctl is-active --quiet $SERVICE_NAME; then
+
+    local status
+    status=$(sudo supervisorctl status playmatatu 2>/dev/null || true)
+    if echo "$status" | grep -q "RUNNING"; then
         log_info "Service started successfully"
-        sudo systemctl status $SERVICE_NAME --no-pager -l
+        echo "$status"
     else
         log_error "Failed to start service"
-        sudo journalctl -u $SERVICE_NAME --no-pager -l
+        echo "$status"
         exit 1
     fi
 }
@@ -159,18 +203,18 @@ health_check() {
     log_info "Running health check..."
     local max_attempts=30
     local attempt=1
-    
+
     while [[ $attempt -le $max_attempts ]]; do
         if curl -f -s http://localhost:8000/api/health > /dev/null; then
             log_info "Health check passed"
             return 0
         fi
-        
+
         log_info "Health check attempt $attempt/$max_attempts failed, retrying in 2s..."
         sleep 2
         ((attempt++))
     done
-    
+
     log_error "Health check failed after $max_attempts attempts"
     return 1
 }
@@ -185,12 +229,15 @@ deploy() {
     # Setup infrastructure
     create_app_user
     setup_app_directory
+
+    # Check Postgres version (this environment expects Postgres 12)
+    check_postgres_version
     
     # Backup and deploy
     backup_current
     deploy_binary
     deploy_static_files
-    deploy_systemd_service
+    deploy_supervisor_service
     deploy_nginx_config
     
     # Database migrations
@@ -213,10 +260,22 @@ rollback() {
     log_info "Rolling back to previous version..."
     
     if [[ -f "$APP_DIR/backups/${BINARY_NAME}.previous" ]]; then
-        sudo systemctl stop $SERVICE_NAME
+        # Stop via supervisor if available, else try systemctl
+        if command -v supervisorctl >/dev/null 2>&1; then
+            sudo supervisorctl stop playmatatu || true
+        else
+            sudo systemctl stop $SERVICE_NAME || true
+        fi
+
         sudo cp "$APP_DIR/backups/${BINARY_NAME}.previous" "$APP_DIR/bin/$BINARY_NAME"
-        sudo systemctl start $SERVICE_NAME
-        
+
+        # Start via supervisor if available, else systemctl
+        if command -v supervisorctl >/dev/null 2>&1; then
+            sudo supervisorctl start playmatatu || true
+        else
+            sudo systemctl start $SERVICE_NAME || true
+        fi
+
         if health_check; then
             log_info "Rollback completed successfully!"
         else
@@ -241,10 +300,19 @@ case "${1:-deploy}" in
         restart_service
         ;;
     "status")
-        sudo systemctl status $SERVICE_NAME
+        if command -v supervisorctl >/dev/null 2>&1; then
+            sudo supervisorctl status playmatatu
+        else
+            echo "supervisorctl not available"
+        fi
         ;;
     "logs")
-        sudo journalctl -u $SERVICE_NAME -f
+        if command -v supervisorctl >/dev/null 2>&1; then
+            sudo supervisorctl tail -f playmatatu stdout || sudo tail -n 200 -f /opt/playmatatu/logs/playmatatu.log
+        else
+            echo "supervisorctl not available; tailing logs from /opt/playmatatu/logs/"
+            sudo tail -n 200 -f /opt/playmatatu/logs/playmatatu.log
+        fi
         ;;
     "health")
         health_check

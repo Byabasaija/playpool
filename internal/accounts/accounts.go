@@ -11,12 +11,11 @@ import (
 
 // account types constants
 const (
-	AccountPlayerFeeExempt = "player_fee_exempt"
-	AccountPlayerWinnings  = "player_winnings"
-	AccountPlatform        = "platform"
-	AccountEscrow          = "escrow"
-	AccountSettlement      = "settlement"
-	AccountTax             = "tax"
+	AccountPlayerWinnings = "player_winnings"
+	AccountPlatform       = "platform"
+	AccountEscrow         = "escrow"
+	AccountSettlement     = "settlement"
+	AccountTax            = "tax"
 )
 
 // GetOrCreateAccount returns an account for the given owner and type, creating it if missing
@@ -83,7 +82,7 @@ func Transfer(tx *sqlx.Tx, debitAccountID, creditAccountID int, amount float64, 
 	}
 
 	// Basic balance check: don't allow negative balances for player-controlled accounts
-	if (debitAcc.AccountType == AccountPlayerFeeExempt || debitAcc.AccountType == AccountPlayerWinnings) && debitAcc.Balance < amount {
+	if debitAcc.AccountType == AccountPlayerWinnings && debitAcc.Balance < amount {
 		return fmt.Errorf("insufficient funds in account %d", debitAccountID)
 	}
 

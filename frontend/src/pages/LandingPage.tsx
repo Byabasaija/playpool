@@ -225,8 +225,8 @@ export const LandingPage: React.FC = () => {
       return;
     }
 
-    if (useWinnings && playerWinnings < stake) {
-      setPhoneError(`Insufficient winnings (have ${playerWinnings} UGX, need ${stake} UGX)`);
+    if (useWinnings && commission !== null && playerWinnings < stake + commission) {
+      setPhoneError(`Insufficient winnings (need ${stake + commission} UGX including commission)`);
       return;
     }
 

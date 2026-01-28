@@ -99,7 +99,7 @@ export async function updateDisplayName(phone: string, name: string): Promise<{ 
   return { display_name: data.display_name };
 }
 
-export async function getPlayerProfile(phone: string): Promise<{display_name?: string, fee_exempt_balance?: number, player_winnings?: number, expired_queue?: {id:number, stake_amount:number, match_code?: string, is_private?: boolean}} | null> {
+export async function getPlayerProfile(phone: string): Promise<{display_name?: string, player_winnings?: number, expired_queue?: {id:number, stake_amount:number, match_code?: string, is_private?: boolean}} | null> {
   const response = await fetch(`${API_BASE}/player/${formatPhone(phone)}`);
   if (response.status === 404) return null;
 
@@ -109,7 +109,7 @@ export async function getPlayerProfile(phone: string): Promise<{display_name?: s
     throw new Error(data.error || 'Failed to fetch player');
   }
 
-  return { display_name: data.display_name, fee_exempt_balance: data.fee_exempt_balance, player_winnings: data.player_winnings, expired_queue: data.expired_queue };
+  return { display_name: data.display_name, player_winnings: data.player_winnings, expired_queue: data.expired_queue };
 }
 
 export async function getConfig(): Promise<{ commission_flat: number; payout_tax_percent: number; min_stake_amount: number; withdraw_provider_fee_percent?: number; min_withdraw_amount?: number }> {

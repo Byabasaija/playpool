@@ -320,20 +320,15 @@ func GetMe(db *sqlx.DB) gin.HandlerFunc {
 			stats.TotalWinnings = 0
 		}
 
-		// Get fee-exempt balance and player winnings account balances
-		feeBalance := 0.0
+		// Get player winnings account balance
 		winningsBalance := 0.0
-		if acc, err := accounts.GetOrCreateAccount(db, accounts.AccountPlayerFeeExempt, &player.ID); err == nil {
-			feeBalance = acc.Balance
-		}
-		if acc2, err := accounts.GetOrCreateAccount(db, accounts.AccountPlayerWinnings, &player.ID); err == nil {
-			winningsBalance = acc2.Balance
+		if acc, err := accounts.GetOrCreateAccount(db, accounts.AccountPlayerWinnings, &player.ID); err == nil {
+			winningsBalance = acc.Balance
 		}
 
 		profile := gin.H{
 			"display_name":       player.DisplayName,
 			"phone":              player.PhoneNumber,
-			"fee_exempt_balance": feeBalance,
 			"player_winnings":    winningsBalance,
 			"total_games_played": stats.TotalGamesPlayed,
 			"total_games_won":    stats.TotalGamesWon,

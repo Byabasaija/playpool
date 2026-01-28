@@ -396,7 +396,16 @@ export const GamePage: React.FC = () => {
             </button>
 
             <button
-              onClick={() => alert('Rematch not implemented yet')}
+              onClick={() => {
+                const opponent = gameState.opponentPhone;
+                const stake = gameState.stakeAmount || 1000;
+                if (opponent) {
+                  window.location.href = `/rematch?opponent=${encodeURIComponent(opponent)}&stake=${stake}`;
+                } else {
+                  console.log('Cannot rematch: opponent phone not available', { gameState });
+                  alert('Unable to rematch: opponent information not available');
+                }
+              }}
               className="flex-1 bg-[#111827] text-white py-2 px-4 rounded-md text-sm font-semibold hover:opacity-90 transition-colors"
             >
               Rematch

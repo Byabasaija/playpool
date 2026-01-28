@@ -211,7 +211,7 @@ func UpdateDisplayName(db *sqlx.DB) gin.HandlerFunc {
 	}
 }
 
-// GetPlayerProfile returns basic player info (display_name) + fee-exempt balance and expired queue info if any
+// GetPlayerProfile returns basic player info (display_name) + player winnings balance and expired queue info if any
 func GetPlayerProfile(db *sqlx.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if db == nil {
@@ -227,7 +227,7 @@ func GetPlayerProfile(db *sqlx.DB) gin.HandlerFunc {
 		}
 
 		var p models.Player
-		if err := db.Get(&p, `SELECT id, phone_number, display_name FROM players WHERE phone_number=$1`, phone); err != nil {
+		if err := db.Get(&p, `SELECT id, phone_number, display_name, player_token FROM players WHERE phone_number=$1`, phone); err != nil {
 			if err == sql.ErrNoRows {
 				c.JSON(http.StatusNotFound, gin.H{"error": "player not found"})
 				return
@@ -235,12 +235,6 @@ func GetPlayerProfile(db *sqlx.DB) gin.HandlerFunc {
 			log.Printf("[DB] Failed to fetch player %s: %v", phone, err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch player"})
 			return
-		}
-
-		// Get fee-exempt balance
-		feeBalance := 0.0
-		if acc, err := accounts.GetOrCreateAccount(db, accounts.AccountPlayerFeeExempt, &p.ID); err == nil {
-			feeBalance = acc.Balance
 		}
 
 		// Get winnings balance
@@ -261,7 +255,7 @@ func GetPlayerProfile(db *sqlx.DB) gin.HandlerFunc {
 			hasExpired = true
 		}
 
-		resp := gin.H{"display_name": p.DisplayName, "fee_exempt_balance": feeBalance, "player_winnings": winningsBalance, "player_token": p.PlayerToken}
+		resp := gin.H{"display_name": p.DisplayName, "player_winnings": winningsBalance, "player_token": p.PlayerToken}
 		if hasExpired {
 			resp["expired_queue"] = gin.H{"id": expired.ID, "stake_amount": int(expired.StakeAmount), "match_code": expired.MatchCode, "is_private": expired.IsPrivate}
 		}
@@ -270,7 +264,7 @@ func GetPlayerProfile(db *sqlx.DB) gin.HandlerFunc {
 	}
 }
 
-// RequeueStake allows a player to requeue using existing fee-exempt credit. Route: POST /api/v1/player/:phone/requeue
+// RequeueStake allows a player to requeue (commission-free if expired queue exists). Route: POST /api/v1/player/:phone/requeue
 func RequeueStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if db == nil {
@@ -329,13 +323,13 @@ func RequeueStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handle
 			stakeAmount = int(q.StakeAmount)
 		}
 
-		// Check fee-exempt balance
-		feeBalance := 0.0
-		if acc, err := accounts.GetOrCreateAccount(db, accounts.AccountPlayerFeeExempt, &player.ID); err == nil {
-			feeBalance = acc.Balance
+		// Check player winnings balance
+		winningsBalance := 0.0
+		if acc, err := accounts.GetOrCreateAccount(db, accounts.AccountPlayerWinnings, &player.ID); err == nil {
+			winningsBalance = acc.Balance
 		}
-		if feeBalance < float64(stakeAmount) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "insufficient fee-exempt balance to requeue"})
+		if winningsBalance < float64(stakeAmount) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "insufficient winnings balance to requeue"})
 			return
 		}
 

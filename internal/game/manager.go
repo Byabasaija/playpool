@@ -789,8 +789,8 @@ func (gm *GameManager) checkExpiredGames() {
 					} else {
 						// Resolve accounts
 						escrowAcc, err1 := accounts.GetOrCreateAccount(gm.db, accounts.AccountEscrow, nil)
-						p1Acc, err2 := accounts.GetOrCreateAccount(gm.db, accounts.AccountPlayerFeeExempt, &p1ID)
-						p2Acc, err3 := accounts.GetOrCreateAccount(gm.db, accounts.AccountPlayerFeeExempt, &p2ID)
+						p1Acc, err2 := accounts.GetOrCreateAccount(gm.db, accounts.AccountPlayerWinnings, &p1ID)
+						p2Acc, err3 := accounts.GetOrCreateAccount(gm.db, accounts.AccountPlayerWinnings, &p2ID)
 						if err1 != nil || err2 != nil || err3 != nil {
 							log.Printf("[DB] Failed to resolve accounts for expiry refund session %d: %v %v %v", g.SessionID, err1, err2, err3)
 							tx.Rollback()
@@ -1081,6 +1081,23 @@ func (gm *GameManager) SaveFinalGameState(g *GameState) {
 			log.Printf("[DB] SaveFinalGameState: could not resolve winner DB id for winner=%s (session=%d)", g.Winner, g.SessionID)
 		}
 
+		// Handle winner payout (non-draw): transfer winnings with tax deduction
+		if winnerDBID > 0 && g.WinType != "draw" {
+			if err := gm.ProcessWinnerPayout(g.SessionID, winnerDBID, g.StakeAmount); err != nil {
+				log.Printf("[PAYOUT ERROR] Failed to process winner payout for session %d: %v", g.SessionID, err)
+			} else {
+				// Update winner's stats: increment games_won and add to total_winnings
+				pot := float64(g.StakeAmount * 2)
+				taxRate := float64(gm.config.PayoutTaxPercent) / 100.0
+				winningsNet := pot - (pot * taxRate)
+
+				_, err := gm.db.Exec(`UPDATE players SET total_games_won = total_games_won + 1, total_winnings = total_winnings + $1 WHERE id = $2`, winningsNet, winnerDBID)
+				if err != nil {
+					log.Printf("[DB] Failed to update winner stats for session %d: %v", g.SessionID, err)
+				}
+			}
+		}
+
 		// Handle draw: refund stakes back to both players (no tax)
 		if g.Status == StatusCompleted && g.WinType == "draw" {
 			// Only attempt DB refund if we have a session persisted
@@ -1109,8 +1126,8 @@ func (gm *GameManager) SaveFinalGameState(g *GameState) {
 						} else {
 							// Resolve accounts
 							escrowAcc, err1 := accounts.GetOrCreateAccount(gm.db, accounts.AccountEscrow, nil)
-							p1Acc, err2 := accounts.GetOrCreateAccount(gm.db, accounts.AccountPlayerFeeExempt, &p1ID)
-							p2Acc, err3 := accounts.GetOrCreateAccount(gm.db, accounts.AccountPlayerFeeExempt, &p2ID)
+							p1Acc, err2 := accounts.GetOrCreateAccount(gm.db, accounts.AccountPlayerWinnings, &p1ID)
+							p2Acc, err3 := accounts.GetOrCreateAccount(gm.db, accounts.AccountPlayerWinnings, &p2ID)
 							if err1 != nil || err2 != nil || err3 != nil {
 								log.Printf("[DB] Failed to resolve accounts for draw refund session %d: %v %v %v", g.SessionID, err1, err2, err3)
 								tx.Rollback()
@@ -1701,19 +1718,19 @@ func (gm *GameManager) StartProcessingRecoveryChecker() {
 	}()
 }
 
-// reserveStakeForSession debits a player's PLAYER_FEE_EXEMPT and credits ESCROW inside the provided tx.
+// reserveStakeForSession debits a player's PLAYER_WINNINGS and credits ESCROW inside the provided tx.
 func (gm *GameManager) reserveStakeForSession(tx *sqlx.Tx, playerDBID, queueID, sessionID, stakeAmount int) error {
 	// Get account rows (ensure they exist)
 	escrowAcc, err := accounts.GetOrCreateAccount(gm.db, accounts.AccountEscrow, nil)
 	if err != nil {
 		return err
 	}
-	playerFeeAcc, err := accounts.GetOrCreateAccount(gm.db, accounts.AccountPlayerFeeExempt, &playerDBID)
+	playerWinningsAcc, err := accounts.GetOrCreateAccount(gm.db, accounts.AccountPlayerWinnings, &playerDBID)
 	if err != nil {
 		return err
 	}
 	// Perform transfer within tx
-	if err := accounts.Transfer(tx, playerFeeAcc.ID, escrowAcc.ID, float64(stakeAmount), "SESSION", sql.NullInt64{Int64: int64(sessionID), Valid: true}, "Stake moved to escrow on match init"); err != nil {
+	if err := accounts.Transfer(tx, playerWinningsAcc.ID, escrowAcc.ID, float64(stakeAmount), "SESSION", sql.NullInt64{Int64: int64(sessionID), Valid: true}, "Stake moved to escrow on match init"); err != nil {
 		return err
 	}
 	// Insert STAKE_IN escrow ledger row referencing queue and session
@@ -1981,4 +1998,71 @@ func (gm *GameManager) JoinPrivateMatch(matchCode string, myQueueID int, myPhone
 		ExpiresAt:          game.ExpiresAt,
 		SessionID:          sessionID,
 	}, nil
+}
+
+// ProcessWinnerPayout handles the escrow → winnings payout with tax deduction
+func (gm *GameManager) ProcessWinnerPayout(sessionID, winnerPlayerID, stakeAmount int) error {
+	if gm.db == nil {
+		return fmt.Errorf("db not available")
+	}
+
+	pot := float64(stakeAmount * 2) // Full pot (both players' stakes)
+	taxRate := float64(gm.config.PayoutTaxPercent) / 100.0
+	taxAmount := pot * taxRate
+	winningsNet := pot - taxAmount
+
+	tx, err := gm.db.Beginx()
+	if err != nil {
+		return fmt.Errorf("failed to begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Idempotency check: skip if payout already processed
+	var cnt int
+	if err := tx.Get(&cnt, `SELECT COUNT(*) FROM escrow_ledger WHERE session_id=$1 AND entry_type='PAYOUT'`, sessionID); err != nil {
+		return fmt.Errorf("failed to check existing payouts: %w", err)
+	}
+	if cnt > 0 {
+		log.Printf("[PAYOUT] Payout already processed for session %d", sessionID)
+		return nil // Already paid, not an error
+	}
+
+	// Get accounts
+	escrowAcc, err := accounts.GetOrCreateAccount(gm.db, accounts.AccountEscrow, nil)
+	if err != nil {
+		return fmt.Errorf("failed to get escrow account: %w", err)
+	}
+
+	taxAcc, err := accounts.GetOrCreateAccount(gm.db, accounts.AccountTax, nil)
+	if err != nil {
+		return fmt.Errorf("failed to get tax account: %w", err)
+	}
+
+	winningsAcc, err := accounts.GetOrCreateAccount(gm.db, accounts.AccountPlayerWinnings, &winnerPlayerID)
+	if err != nil {
+		return fmt.Errorf("failed to get player winnings account: %w", err)
+	}
+
+	// Transfer: ESCROW → TAX (15%)
+	if err := accounts.Transfer(tx, escrowAcc.ID, taxAcc.ID, taxAmount, "SESSION", sql.NullInt64{Int64: int64(sessionID), Valid: true}, "Payout tax"); err != nil {
+		return fmt.Errorf("failed to transfer tax: %w", err)
+	}
+
+	// Transfer: ESCROW → PLAYER_WINNINGS (85% after tax)
+	if err := accounts.Transfer(tx, escrowAcc.ID, winningsAcc.ID, winningsNet, "SESSION", sql.NullInt64{Int64: int64(sessionID), Valid: true}, "Winner payout (after tax)"); err != nil {
+		return fmt.Errorf("failed to transfer winnings: %w", err)
+	}
+
+	// Record in escrow ledger
+	if _, err := tx.Exec(`INSERT INTO escrow_ledger (session_id, entry_type, player_id, amount, balance_after, description, created_at) VALUES ($1,$2,$3,$4,$5,$6,NOW())`,
+		sessionID, "PAYOUT", winnerPlayerID, winningsNet, 0.0, "Winner payout"); err != nil {
+		return fmt.Errorf("failed to insert escrow ledger entry: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit tx: %w", err)
+	}
+
+	log.Printf("[PAYOUT] Successfully paid %.2f UGX (%.2f%% of %.2f pot) to player %d for session %d", winningsNet, (1.0-taxRate)*100, pot, winnerPlayerID, sessionID)
+	return nil
 }

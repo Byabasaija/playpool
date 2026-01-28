@@ -220,11 +220,14 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 		netAmount := float64(req.StakeAmount)
 
 		if useWinnings {
-			// WINNINGS FLOW: Tax-free transfer from PLAYER_WINNINGS to PLAYER_FEE_EXEMPT
-			log.Printf("[WINNINGS STAKE] Player %d using winnings for stake %d UGX", player.ID, req.StakeAmount)
+			// WINNINGS FLOW: Charge commission like normal stake
+			commission := float64(cfg.CommissionFlat)
+			grossAmount := float64(req.StakeAmount + cfg.CommissionFlat)
 
-			// Record transaction (type=STAKE_WINNINGS, no commission)
-			if err := db.QueryRowx(`INSERT INTO transactions (player_id, transaction_type, amount, status, created_at) VALUES ($1,'STAKE_WINNINGS',$2,'COMPLETED',NOW()) RETURNING id`, player.ID, float64(req.StakeAmount)).Scan(&txID); err != nil {
+			log.Printf("[WINNINGS STAKE] Player %d using winnings for stake %d UGX (with %d commission)", player.ID, req.StakeAmount, cfg.CommissionFlat)
+
+			// Record transaction (type=STAKE_WINNINGS, WITH commission)
+			if err := db.QueryRowx(`INSERT INTO transactions (player_id, transaction_type, amount, status, created_at) VALUES ($1,'STAKE_WINNINGS',$2,'COMPLETED',NOW()) RETURNING id`, player.ID, grossAmount).Scan(&txID); err != nil {
 				log.Printf("[DB] Failed to insert winnings stake transaction: %v", err)
 				// Continue - transaction is best-effort
 			}
@@ -236,7 +239,7 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 				return
 			}
 
-			// Perform account transfer: PLAYER_WINNINGS → PLAYER_FEE_EXEMPT (tax-free)
+			// Begin transaction for account transfers
 			tx, err := db.Beginx()
 			if err != nil {
 				log.Printf("[DB] Failed to begin tx for winnings stake: %v", err)
@@ -244,27 +247,59 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 				return
 			}
 
+			// Get accounts
 			winningsAcc, err := accounts.GetOrCreateAccount(db, accounts.AccountPlayerWinnings, &player.ID)
 			if err != nil {
 				tx.Rollback()
 				log.Printf("[DB] Failed to get winnings account: %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to access account"})
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to access winnings account"})
 				return
 			}
 
-			playerFeeAcc, err := accounts.GetOrCreateAccount(db, accounts.AccountPlayerFeeExempt, &player.ID)
+			// Check sufficient balance (must cover stake + commission)
+			if winningsAcc.Balance < grossAmount {
+				tx.Rollback()
+				c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("insufficient winnings balance (have %.2f, need %.2f for stake + commission)", winningsAcc.Balance, grossAmount)})
+				return
+			}
+
+			settlementAcc, err := accounts.GetOrCreateAccount(db, accounts.AccountSettlement, nil)
 			if err != nil {
 				tx.Rollback()
-				log.Printf("[DB] Failed to get player fee exempt account: %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to access account"})
+				log.Printf("[DB] Failed to get settlement account: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to access settlement account"})
 				return
 			}
 
-			// Transfer winnings to fee-exempt (no commission/tax since winnings already taxed)
-			if err := accounts.Transfer(tx, winningsAcc.ID, playerFeeAcc.ID, netAmount, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Stake from winnings (tax-free)"); err != nil {
+			platformAcc, err := accounts.GetOrCreateAccount(db, accounts.AccountPlatform, nil)
+			if err != nil {
 				tx.Rollback()
-				log.Printf("[DB] Failed to transfer winnings to fee exempt: %v", err)
+				log.Printf("[DB] Failed to get platform account: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to access platform account"})
+				return
+			}
+
+			// Transfer: PLAYER_WINNINGS → SETTLEMENT (gross amount)
+			if err := accounts.Transfer(tx, winningsAcc.ID, settlementAcc.ID, grossAmount, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Winnings stake (gross)"); err != nil {
+				tx.Rollback()
+				log.Printf("[DB] Failed to transfer from winnings to settlement: %v", err)
 				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+
+			// Transfer: SETTLEMENT → PLATFORM (commission)
+			if err := accounts.Transfer(tx, settlementAcc.ID, platformAcc.ID, commission, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Commission (winnings stake)"); err != nil {
+				tx.Rollback()
+				log.Printf("[DB] Failed to transfer commission: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process commission"})
+				return
+			}
+
+			// Transfer: SETTLEMENT → PLAYER_WINNINGS (net stake - stays in winnings for matching)
+			if err := accounts.Transfer(tx, settlementAcc.ID, winningsAcc.ID, netAmount, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Stake (net)"); err != nil {
+				tx.Rollback()
+				log.Printf("[DB] Failed to transfer net stake back to winnings: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process net stake"})
 				return
 			}
 
@@ -274,7 +309,7 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 				return
 			}
 
-			log.Printf("[WINNINGS STAKE] Successfully transferred %d UGX from winnings for player %d", req.StakeAmount, player.ID)
+			log.Printf("[WINNINGS STAKE] Successfully processed winnings stake for player %d: commission=%.2f, net=%.2f", player.ID, commission, netAmount)
 
 		} else {
 			// NORMAL FLOW: Existing settlement/commission logic
@@ -296,7 +331,7 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 				return
 			}
 
-			// Perform account movements: debit settlement, credit platform (commission), credit player_fee_exempt (net)
+			// Perform account movements: debit settlement, credit platform (commission), credit player_winnings (net)
 			commission := float64(cfg.CommissionFlat)
 			tx, err := db.Beginx()
 			if err != nil {
@@ -313,9 +348,9 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 						log.Printf("[DB] Failed to get platform account: %v", errGet2)
 						tx.Rollback()
 					} else {
-						playerFeeAcc, errGet3 := accounts.GetOrCreateAccount(db, accounts.AccountPlayerFeeExempt, &player.ID)
+						winningsAcc, errGet3 := accounts.GetOrCreateAccount(db, accounts.AccountPlayerWinnings, &player.ID)
 						if errGet3 != nil {
-							log.Printf("[DB] Failed to get player fee exempt account for player %d: %v", player.ID, errGet3)
+							log.Printf("[DB] Failed to get player winnings account for player %d: %v", player.ID, errGet3)
 							tx.Rollback()
 						} else {
 							// Credit settlement account with the gross amount (stake + commission) so transfers can debit it
@@ -335,9 +370,9 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 										log.Printf("[DB] Failed to transfer commission: %v", err)
 										tx.Rollback()
 									} else {
-										// Debit settlement -> credit player fee exempt (net amount)
-										if err := accounts.Transfer(tx, settlementAcc.ID, playerFeeAcc.ID, netAmount, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Deposit (net)"); err != nil {
-											log.Printf("[DB] Failed to credit player fee exempt: %v", err)
+										// Debit settlement -> credit player winnings (net amount)
+										if err := accounts.Transfer(tx, settlementAcc.ID, winningsAcc.ID, netAmount, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Deposit (net)"); err != nil {
+											log.Printf("[DB] Failed to credit player winnings: %v", err)
 											tx.Rollback()
 										} else {
 											if err := tx.Commit(); err != nil {
