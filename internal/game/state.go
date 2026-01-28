@@ -945,10 +945,6 @@ func (g *GameState) ForfeitByDisconnect(disconnectedPlayerID string) {
 		// Persist final state
 		Manager.SaveFinalGameState(g)
 	}
-
-	// TODO: Trigger payout to winner
-	// For now, just log
-	// log.Printf("[DUMMY PAYOUT] Would pay winner %s", g.Winner)
 }
 
 // SaveToRedis saves the game state to Redis via the manager

@@ -211,12 +211,14 @@ func GetMe(db *sqlx.DB) gin.HandlerFunc {
 		var stats struct {
 			TotalGamesPlayed int     `db:"total_games_played"`
 			TotalGamesWon    int     `db:"total_games_won"`
+			TotalGamesDrawn  int     `db:"total_games_drawn"`
 			TotalWinnings    float64 `db:"total_winnings"`
 		}
-		if err := db.Get(&stats, `SELECT total_games_played, total_games_won, total_winnings FROM players WHERE id=$1`, pid); err != nil {
+		if err := db.Get(&stats, `SELECT total_games_played, total_games_won, total_games_drawn, total_winnings FROM players WHERE id=$1`, pid); err != nil {
 			// fallback to zeros if needed
 			stats.TotalGamesPlayed = 0
 			stats.TotalGamesWon = 0
+			stats.TotalGamesDrawn = 0
 			stats.TotalWinnings = 0
 		}
 
@@ -237,6 +239,7 @@ func GetMe(db *sqlx.DB) gin.HandlerFunc {
 			"player_winnings":    winningsBalance,
 			"total_games_played": stats.TotalGamesPlayed,
 			"total_games_won":    stats.TotalGamesWon,
+			"total_games_drawn":  stats.TotalGamesDrawn,
 			"total_winnings":     stats.TotalWinnings,
 		}
 		c.JSON(http.StatusOK, profile)

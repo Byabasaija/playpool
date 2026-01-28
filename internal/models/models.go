@@ -14,6 +14,7 @@ type Player struct {
 	CreatedAt        time.Time      `db:"created_at" json:"created_at"`
 	TotalGamesPlayed int            `db:"total_games_played" json:"total_games_played"`
 	TotalGamesWon    int            `db:"total_games_won" json:"total_games_won"`
+	TotalGamesDrawn  int            `db:"total_games_drawn" json:"total_games_drawn"`
 	TotalWinnings    float64        `db:"total_winnings" json:"total_winnings"`
 	IsActive         bool           `db:"is_active" json:"is_active"`
 	IsBlocked        bool           `db:"is_blocked" json:"is_blocked"`

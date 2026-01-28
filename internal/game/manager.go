@@ -828,7 +828,6 @@ func (gm *GameManager) checkDisconnectForfeits() {
 		if forfeitPlayerID != "" {
 			game.ForfeitByDisconnect(forfeitPlayerID)
 			// log.Printf("[DISCONNECT FORFEIT] Player %s forfeited game %s", forfeitPlayerID, game.ID)
-			// TODO: Trigger payout to winner
 		}
 	}
 }
@@ -1090,6 +1089,14 @@ func (gm *GameManager) SaveFinalGameState(g *GameState) {
 						log.Printf("[DB] published game_draw: session=%d subscribers=%d", g.SessionID, n)
 					}
 				}
+			}
+		}
+
+		// Increment games_drawn counter for both players on draw
+		if g.WinType == "draw" && g.Player1 != nil && g.Player2 != nil && g.Player1.DBPlayerID > 0 && g.Player2.DBPlayerID > 0 {
+			_, err = gm.db.Exec(`UPDATE players SET total_games_drawn = total_games_drawn + 1 WHERE id IN ($1, $2)`, g.Player1.DBPlayerID, g.Player2.DBPlayerID)
+			if err != nil {
+				log.Printf("[DB] Failed to update games_drawn for session %d: %v", g.SessionID, err)
 			}
 		}
 

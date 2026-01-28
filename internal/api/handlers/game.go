@@ -536,14 +536,16 @@ func GetPlayerStats(db *sqlx.DB, cfg *config.Config) gin.HandlerFunc {
 			ID               int     `db:"id"`
 			TotalGamesPlayed int     `db:"total_games_played"`
 			TotalGamesWon    int     `db:"total_games_won"`
+			TotalGamesDrawn  int     `db:"total_games_drawn"`
 			TotalWinnings    float64 `db:"total_winnings"`
 		}
-		if err := db.Get(&p, `SELECT id, total_games_played, total_games_won, total_winnings FROM players WHERE phone_number=$1`, phone); err != nil {
+		if err := db.Get(&p, `SELECT id, total_games_played, total_games_won, total_games_drawn, total_winnings FROM players WHERE phone_number=$1`, phone); err != nil {
 			// If no player found, return defaults
 			c.JSON(http.StatusOK, gin.H{
 				"phone_number":   phone,
 				"games_played":   0,
 				"games_won":      0,
+				"games_drawn":    0,
 				"win_rate":       0.0,
 				"total_winnings": 0,
 				"current_streak": 0,
@@ -591,6 +593,7 @@ func GetPlayerStats(db *sqlx.DB, cfg *config.Config) gin.HandlerFunc {
 			"phone_number":   phone,
 			"games_played":   p.TotalGamesPlayed,
 			"games_won":      p.TotalGamesWon,
+			"games_drawn":    p.TotalGamesDrawn,
 			"win_rate":       winRate,
 			"total_winnings": p.TotalWinnings,
 			"current_streak": streak,

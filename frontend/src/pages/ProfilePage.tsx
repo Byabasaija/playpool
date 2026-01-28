@@ -288,6 +288,7 @@ export const ProfilePage: React.FC = () => {
               <div className="font-semibold">Stats</div>
               <div>Games played: {stats?.games_played ?? profile?.total_games_played ?? 0}</div>
               <div>Games won: {stats?.games_won ?? profile?.total_games_won ?? 0}</div>
+              <div>Games drawn: {stats?.games_drawn ?? profile?.total_games_drawn ?? 0}</div>
               <div>Win rate: {(stats?.win_rate ?? 0).toFixed(1)}%</div>
               <div>Current streak: {stats?.current_streak ?? 0}</div>
               <div>Rank: {stats?.rank ?? 'Bronze'}</div>

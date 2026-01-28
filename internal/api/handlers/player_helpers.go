@@ -57,7 +57,7 @@ func GetOrCreatePlayerByPhone(db *sqlx.DB, phone string) (*models.Player, error)
 	}
 
 	var p models.Player
-	fullQuery := `SELECT id, phone_number, display_name, player_token, created_at, total_games_played, total_games_won, total_winnings, is_active, is_blocked, block_reason, block_until, disconnect_count, no_show_count, last_active FROM players WHERE phone_number=$1`
+	fullQuery := `SELECT id, phone_number, display_name, player_token, created_at, total_games_played, total_games_won, total_games_drawn, total_winnings, is_active, is_blocked, block_reason, block_until, disconnect_count, no_show_count, last_active FROM players WHERE phone_number=$1`
 	if err := db.Get(&p, fullQuery, phone); err == nil {
 		// Ensure player_token exists
 		if p.PlayerToken == "" {
@@ -77,7 +77,7 @@ func GetOrCreatePlayerByPhone(db *sqlx.DB, phone string) (*models.Player, error)
 		var colCount int
 		if err2 := db.Get(&colCount, `SELECT COUNT(*) FROM information_schema.columns WHERE table_name='players' AND column_name='display_name'`); err2 == nil && colCount == 0 {
 			// Column missing - try selecting without it
-			fallbackQuery := `SELECT id, phone_number, player_token, created_at, total_games_played, total_games_won, total_winnings, is_active, is_blocked, block_reason, block_until, disconnect_count, no_show_count, last_active FROM players WHERE phone_number=$1`
+			fallbackQuery := `SELECT id, phone_number, player_token, created_at, total_games_played, total_games_won, total_games_drawn, total_winnings, is_active, is_blocked, block_reason, block_until, disconnect_count, no_show_count, last_active FROM players WHERE phone_number=$1`
 			if err3 := db.Get(&p, fallbackQuery, phone); err3 == nil {
 				p.DisplayName = ""
 				// Ensure player_token exists
@@ -118,11 +118,11 @@ func GetOrCreatePlayerByPhone(db *sqlx.DB, phone string) (*models.Player, error)
 	}
 
 	// Fetch and return
-	if err := db.Get(&p, `SELECT id, phone_number, display_name, player_token, created_at, total_games_played, total_games_won, total_winnings, is_active, is_blocked, block_reason, block_until, disconnect_count, no_show_count, last_active FROM players WHERE id=$1`, id); err != nil {
+	if err := db.Get(&p, `SELECT id, phone_number, display_name, player_token, created_at, total_games_played, total_games_won, total_games_drawn, total_winnings, is_active, is_blocked, block_reason, block_until, disconnect_count, no_show_count, last_active FROM players WHERE id=$1`, id); err != nil {
 		// If the full select fails (e.g. missing display_name), try fallback
 		var colCount int
 		if err2 := db.Get(&colCount, `SELECT COUNT(*) FROM information_schema.columns WHERE table_name='players' AND column_name='display_name'`); err2 == nil && colCount == 0 {
-			if err3 := db.Get(&p, `SELECT id, phone_number, player_token, created_at, total_games_played, total_games_won, total_winnings, is_active, is_blocked, block_reason, block_until, disconnect_count, no_show_count, last_active FROM players WHERE id=$1`, id); err3 != nil {
+			if err3 := db.Get(&p, `SELECT id, phone_number, player_token, created_at, total_games_played, total_games_won, total_games_drawn, total_winnings, is_active, is_blocked, block_reason, block_until, disconnect_count, no_show_count, last_active FROM players WHERE id=$1`, id); err3 != nil {
 				return nil, err3
 			}
 			p.DisplayName = ""
