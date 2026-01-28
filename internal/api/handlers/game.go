@@ -646,3 +646,39 @@ func CreateTestGame(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Hand
 		})
 	}
 }
+
+// CreateTestDrawGame creates a game that will end in a draw (for testing)
+func CreateTestDrawGame(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			StakeAmount int `json:"stake_amount"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			req.StakeAmount = 1000 // default
+		}
+
+		// Create a test game with equal point hands
+		gameState, err := game.Manager.CreateTestDrawGame(
+			"+256700111111",
+			"+256700222222",
+			req.StakeAmount,
+		)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"game_id":       gameState.ID,
+			"game_token":    gameState.Token,
+			"player1_id":    gameState.Player1.ID,
+			"player1_token": gameState.Player1.PlayerToken,
+			"player2_id":    gameState.Player2.ID,
+			"player2_token": gameState.Player2.PlayerToken,
+			"stake":         gameState.StakeAmount,
+			"target_suit":   gameState.TargetSuit,
+			"message":       "Test draw game created. Player 1 has the 7 of target suit. When played, game will end in a draw (both players have 17 points).",
+			"instructions":  "Connect both players via WebSocket, then have Player 1 play the 7 of Hearts to trigger the draw.",
+		})
+	}
+}

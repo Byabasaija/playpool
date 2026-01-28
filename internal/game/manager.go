@@ -466,6 +466,101 @@ func (gm *GameManager) CreateTestGame(player1Phone, player2Phone string, stakeAm
 	return game, nil
 }
 
+// CreateTestDrawGame creates a game that will end in a draw (for testing draw functionality)
+func (gm *GameManager) CreateTestDrawGame(player1Phone, player2Phone string, stakeAmount int) (*GameState, error) {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+
+	gameID := generateGameID()
+	gameToken := generateToken(16)
+	player1ID := "p1_" + generateToken(4)
+	player2ID := "p2_" + generateToken(4)
+
+	// Generate test player tokens
+	player1Token := generateToken(16)
+	player2Token := generateToken(16)
+
+	game := NewGame(
+		gameID,
+		gameToken,
+		player1ID,
+		player1Phone,
+		player1Token,
+		0,             // player1 DB id (test)
+		"TestPlayer1", // player1 display name
+		player2ID,
+		player2Phone,
+		player2Token,
+		0,             // player2 DB id (test)
+		"TestPlayer2", // player2 display name
+		stakeAmount,
+	)
+
+	// Don't call Initialize() - we'll set up the game state manually
+	// Set the target suit to Hearts
+	game.TargetSuit = Hearts
+	game.TargetCard = Card{Suit: Hearts, Rank: King} // The target card (not the 7)
+
+	// Create hands with equal point values
+	// Player 1: 7♥ (chop card), 5♠, 5♦ = 7 + 5 + 5 = 17 points after playing 7♥
+	// Player 2: 8♣, 9♦ = 8 + 9 = 17 points
+	game.Player1.Hand = []Card{
+		{Suit: Hearts, Rank: Seven},  // Chop card - will trigger draw
+		{Suit: Spades, Rank: Five},   // 5 points
+		{Suit: Diamonds, Rank: Five}, // 5 points
+		{Suit: Clubs, Rank: Seven},   // 7 points (total 17 when 7♥ is played)
+	}
+
+	game.Player2.Hand = []Card{
+		{Suit: Clubs, Rank: Eight}, // 8 points
+		{Suit: Diamonds, Rank: Nine}, // 9 points
+		{Suit: Spades, Rank: Ten},    // 10 points (total 27)
+	}
+
+	// Wait, let me recalculate - when player1 plays 7♥, they'll have 5+5+7=17 points left
+	// Player2 should also have 17 points
+	// Let me adjust:
+	// Player1 after playing 7♥: 5♠, 5♦, 7♣ = 17 points
+	// Player2: 8♣, 9♦ = 17 points ✓
+
+	// Set up the deck with remaining cards (excluding the ones in hands)
+	game.Deck = NewDeck()
+	// Remove cards that are in player hands
+	cardsInHands := append(game.Player1.Hand, game.Player2.Hand...)
+	newCards := []Card{}
+	for _, card := range game.Deck.Cards {
+		found := false
+		for _, handCard := range cardsInHands {
+			if card.Suit == handCard.Suit && card.Rank == handCard.Rank {
+				found = true
+				break
+			}
+		}
+		if !found {
+			newCards = append(newCards, card)
+		}
+	}
+	game.Deck.Cards = newCards
+
+	// Set the first card in discard pile (any card except 7♥)
+	game.DiscardPile = []Card{{Suit: Clubs, Rank: Three}}
+	game.CurrentSuit = Clubs
+
+	// Player 1 starts (they have the chop card)
+	game.CurrentTurn = player1ID
+
+	// Mark game as in progress
+	game.Status = StatusInProgress
+	now := time.Now()
+	game.StartedAt = &now
+
+	gm.games[gameID] = game
+	gm.playerToGame[player1ID] = gameID
+	gm.playerToGame[player2ID] = gameID
+
+	return game, nil
+}
+
 // parseCardsFromData reconstructs cards from JSON data
 func parseCardsFromData(data []interface{}) []Card {
 	var cards []Card
