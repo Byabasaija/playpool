@@ -37,7 +37,7 @@ export interface GameState {
   lastOpponentPoints?: number | null;
 }
 
-export type WinType = 'classic' | 'chop';
+export type WinType = 'classic' | 'chop' | 'draw' | 'forfeit';
 
 export interface GameOverData {
   isWinner: boolean;

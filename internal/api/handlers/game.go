@@ -659,8 +659,8 @@ func CreateTestDrawGame(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.
 
 		// Create a test game with equal point hands
 		gameState, err := game.Manager.CreateTestDrawGame(
-			"+256700111111",
-			"+256700222222",
+			"+256788674758",
+			"+256752327022",
 			req.StakeAmount,
 		)
 		if err != nil {

@@ -502,8 +502,9 @@ func (gm *GameManager) CreateTestDrawGame(player1Phone, player2Phone string, sta
 	game.TargetCard = Card{Suit: Hearts, Rank: King} // The target card (not the 7)
 
 	// Create hands with equal point values
-	// Player 1: 7♥ (chop card), 5♠, 5♦ = 7 + 5 + 5 = 17 points after playing 7♥
+	// Player 1: 7♥ (chop card), 5♠, 5♦, 7♣ = 5 + 5 + 7 = 17 points after playing 7♥
 	// Player 2: 8♣, 9♦ = 8 + 9 = 17 points
+	// Both players have 17 points when 7♥ is played → DRAW!
 	game.Player1.Hand = []Card{
 		{Suit: Hearts, Rank: Seven},  // Chop card - will trigger draw
 		{Suit: Spades, Rank: Five},   // 5 points
@@ -513,15 +514,8 @@ func (gm *GameManager) CreateTestDrawGame(player1Phone, player2Phone string, sta
 
 	game.Player2.Hand = []Card{
 		{Suit: Clubs, Rank: Eight}, // 8 points
-		{Suit: Diamonds, Rank: Nine}, // 9 points
-		{Suit: Spades, Rank: Ten},    // 10 points (total 27)
+		{Suit: Diamonds, Rank: Nine}, // 9 points (total 17)
 	}
-
-	// Wait, let me recalculate - when player1 plays 7♥, they'll have 5+5+7=17 points left
-	// Player2 should also have 17 points
-	// Let me adjust:
-	// Player1 after playing 7♥: 5♠, 5♦, 7♣ = 17 points
-	// Player2: 8♣, 9♦ = 17 points ✓
 
 	// Set up the deck with remaining cards (excluding the ones in hands)
 	game.Deck = NewDeck()
@@ -542,9 +536,9 @@ func (gm *GameManager) CreateTestDrawGame(player1Phone, player2Phone string, sta
 	}
 	game.Deck.Cards = newCards
 
-	// Set the first card in discard pile (any card except 7♥)
-	game.DiscardPile = []Card{{Suit: Clubs, Rank: Three}}
-	game.CurrentSuit = Clubs
+	// Set the first card in discard pile to a Heart so Player 1 can play 7♥ immediately
+	game.DiscardPile = []Card{{Suit: Hearts, Rank: Three}}
+	game.CurrentSuit = Hearts
 
 	// Player 1 starts (they have the chop card)
 	game.CurrentTurn = player1ID

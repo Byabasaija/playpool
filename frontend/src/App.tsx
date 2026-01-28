@@ -3,6 +3,7 @@ import { LandingPage } from './pages/LandingPage';
 import { GamePage } from './pages/GamePage';
 import { JoinPage } from './pages/JoinPage';
 import { ProfilePage } from './pages/ProfilePage';
+import { TestPage } from './pages/TestPage';
 
 function App() {
   return (
@@ -11,6 +12,7 @@ function App() {
         <Route path="/" element={<LandingPage />} />
         <Route path="/join" element={<JoinPage />} />
         <Route path="/profile" element={<ProfilePage />} />
+        <Route path="/test" element={<TestPage />} />
         <Route path="/g/:token" element={<GamePage />} />
       </Routes>
     </div>
