@@ -10,7 +10,7 @@ export function useMatchmaking() {
   const [isLoading, setIsLoading] = useState(false);
   const [displayName, setDisplayNameState] = useState<string | null>(() => {
     try {
-      return localStorage.getItem('playerDisplayName');
+      return sessionStorage.getItem('playerDisplayName');
     } catch (e) {
       return null;
     }
@@ -20,8 +20,8 @@ export function useMatchmaking() {
   const setDisplayName = useCallback((name: string | null) => {
     setDisplayNameState(name);
     try {
-      if (name) localStorage.setItem('playerDisplayName', name);
-      else localStorage.removeItem('playerDisplayName');
+      if (name) sessionStorage.setItem('playerDisplayName', name);
+      else sessionStorage.removeItem('playerDisplayName');
     } catch (e) {
       // ignore storage errors
     }
@@ -66,7 +66,7 @@ export function useMatchmaking() {
           const pt = u.searchParams.get('pt');
           const match = u.pathname.match(/\/g\/([^/?]+)/);
           if (pt && match && match[1]) {
-            localStorage.setItem('playerToken_' + match[1], pt);
+            sessionStorage.setItem('playerToken_' + match[1], pt);
           }
         } catch (e) {
           // ignore URL parsing errors
@@ -99,7 +99,7 @@ export function useMatchmaking() {
             const pt = u.searchParams.get('pt');
             const match = u.pathname.match(/\/g\/([^/?]+)/);
             if (pt && match && match[1]) {
-              localStorage.setItem('playerToken_' + match[1], pt);
+              sessionStorage.setItem('playerToken_' + match[1], pt);
             }
           } catch (e) { }
 
@@ -156,7 +156,7 @@ export function useMatchmaking() {
             const pt = u.searchParams.get('pt');
             const match = u.pathname.match(/\/g\/([^/?]+)/);
             if (pt && match && match[1]) {
-              localStorage.setItem('playerToken_' + match[1], pt);
+              sessionStorage.setItem('playerToken_' + match[1], pt);
             }
           } catch (e) { }
 

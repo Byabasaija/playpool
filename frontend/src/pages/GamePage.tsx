@@ -57,12 +57,12 @@ export const GamePage: React.FC = () => {
   useEffect(() => {
     console.log(gameTokenMatch, playerToken, "yes", urlParams.get("pt"), )
 
-    // prefer explicit pt param, fallback to saved token in localStorage
+    // prefer explicit pt param, fallback to saved token in sessionStorage
     let tokenToUse = playerToken;
     if (!tokenToUse && gt) {
       try {
-        tokenToUse = localStorage.getItem('playerToken_' + gt) || '';
-        if (tokenToUse) console.log('[RECOVER] Using saved playerToken from localStorage');
+        tokenToUse = sessionStorage.getItem('playerToken_' + gt) || '';
+        if (tokenToUse) console.log('[RECOVER] Using saved playerToken from sessionStorage');
       } catch (e) {
         // ignore
       }
@@ -78,7 +78,7 @@ export const GamePage: React.FC = () => {
 
     // If game hasn't started yet, try a REST snapshot to recover any missed initial game_state
     if (!gameStarted && gt) {
-      const tokenToUse = playerToken || (typeof window !== 'undefined' ? (localStorage.getItem('playerToken_' + gt) || '') : '');
+      const tokenToUse = playerToken || (typeof window !== 'undefined' ? (sessionStorage.getItem('playerToken_' + gt) || '') : '');
       if (!tokenToUse) return;
 
       try {
@@ -386,8 +386,15 @@ export const GamePage: React.FC = () => {
               <p className="font-semibold">{youWon ? 'Classic win' : 'Better luck next time'}</p>
             )}
           </div>
-
+  
           <div className="flex gap-3 mt-6">
+            <button
+              onClick={() => window.location.href = '/'}
+              className="flex-1 bg-[#373536] text-white py-2 px-4 rounded-md text-sm font-semibold hover:bg-[#2c2b2a] transition-colors"
+            >
+              New
+            </button>
+
             <button
               onClick={() => alert('Rematch not implemented yet')}
               className="flex-1 bg-[#111827] text-white py-2 px-4 rounded-md text-sm font-semibold hover:opacity-90 transition-colors"
@@ -395,12 +402,6 @@ export const GamePage: React.FC = () => {
               Rematch
             </button>
 
-            <button
-              onClick={() => window.location.href = '/'}
-              className="flex-1 bg-[#373536] text-white py-2 px-4 rounded-md text-sm font-semibold hover:bg-[#2c2b2a] transition-colors"
-            >
-              New game
-            </button>
 
             <button
               onClick={() => window.location.href = '/profile'}

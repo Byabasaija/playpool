@@ -184,10 +184,10 @@ export function useGameState() {
 
   const setTokens = useCallback((gameToken: string, playerToken: string) => {
     dispatch({ type: 'SET_TOKENS', payload: { gameToken, playerToken } });
-    // Persist player token keyed by game token to survive refresh
+    // Persist player token keyed by game token to survive refresh (session-scoped)
     try {
       if (gameToken && playerToken) {
-        localStorage.setItem('playerToken_' + gameToken, playerToken);
+        sessionStorage.setItem('playerToken_' + gameToken, playerToken);
       }
     } catch (e) {
       // ignore storage errors
