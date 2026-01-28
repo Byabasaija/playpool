@@ -665,7 +665,7 @@ func CheckQueueStatus(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Ha
 func GetGameState(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := c.Param("token")
-		playerID := c.Query("pt")
+		pt := c.Query("pt") // pt is either a player token (preferred) or a player id
 
 		// Get game by token
 		gameState, err := game.Manager.GetGameByToken(token)
@@ -676,7 +676,7 @@ func GetGameState(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handle
 			return
 		}
 
-		if playerID == "" {
+		if pt == "" {
 			// Return basic game info without player-specific data
 			c.JSON(http.StatusOK, gin.H{
 				"game_id":      gameState.ID,
@@ -687,8 +687,21 @@ func GetGameState(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handle
 			return
 		}
 
+		// Resolve pt to a player ID. 'pt' may be either a player ID already or a player token.
+		var resolvedPlayerID string
+		if pt == gameState.Player1.ID || pt == gameState.Player2.ID {
+			resolvedPlayerID = pt
+		} else if pt == gameState.Player1.PlayerToken {
+			resolvedPlayerID = gameState.Player1.ID
+		} else if pt == gameState.Player2.PlayerToken {
+			resolvedPlayerID = gameState.Player2.ID
+		} else {
+			c.JSON(http.StatusForbidden, gin.H{"error": "invalid player token"})
+			return
+		}
+
 		// Return player-specific game state
-		state := gameState.GetGameStateForPlayer(playerID)
+		state := gameState.GetGameStateForPlayer(resolvedPlayerID)
 		c.JSON(http.StatusOK, state)
 	}
 }

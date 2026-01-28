@@ -951,6 +951,42 @@ func (g *GameState) ForfeitByDisconnect(disconnectedPlayerID string) {
 	}
 }
 
+// ForfeitByConcede forfeits the game because a player voluntarily conceded
+func (g *GameState) ForfeitByConcede(concedingPlayerID string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	// Determine winner (the opponent)
+	if concedingPlayerID == g.Player1.ID {
+		g.Winner = g.Player2.ID
+	} else {
+		g.Winner = g.Player1.ID
+	}
+
+	g.Status = StatusCompleted
+	g.WinType = "concede"
+	now := time.Now()
+	g.CompletedAt = &now
+
+	// Record concede move for auditing
+	if Manager != nil {
+		var concedingDB int
+		// Avoid calling GetPlayerByID() while holding the write lock:
+		// GetPlayerByID uses RLock(), which would block here and cause a deadlock.
+		if g.Player1 != nil && g.Player1.ID == concedingPlayerID {
+			concedingDB = g.Player1.DBPlayerID
+		} else if g.Player2 != nil && g.Player2.ID == concedingPlayerID {
+			concedingDB = g.Player2.DBPlayerID
+		}
+		if concedingDB > 0 {
+			Manager.RecordMove(g.SessionID, concedingDB, "CONCEDE", "", "")
+		}
+		log.Printf("[CONCEDE] player %s conceded game %s", concedingPlayerID, g.ID)
+		// Persist final state
+		Manager.SaveFinalGameState(g)
+	}
+}
+
 // SaveToRedis saves the game state to Redis via the manager
 func (g *GameState) SaveToRedis() {
 	if Manager != nil && Manager.rdb != nil {

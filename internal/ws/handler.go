@@ -425,6 +425,36 @@ func (c *Client) writePump() {
 	}
 }
 
+// handleConcede processes a concede message from a player
+func (c *Client) handleConcede(g *game.GameState) {
+	log.Printf("[WS] Concede request from %s in game %s", c.playerID, g.ID)
+
+	// Validate game status
+	if g.Status != game.StatusInProgress {
+		c.sendError("Game is not in progress")
+		return
+	}
+
+	// Validate that the sender is a participant
+	if g.GetPlayerByID(c.playerID) == nil {
+		c.sendError("You are not a participant in this game")
+		return
+	}
+
+	// Call game state to perform concede
+	g.ForfeitByConcede(c.playerID)
+
+	// Broadcast to both players that someone conceded and send final state
+	GameHub.BroadcastToGame(c.gameID, map[string]interface{}{
+		"type":    "player_conceded",
+		"player":  c.playerID,
+		"message": "Player conceded the game",
+	})
+
+	// Send final game state to each player
+	c.broadcastGameState(g)
+}
+
 // handleMessage processes incoming WebSocket messages
 func (c *Client) handleMessage(msg WSMessage) {
 	g, err := game.Manager.GetGameByToken(c.gameToken)
@@ -453,6 +483,9 @@ func (c *Client) handleMessage(msg WSMessage) {
 		gameState["type"] = "game_state"
 		data, _ := json.Marshal(gameState)
 		c.send <- data
+
+	case "concede":
+		c.handleConcede(g)
 
 	default:
 		c.sendError("Unknown message type")

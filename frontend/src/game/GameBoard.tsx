@@ -174,6 +174,19 @@ export const GameBoard: React.FC<GameBoardProps> = ({
           currentSuit={currentSuit}
           drawStack={drawStack}
         />
+
+        {/* Concede button (small, placed near player hand) */}
+        <div className="flex items-center justify-center mt-3">
+          <button
+            onClick={() => {
+              if (!confirm('Are you sure you want to concede? This will immediately end the match and award the win to your opponent.')) return;
+              sendMessage({ type: 'concede', data: {} });
+            }}
+            className="text-sm bg-red-600 hover:bg-red-700 text-white py-1 px-3 rounded-md shadow-sm"
+          >
+            Concede
+          </button>
+        </div>
       </div>
 
       {/* Suit Selector Modal */}

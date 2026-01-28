@@ -14,6 +14,7 @@ export type WSMessageType =
   | 'player_idle_warning'
   | 'player_forfeit'
   | 'player_idle_canceled'
+  | 'player_conceded'
   | 'game_over'
   | 'session_cancelled'
   | 'error';
@@ -71,4 +72,9 @@ export interface PassTurnMessage {
   data: Record<string, never>;
 }
 
-export type OutgoingWSMessage = PlayCardMessage | DrawCardMessage | PassTurnMessage;
+export interface ConcedeMessage {
+  type: 'concede';
+  data: Record<string, never>;
+}
+
+export type OutgoingWSMessage = PlayCardMessage | DrawCardMessage | PassTurnMessage | ConcedeMessage;

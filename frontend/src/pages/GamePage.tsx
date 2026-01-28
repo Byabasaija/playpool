@@ -224,6 +224,7 @@ export const GamePage: React.FC = () => {
         break;
 
       case 'player_forfeit':
+      case 'player_conceded':
         // final case: refresh a snapshot to pick up final state
         try {
           (async () => {
@@ -236,7 +237,7 @@ export const GamePage: React.FC = () => {
             setIdlePlayer(null);
           })();
         } catch (e) {
-          console.error('Failed to refresh state after forfeit:', e);
+          console.error('Failed to refresh state after forfeit/concede:', e);
         }
         break;
 
