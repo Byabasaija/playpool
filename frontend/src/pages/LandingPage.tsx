@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMatchmaking } from '../hooks/useMatchmaking';
 import { validatePhone, formatPhone } from '../utils/phoneUtils';
-import { getPlayerProfile, requeuePlayer, getConfig } from '../utils/apiClient';
+import { getPlayerProfile, requeuePlayer, getConfig, requestOTP, verifyOTPAction } from '../utils/apiClient';
 
 export const LandingPage: React.FC = () => {
   const [phoneRest, setPhoneRest] = useState('');
@@ -23,6 +23,13 @@ export const LandingPage: React.FC = () => {
   const [retryLoading, setRetryLoading] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
   const [recentPrivate, setRecentPrivate] = useState<{match_code: string; expires_at?: string; queue_token?: string} | null>(null);
+  const [useWinnings, setUseWinnings] = useState(false);
+  const [playerWinnings, setPlayerWinnings] = useState<number>(0);
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
+  const [actionToken, setActionToken] = useState<string | null>(null);
+  const [otpError, setOtpError] = useState<string | null>(null);
+  const [otpLoading, setOtpLoading] = useState(false);
   const navigate = useNavigate();
   
   // const baseUrl = import.meta.env.VITE_BACKEND_URL
@@ -137,9 +144,54 @@ export const LandingPage: React.FC = () => {
       } else {
         setExpiredQueue(null);
       }
+      if (profile && profile.player_winnings !== undefined) {
+        setPlayerWinnings(profile.player_winnings);
+      }
     } catch (e) {
       setDisplayNameInput(generateRandomName());
       setExpiredQueue(null);
+      setPlayerWinnings(0);
+    }
+  };
+
+  const handleRequestOTP = async () => {
+    const full = '256' + phoneRest.replace(/\D/g, '');
+    if (!validatePhone(full)) {
+      setOtpError('Please enter a valid phone number first');
+      return;
+    }
+
+    setOtpLoading(true);
+    setOtpError(null);
+    try {
+      await requestOTP(full);
+      setOtpSent(true);
+    } catch (err: any) {
+      setOtpError(err.message || 'Failed to send OTP');
+    } finally {
+      setOtpLoading(false);
+    }
+  };
+
+  const handleVerifyOTP = async () => {
+    const full = '256' + phoneRest.replace(/\D/g, '');
+
+    if (otpCode.length !== 4) {
+      setOtpError('Please enter the 4-digit code');
+      return;
+    }
+
+    setOtpLoading(true);
+    setOtpError(null);
+    try {
+      const result = await verifyOTPAction(full, otpCode, 'stake_winnings');
+      setActionToken(result.action_token);
+      setOtpError(null);
+    } catch (err: any) {
+      setOtpError(err.message || 'Invalid OTP code');
+      setActionToken(null);
+    } finally {
+      setOtpLoading(false);
     }
   };
 
@@ -164,6 +216,17 @@ export const LandingPage: React.FC = () => {
 
     if (stake < minStake) {
       setPhoneError(`Minimum stake amount is ${minStake} UGX`);
+      return;
+    }
+
+    // Validate winnings flow
+    if (useWinnings && !actionToken) {
+      setPhoneError('Please verify OTP to use winnings');
+      return;
+    }
+
+    if (useWinnings && playerWinnings < stake) {
+      setPhoneError(`Insufficient winnings (have ${playerWinnings} UGX, need ${stake} UGX)`);
       return;
     }
 
@@ -209,6 +272,12 @@ export const LandingPage: React.FC = () => {
     }
 
     if (matchCodeInput) opts.match_code = matchCodeInput.trim().toUpperCase();
+
+    // Include action token if using winnings
+    if (useWinnings && actionToken) {
+      opts.source = 'winnings';
+      opts.action_token = actionToken;
+    }
 
     await startGame(full, stake, displayNameInput || generateRandomName(), opts);
   };
@@ -343,6 +412,93 @@ export const LandingPage: React.FC = () => {
                 </div>
                 <p className="mt-1 text-sm text-gray-500">You can change this name later in your profile.</p>
               </div>
+
+              {/* Display player winnings if available */}
+              {playerWinnings > 0 && (
+                <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded">
+                  <p className="text-sm text-green-800">
+                    💰 Available Winnings: <strong>{playerWinnings.toLocaleString()} UGX</strong>
+                  </p>
+                </div>
+              )}
+
+              {/* Use Winnings Toggle & OTP Flow */}
+              {playerWinnings > 0 && !expiredQueue && (
+                <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded">
+                  <label className="flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={useWinnings}
+                      onChange={(e) => {
+                        setUseWinnings(e.target.checked);
+                        if (!e.target.checked) {
+                          setOtpSent(false);
+                          setOtpCode('');
+                          setActionToken(null);
+                          setOtpError(null);
+                        }
+                      }}
+                      className="mr-3 h-5 w-5"
+                    />
+                    <span className="text-blue-900 font-medium">
+                      Use Winnings
+                    </span>
+                  </label>
+
+                  {useWinnings && (
+                    <div className="mt-4 space-y-3">
+                      {!otpSent && (
+                        <button
+                          type="button"
+                          onClick={handleRequestOTP}
+                          disabled={otpLoading}
+                          className="w-full px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400"
+                        >
+                          {otpLoading ? 'Sending...' : 'Send OTP Code'}
+                        </button>
+                      )}
+
+                      {otpSent && !actionToken && (
+                        <div className="space-y-2">
+                          <label className="block text-sm font-medium text-gray-700">
+                            Enter 4-digit code:
+                          </label>
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={otpCode}
+                              onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                              placeholder="1234"
+                              maxLength={4}
+                              className="flex-1 px-3 py-2 border border-gray-300 rounded text-center text-lg tracking-widest"
+                            />
+                            <button
+                              type="button"
+                              onClick={handleVerifyOTP}
+                              disabled={otpLoading || otpCode.length !== 4}
+                              className="px-6 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-400"
+                            >
+                              {otpLoading ? 'Verifying...' : 'Verify'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {actionToken && (
+                        <div className="p-2 bg-green-100 border border-green-300 rounded text-green-800 text-sm">
+                          ✓ OTP Verified! You can now stake using your winnings.
+                        </div>
+                      )}
+
+                      {otpError && (
+                        <div className="p-2 bg-red-100 border border-red-300 rounded text-red-800 text-sm">
+                          {otpError}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">

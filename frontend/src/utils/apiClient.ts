@@ -3,7 +3,7 @@ import { formatPhone } from './phoneUtils';
 
 const API_BASE = '/api/v1';
 
-export async function initiateStake(phone: string, stake: number, displayName?: string, opts?: { create_private?: boolean; match_code?: string; invite_phone?: string }): Promise<StakeResponse> {
+export async function initiateStake(phone: string, stake: number, displayName?: string, opts?: { create_private?: boolean; match_code?: string; invite_phone?: string; source?: string; action_token?: string }): Promise<StakeResponse> {
   const body:any = {
     phone_number: formatPhone(phone),
     stake_amount: stake
@@ -13,6 +13,8 @@ export async function initiateStake(phone: string, stake: number, displayName?: 
   if (opts?.create_private) body.create_private = true
   if (opts?.match_code) body.match_code = opts.match_code
   if (opts?.invite_phone) body.invite_phone = formatPhone(opts.invite_phone)
+  if (opts?.source) body.source = opts.source
+  if (opts?.action_token) body.action_token = opts.action_token
 
   const response = await fetch(`${API_BASE}/game/stake`, {
     method: 'POST',
@@ -97,7 +99,7 @@ export async function updateDisplayName(phone: string, name: string): Promise<{ 
   return { display_name: data.display_name };
 }
 
-export async function getPlayerProfile(phone: string): Promise<{display_name?: string, fee_exempt_balance?: number, expired_queue?: {id:number, stake_amount:number, match_code?: string, is_private?: boolean}} | null> {
+export async function getPlayerProfile(phone: string): Promise<{display_name?: string, fee_exempt_balance?: number, player_winnings?: number, expired_queue?: {id:number, stake_amount:number, match_code?: string, is_private?: boolean}} | null> {
   const response = await fetch(`${API_BASE}/player/${formatPhone(phone)}`);
   if (response.status === 404) return null;
 
@@ -107,7 +109,7 @@ export async function getPlayerProfile(phone: string): Promise<{display_name?: s
     throw new Error(data.error || 'Failed to fetch player');
   }
 
-  return { display_name: data.display_name, fee_exempt_balance: data.fee_exempt_balance, expired_queue: data.expired_queue };
+  return { display_name: data.display_name, fee_exempt_balance: data.fee_exempt_balance, player_winnings: data.player_winnings, expired_queue: data.expired_queue };
 }
 
 export async function getConfig(): Promise<{ commission_flat: number; payout_tax_percent: number; min_stake_amount: number; withdraw_provider_fee_percent?: number; min_withdraw_amount?: number }> {
@@ -123,4 +125,38 @@ export async function getConfig(): Promise<{ commission_flat: number; payout_tax
     withdraw_provider_fee_percent: data.withdraw_provider_fee_percent,
     min_withdraw_amount: data.min_withdraw_amount,
   };
+}
+
+export async function requestOTP(phone: string): Promise<{ sms_queued: boolean }> {
+  const response = await fetch(`${API_BASE}/auth/request-otp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone: formatPhone(phone) })
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    if (response.status === 429) throw new Error('Too many OTP requests. Please wait.');
+    if (response.status >= 500) throw new Error('Server error, please try again later');
+    throw new Error(data.error || 'Failed to request OTP');
+  }
+  return { sms_queued: data.sms_queued };
+}
+
+export async function verifyOTPAction(phone: string, code: string, action: string): Promise<{
+  action_token: string;
+  expires_at: string;
+}> {
+  const response = await fetch(`${API_BASE}/auth/verify-otp-action`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone: formatPhone(phone), code, action })
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    if (response.status >= 500) throw new Error('Server error, please try again later');
+    throw new Error(data.error || 'Failed to verify OTP');
+  }
+  return { action_token: data.action_token, expires_at: data.expires_at };
 }

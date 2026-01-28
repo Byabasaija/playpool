@@ -243,6 +243,12 @@ func GetPlayerProfile(db *sqlx.DB) gin.HandlerFunc {
 			feeBalance = acc.Balance
 		}
 
+		// Get winnings balance
+		winningsBalance := 0.0
+		if acc, err := accounts.GetOrCreateAccount(db, accounts.AccountPlayerWinnings, &p.ID); err == nil {
+			winningsBalance = acc.Balance
+		}
+
 		// Check for latest expired queue row
 		var expired struct {
 			ID          int     `db:"id"`
@@ -255,7 +261,7 @@ func GetPlayerProfile(db *sqlx.DB) gin.HandlerFunc {
 			hasExpired = true
 		}
 
-		resp := gin.H{"display_name": p.DisplayName, "fee_exempt_balance": feeBalance, "player_token": p.PlayerToken}
+		resp := gin.H{"display_name": p.DisplayName, "fee_exempt_balance": feeBalance, "player_winnings": winningsBalance, "player_token": p.PlayerToken}
 		if hasExpired {
 			resp["expired_queue"] = gin.H{"id": expired.ID, "stake_amount": int(expired.StakeAmount), "match_code": expired.MatchCode, "is_private": expired.IsPrivate}
 		}

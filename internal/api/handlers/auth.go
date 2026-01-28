@@ -153,6 +153,104 @@ func VerifyOTP(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerFu
 	}
 }
 
+// VerifyOTPAction validates the OTP and issues a short-lived action token instead of JWT
+func VerifyOTPAction(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Phone  string `json:"phone"`
+			Code   string `json:"code"`
+			Action string `json:"action"`
+		}
+		if err := c.BindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "phone, code, and action required"})
+			return
+		}
+		phone := strings.TrimSpace(req.Phone)
+		code := strings.TrimSpace(req.Code)
+		action := strings.TrimSpace(req.Action)
+
+		if phone == "" || code == "" || action == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "phone, code, and action required"})
+			return
+		}
+
+		// Validate action type (only stake_winnings supported for now)
+		if action != "stake_winnings" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported action type"})
+			return
+		}
+
+		ctx := context.Background()
+
+		// Verify OTP using same logic as VerifyOTP
+		val, err := rdb.Get(ctx, fmt.Sprintf("otp:%s", phone)).Result()
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired code"})
+			return
+		}
+		h := sha256.Sum256([]byte(code))
+		if subtle.ConstantTimeCompare([]byte(val), []byte(hex.EncodeToString(h[:]))) != 1 {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired code"})
+			return
+		}
+
+		// Delete OTP after successful verify (single-use)
+		rdb.Del(ctx, fmt.Sprintf("otp:%s", phone))
+
+		// Ensure player exists
+		var player struct {
+			ID int `db:"id"`
+		}
+		err = db.Get(&player, `SELECT id FROM players WHERE phone_number=$1`, phone)
+		if err != nil {
+			// Create player if not exists
+			if _, err2 := db.Exec(`INSERT INTO players (phone_number, display_name, created_at, is_active) VALUES ($1, $2, NOW(), true)`, phone, ""); err2 != nil {
+				log.Printf("Failed to create player for phone %s: %v", phone, err2)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+				return
+			}
+			err = db.Get(&player, `SELECT id FROM players WHERE phone_number=$1`, phone)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+				return
+			}
+		}
+
+		// Generate action token (32-byte random hex = 64 characters)
+		tokenBytes := make([]byte, 32)
+		if _, err := rand.Read(tokenBytes); err != nil {
+			log.Printf("Failed to generate action token: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+			return
+		}
+		actionToken := hex.EncodeToString(tokenBytes)
+
+		// Hash token for storage (same security pattern as OTP)
+		tokenHash := sha256.Sum256([]byte(actionToken))
+		tokenHashStr := hex.EncodeToString(tokenHash[:])
+
+		// Store token payload in Redis with TTL
+		// Key: action_token:{hash}
+		// Value: JSON with phone, action, player_id, created_at
+		payload := fmt.Sprintf(`{"phone":"%s","action":"%s","player_id":%d,"created_at":"%s"}`,
+			phone, action, player.ID, time.Now().Format(time.RFC3339))
+
+		ttl := time.Duration(cfg.OTPTokenTTLSeconds) * time.Second
+		if err := rdb.Set(ctx, fmt.Sprintf("action_token:%s", tokenHashStr), payload, ttl).Err(); err != nil {
+			log.Printf("Failed to store action token: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+			return
+		}
+
+		expiresAt := time.Now().Add(ttl)
+
+		c.JSON(http.StatusOK, gin.H{
+			"action_token": actionToken,
+			"expires_at":   expiresAt.Format(time.RFC3339),
+		})
+	}
+}
+
 // AuthMiddleware validates bearer JWT and sets player_id in context
 func AuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {

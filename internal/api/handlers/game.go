@@ -3,8 +3,10 @@ package handlers
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/big"
@@ -60,6 +62,8 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 			CreatePrivate bool   `json:"create_private,omitempty"`
 			MatchCode     string `json:"match_code,omitempty"`
 			InvitePhone   string `json:"invite_phone,omitempty"`
+			Source        string `json:"source,omitempty"`
+			ActionToken   string `json:"action_token,omitempty"`
 		}
 
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -139,78 +143,206 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 			req.MatchCode = code
 		}
 
+		// If source is "winnings", validate action token and perform winnings transfer
+		var useWinnings bool
+		if req.Source == "winnings" {
+			useWinnings = true
+
+			// Require action token
+			if req.ActionToken == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "action_token required for winnings source"})
+				return
+			}
+
+			// Validate and consume action token (atomic GET+DEL with Lua)
+			ctx := context.Background()
+			tokenHash := sha256.Sum256([]byte(req.ActionToken))
+			tokenHashStr := hex.EncodeToString(tokenHash[:])
+
+			luaScript := `
+				local payload = redis.call('GET', KEYS[1])
+				if payload then
+					redis.call('DEL', KEYS[1])
+					return payload
+				else
+					return nil
+				end
+			`
+
+			result, err := rdb.Eval(ctx, luaScript, []string{fmt.Sprintf("action_token:%s", tokenHashStr)}).Result()
+			if err != nil || result == nil {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired action token"})
+				return
+			}
+
+			// Parse and validate payload
+			var tokenPayload struct {
+				Phone    string `json:"phone"`
+				Action   string `json:"action"`
+				PlayerID int    `json:"player_id"`
+			}
+			if err := json.Unmarshal([]byte(result.(string)), &tokenPayload); err != nil {
+				log.Printf("Failed to parse action token payload: %v", err)
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid action token"})
+				return
+			}
+
+			// Validate phone, action, and player_id match
+			if tokenPayload.Phone != phone || tokenPayload.Action != "stake_winnings" || tokenPayload.PlayerID != player.ID {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "action token validation failed"})
+				return
+			}
+
+			// Check sufficient winnings balance
+			winningsAcc, err := accounts.GetOrCreateAccount(db, accounts.AccountPlayerWinnings, &player.ID)
+			if err != nil {
+				log.Printf("[ERROR] Failed to get winnings account for player %d: %v", player.ID, err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to access winnings account"})
+				return
+			}
+
+			if winningsAcc.Balance < float64(req.StakeAmount) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("insufficient winnings balance (have %.2f, need %d)", winningsAcc.Balance, req.StakeAmount)})
+				return
+			}
+
+			log.Printf("[INFO] Validated action token for winnings stake: player=%d phone=%s amount=%d", player.ID, phone, req.StakeAmount)
+		}
+
 		log.Printf("[INFO] InitiateStake - player: id=%d phone=%s display_name=%s", player.ID, player.PhoneNumber, player.DisplayName)
 
 		// DUMMY PAYMENT: Auto-approve payment (no actual Mobile Money call)
 		transactionID := generateTransactionID()
 		queueToken := generateQueueToken()
 
-		log.Printf("[DUMMY PAYMENT] Would charge %s %d UGX (transaction: %s)",
-			phone, req.StakeAmount+cfg.CommissionFlat, transactionID)
-
-		// Record a transaction in DB and capture its id
+		// PAYMENT FLOW: Different logic for winnings vs. normal stake
 		var txID int
-		if db != nil {
-			if err := db.QueryRowx(`INSERT INTO transactions (player_id, transaction_type, amount, status, created_at) VALUES ($1,'STAKE',$2,'COMPLETED',NOW()) RETURNING id`, player.ID, float64(req.StakeAmount+cfg.CommissionFlat)).Scan(&txID); err != nil {
-				log.Printf("[DB] Failed to insert transaction for player %d: %v", player.ID, err)
-				// continue - transaction best-effort for now
-			}
-		}
-
-		// Prevent duplicate active queues for the same player
-		var existingCount int
-		if err := db.Get(&existingCount, `SELECT COUNT(*) FROM matchmaking_queue WHERE player_id=$1 AND status IN ('queued','processing','matching')`, player.ID); err == nil && existingCount > 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "player already has an active queue entry"})
-			return
-		}
-
-		// Perform account movements: debit settlement, credit platform (commission), credit player_fee_exempt (net)
 		netAmount := float64(req.StakeAmount)
-		commission := float64(cfg.CommissionFlat)
-		tx, err := db.Beginx()
-		if err != nil {
-			log.Printf("[DB] Failed to begin tx for stake deposit: %v", err)
-		} else {
-			// Get system accounts
-			settlementAcc, errGet := accounts.GetOrCreateAccount(db, accounts.AccountSettlement, nil)
-			if errGet != nil {
-				log.Printf("[DB] Failed to get settlement account: %v", errGet)
+
+		if useWinnings {
+			// WINNINGS FLOW: Tax-free transfer from PLAYER_WINNINGS to PLAYER_FEE_EXEMPT
+			log.Printf("[WINNINGS STAKE] Player %d using winnings for stake %d UGX", player.ID, req.StakeAmount)
+
+			// Record transaction (type=STAKE_WINNINGS, no commission)
+			if err := db.QueryRowx(`INSERT INTO transactions (player_id, transaction_type, amount, status, created_at) VALUES ($1,'STAKE_WINNINGS',$2,'COMPLETED',NOW()) RETURNING id`, player.ID, float64(req.StakeAmount)).Scan(&txID); err != nil {
+				log.Printf("[DB] Failed to insert winnings stake transaction: %v", err)
+				// Continue - transaction is best-effort
+			}
+
+			// Prevent duplicate active queues for the same player
+			var existingCount int
+			if err := db.Get(&existingCount, `SELECT COUNT(*) FROM matchmaking_queue WHERE player_id=$1 AND status IN ('queued','processing','matching')`, player.ID); err == nil && existingCount > 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "player already has an active queue entry"})
+				return
+			}
+
+			// Perform account transfer: PLAYER_WINNINGS → PLAYER_FEE_EXEMPT (tax-free)
+			tx, err := db.Beginx()
+			if err != nil {
+				log.Printf("[DB] Failed to begin tx for winnings stake: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process winnings stake"})
+				return
+			}
+
+			winningsAcc, err := accounts.GetOrCreateAccount(db, accounts.AccountPlayerWinnings, &player.ID)
+			if err != nil {
 				tx.Rollback()
+				log.Printf("[DB] Failed to get winnings account: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to access account"})
+				return
+			}
+
+			playerFeeAcc, err := accounts.GetOrCreateAccount(db, accounts.AccountPlayerFeeExempt, &player.ID)
+			if err != nil {
+				tx.Rollback()
+				log.Printf("[DB] Failed to get player fee exempt account: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to access account"})
+				return
+			}
+
+			// Transfer winnings to fee-exempt (no commission/tax since winnings already taxed)
+			if err := accounts.Transfer(tx, winningsAcc.ID, playerFeeAcc.ID, netAmount, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Stake from winnings (tax-free)"); err != nil {
+				tx.Rollback()
+				log.Printf("[DB] Failed to transfer winnings to fee exempt: %v", err)
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+
+			if err := tx.Commit(); err != nil {
+				log.Printf("[DB] Commit failed for winnings stake: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to commit transaction"})
+				return
+			}
+
+			log.Printf("[WINNINGS STAKE] Successfully transferred %d UGX from winnings for player %d", req.StakeAmount, player.ID)
+
+		} else {
+			// NORMAL FLOW: Existing settlement/commission logic
+			log.Printf("[DUMMY PAYMENT] Would charge %s %d UGX (transaction: %s)",
+				phone, req.StakeAmount+cfg.CommissionFlat, transactionID)
+
+			// Record a transaction in DB and capture its id
+			if db != nil {
+				if err := db.QueryRowx(`INSERT INTO transactions (player_id, transaction_type, amount, status, created_at) VALUES ($1,'STAKE',$2,'COMPLETED',NOW()) RETURNING id`, player.ID, float64(req.StakeAmount+cfg.CommissionFlat)).Scan(&txID); err != nil {
+					log.Printf("[DB] Failed to insert transaction for player %d: %v", player.ID, err)
+					// continue - transaction best-effort for now
+				}
+			}
+
+			// Prevent duplicate active queues for the same player
+			var existingCount int
+			if err := db.Get(&existingCount, `SELECT COUNT(*) FROM matchmaking_queue WHERE player_id=$1 AND status IN ('queued','processing','matching')`, player.ID); err == nil && existingCount > 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "player already has an active queue entry"})
+				return
+			}
+
+			// Perform account movements: debit settlement, credit platform (commission), credit player_fee_exempt (net)
+			commission := float64(cfg.CommissionFlat)
+			tx, err := db.Beginx()
+			if err != nil {
+				log.Printf("[DB] Failed to begin tx for stake deposit: %v", err)
 			} else {
-				platformAcc, errGet2 := accounts.GetOrCreateAccount(db, accounts.AccountPlatform, nil)
-				if errGet2 != nil {
-					log.Printf("[DB] Failed to get platform account: %v", errGet2)
+				// Get system accounts
+				settlementAcc, errGet := accounts.GetOrCreateAccount(db, accounts.AccountSettlement, nil)
+				if errGet != nil {
+					log.Printf("[DB] Failed to get settlement account: %v", errGet)
 					tx.Rollback()
 				} else {
-					playerFeeAcc, errGet3 := accounts.GetOrCreateAccount(db, accounts.AccountPlayerFeeExempt, &player.ID)
-					if errGet3 != nil {
-						log.Printf("[DB] Failed to get player fee exempt account for player %d: %v", player.ID, errGet3)
+					platformAcc, errGet2 := accounts.GetOrCreateAccount(db, accounts.AccountPlatform, nil)
+					if errGet2 != nil {
+						log.Printf("[DB] Failed to get platform account: %v", errGet2)
 						tx.Rollback()
 					} else {
-						// Credit settlement account with the gross amount (stake + commission) so transfers can debit it
-						gross := float64(req.StakeAmount + cfg.CommissionFlat)
-						if _, err := tx.Exec(`UPDATE accounts SET balance = balance + $1, updated_at = NOW() WHERE id = $2`, gross, settlementAcc.ID); err != nil {
-							log.Printf("[DB] Failed to credit settlement account: %v", err)
+						playerFeeAcc, errGet3 := accounts.GetOrCreateAccount(db, accounts.AccountPlayerFeeExempt, &player.ID)
+						if errGet3 != nil {
+							log.Printf("[DB] Failed to get player fee exempt account for player %d: %v", player.ID, errGet3)
 							tx.Rollback()
 						} else {
-							// Record deposit as an account transaction (external -> settlement)
-							if _, err := tx.Exec(`INSERT INTO account_transactions (debit_account_id, credit_account_id, amount, reference_type, reference_id, description, created_at) VALUES ($1,$2,$3,$4,$5,$6,NOW())`, nil, settlementAcc.ID, gross, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Deposit (gross)"); err != nil {
-								log.Printf("[DB] Failed to insert settlement deposit account_transaction: %v", err)
+							// Credit settlement account with the gross amount (stake + commission) so transfers can debit it
+							gross := float64(req.StakeAmount + cfg.CommissionFlat)
+							if _, err := tx.Exec(`UPDATE accounts SET balance = balance + $1, updated_at = NOW() WHERE id = $2`, gross, settlementAcc.ID); err != nil {
+								log.Printf("[DB] Failed to credit settlement account: %v", err)
 								tx.Rollback()
 							} else {
-								log.Printf("[DB] Credited settlement account id=%d amount=%.2f (tx=%d)", settlementAcc.ID, gross, txID)
-								// Debit settlement -> credit platform (commission)
-								if err := accounts.Transfer(tx, settlementAcc.ID, platformAcc.ID, commission, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Commission (flat)"); err != nil {
-									log.Printf("[DB] Failed to transfer commission: %v", err)
+								// Record deposit as an account transaction (external -> settlement)
+								if _, err := tx.Exec(`INSERT INTO account_transactions (debit_account_id, credit_account_id, amount, reference_type, reference_id, description, created_at) VALUES ($1,$2,$3,$4,$5,$6,NOW())`, nil, settlementAcc.ID, gross, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Deposit (gross)"); err != nil {
+									log.Printf("[DB] Failed to insert settlement deposit account_transaction: %v", err)
 									tx.Rollback()
 								} else {
-									// Debit settlement -> credit player fee exempt (net amount)
-									if err := accounts.Transfer(tx, settlementAcc.ID, playerFeeAcc.ID, netAmount, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Deposit (net)"); err != nil {
-										log.Printf("[DB] Failed to credit player fee exempt: %v", err)
+									log.Printf("[DB] Credited settlement account id=%d amount=%.2f (tx=%d)", settlementAcc.ID, gross, txID)
+									// Debit settlement -> credit platform (commission)
+									if err := accounts.Transfer(tx, settlementAcc.ID, platformAcc.ID, commission, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Commission (flat)"); err != nil {
+										log.Printf("[DB] Failed to transfer commission: %v", err)
 										tx.Rollback()
 									} else {
-										if err := tx.Commit(); err != nil {
-											log.Printf("[DB] Commit failed for stake deposit tx: %v", err)
+										// Debit settlement -> credit player fee exempt (net amount)
+										if err := accounts.Transfer(tx, settlementAcc.ID, playerFeeAcc.ID, netAmount, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Deposit (net)"); err != nil {
+											log.Printf("[DB] Failed to credit player fee exempt: %v", err)
+											tx.Rollback()
+										} else {
+											if err := tx.Commit(); err != nil {
+												log.Printf("[DB] Commit failed for stake deposit tx: %v", err)
+											}
 										}
 									}
 								}
