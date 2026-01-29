@@ -251,17 +251,15 @@ export const AdminDashboardPage: React.FC = () => {
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Owner ID</th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Balance</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Created</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {accounts.map((acc) => (
+                {accounts.filter(acc => acc.owner_player_id === null || acc.owner_player_id === undefined).map((acc) => (
                   <tr key={acc.id}>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{acc.id}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{acc.account_type}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{acc.owner_player_id || '—'}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-right font-semibold text-gray-900">
                       {acc.balance.toLocaleString()} UGX
                     </td>
