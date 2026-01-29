@@ -433,7 +433,7 @@ func RequestWithdraw(db *sqlx.DB, cfg *config.Config) gin.HandlerFunc {
 	}
 }
 
-// processWithdrawMock simulates a payout: settlement -> platform (fee) and settlement -> "payout" (net)
+// processWithdrawMock simulates a payout: settlement -> money leaves system (fee to provider, net to user)
 func processWithdrawMock(db *sqlx.DB, cfg *config.Config, reqID, pid int, amount, fee, net float64) {
 	log.Printf("[WITHDRAW MOCK] Processing withdraw=%d amount=%.2f fee=%.2f net=%.2f", reqID, amount, fee, net)
 	// allow sim failure via env var

@@ -413,7 +413,8 @@ export const LandingPage: React.FC = () => {
                 <p className="mt-1 text-sm text-gray-500">You can change this name later in your profile.</p>
               </div>
 
-              {/* Display player winnings if available */}
+              {/* COMMENTED OUT - MVP launch without winnings staking
+              Display player winnings if available
               {playerWinnings > 0 && (
                 <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded">
                   <p className="text-sm text-green-800">
@@ -422,7 +423,7 @@ export const LandingPage: React.FC = () => {
                 </div>
               )}
 
-              {/* Use Winnings Toggle & OTP Flow */}
+              Use Winnings Toggle & OTP Flow
               {playerWinnings > 0 && !expiredQueue && (
                 <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded">
                   <label className="flex items-center cursor-pointer">
@@ -499,6 +500,7 @@ export const LandingPage: React.FC = () => {
                   )}
                 </div>
               )}
+              */}
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">

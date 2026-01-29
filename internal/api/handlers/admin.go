@@ -212,8 +212,35 @@ func GetAdminAccounts(db *sqlx.DB) gin.HandlerFunc {
 			return
 		}
 
-		admin.LogAdminAction(db, adminPhone, c.ClientIP(), "/api/v1/admin/accounts", "get_accounts", map[string]interface{}{"count": len(accounts)}, true)
-		c.JSON(http.StatusOK, gin.H{"accounts": accounts})
+		// Map to response-friendly types (avoid sql.Null* leaking to JSON)
+		type accountResp struct {
+			ID            int     `json:"id"`
+			AccountType   string  `json:"account_type"`
+			OwnerPlayerID *int    `json:"owner_player_id"`
+			Balance       float64 `json:"balance"`
+			CreatedAt     string  `json:"created_at"`
+			UpdatedAt     string  `json:"updated_at"`
+		}
+
+		var resp []accountResp
+		for _, a := range accounts {
+			var owner *int
+			if a.OwnerPlayerID.Valid {
+				v := int(a.OwnerPlayerID.Int64)
+				owner = &v
+			}
+			resp = append(resp, accountResp{
+				ID:            a.ID,
+				AccountType:   a.AccountType,
+				OwnerPlayerID: owner,
+				Balance:       a.Balance,
+				CreatedAt:     a.CreatedAt.Format(time.RFC3339),
+				UpdatedAt:     a.UpdatedAt.Format(time.RFC3339),
+			})
+		}
+
+		admin.LogAdminAction(db, adminPhone, c.ClientIP(), "/api/v1/admin/accounts", "get_accounts", map[string]interface{}{"count": len(resp)}, true)
+		c.JSON(http.StatusOK, gin.H{"accounts": resp})
 	}
 }
 
@@ -243,8 +270,60 @@ func GetAdminAccountTransactions(db *sqlx.DB) gin.HandlerFunc {
 			return
 		}
 
-		admin.LogAdminAction(db, adminPhone, c.ClientIP(), "/api/v1/admin/account_transactions", "get_account_transactions", map[string]interface{}{"count": len(transactions), "limit": limit, "offset": offset}, true)
-		c.JSON(http.StatusOK, gin.H{"transactions": transactions, "limit": limit, "offset": offset})
+		// Map to response-friendly types
+		type txnResp struct {
+			ID              int     `json:"id"`
+			DebitAccountID  *int    `json:"debit_account_id"`
+			CreditAccountID *int    `json:"credit_account_id"`
+			Amount          float64 `json:"amount"`
+			ReferenceType   *string `json:"reference_type"`
+			ReferenceID     *int    `json:"reference_id"`
+			Description     *string `json:"description"`
+			CreatedAt       string  `json:"created_at"`
+		}
+
+		var resp []txnResp
+		for _, t := range transactions {
+			var debit *int
+			var credit *int
+			var refID *int
+			var refType *string
+			var desc *string
+			if t.DebitAccountID.Valid {
+				v := int(t.DebitAccountID.Int64)
+				debit = &v
+			}
+			if t.CreditAccountID.Valid {
+				v := int(t.CreditAccountID.Int64)
+				credit = &v
+			}
+			if t.ReferenceID.Valid {
+				v := int(t.ReferenceID.Int64)
+				refID = &v
+			}
+			if t.ReferenceType.Valid {
+				v := t.ReferenceType.String
+				refType = &v
+			}
+			if t.Description.Valid {
+				v := t.Description.String
+				desc = &v
+			}
+
+			resp = append(resp, txnResp{
+				ID:              t.ID,
+				DebitAccountID:  debit,
+				CreditAccountID: credit,
+				Amount:          t.Amount,
+				ReferenceType:   refType,
+				ReferenceID:     refID,
+				Description:     desc,
+				CreatedAt:       t.CreatedAt.Format(time.RFC3339),
+			})
+		}
+
+		admin.LogAdminAction(db, adminPhone, c.ClientIP(), "/api/v1/admin/account_transactions", "get_account_transactions", map[string]interface{}{"count": len(resp), "limit": limit, "offset": offset}, true)
+		c.JSON(http.StatusOK, gin.H{"transactions": resp, "limit": limit, "offset": offset})
 	}
 }
 

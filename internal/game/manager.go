@@ -2064,5 +2064,153 @@ func (gm *GameManager) ProcessWinnerPayout(sessionID, winnerPlayerID, stakeAmoun
 	}
 
 	log.Printf("[PAYOUT] Successfully paid %.2f UGX (%.2f%% of %.2f pot) to player %d for session %d", winningsNet, (1.0-taxRate)*100, pot, winnerPlayerID, sessionID)
+
+	// Auto-trigger immediate withdrawal to winner's mobile money
+	go gm.autoWithdrawWinnings(winnerPlayerID, winningsNet, sessionID)
+
 	return nil
+}
+
+// autoWithdrawWinnings automatically withdraws winnings to winner's mobile money (async)
+func (gm *GameManager) autoWithdrawWinnings(playerID int, amount float64, sessionID int) {
+	log.Printf("[AUTO-WITHDRAW] Starting auto-withdrawal for player %d, amount %.2f UGX (session %d)", playerID, amount, sessionID)
+
+	// Get player details and session info
+	var player models.Player
+	if err := gm.db.Get(&player, `SELECT id, phone_number, display_name FROM players WHERE id=$1`, playerID); err != nil {
+		log.Printf("[AUTO-WITHDRAW] Failed to get player %d: %v", playerID, err)
+		return
+	}
+
+	// Get session stake amount for SMS breakdown
+	var session struct {
+		StakeAmount float64 `db:"stake_amount"`
+	}
+	if err := gm.db.Get(&session, `SELECT stake_amount FROM game_sessions WHERE id=$1`, sessionID); err != nil {
+		log.Printf("[AUTO-WITHDRAW] Failed to get session %d: %v", sessionID, err)
+		return
+	}
+
+	// Calculate pot and tax for SMS breakdown
+	pot := session.StakeAmount * 2
+	taxRate := float64(gm.config.PayoutTaxPercent) / 100.0
+	taxAmount := pot * taxRate
+
+	// Start transaction
+	tx, err := gm.db.Beginx()
+	if err != nil {
+		log.Printf("[AUTO-WITHDRAW] Failed to begin tx: %v", err)
+		return
+	}
+
+	// Get accounts
+	wAcc, err := accounts.GetOrCreateAccount(gm.db, accounts.AccountPlayerWinnings, &playerID)
+	if err != nil {
+		tx.Rollback()
+		log.Printf("[AUTO-WITHDRAW] Failed to get player winnings account: %v", err)
+		return
+	}
+
+	sett, err := accounts.GetOrCreateAccount(gm.db, accounts.AccountSettlement, nil)
+	if err != nil {
+		tx.Rollback()
+		log.Printf("[AUTO-WITHDRAW] Failed to get settlement account: %v", err)
+		return
+	}
+
+	// Check balance
+	if wAcc.Balance < amount {
+		tx.Rollback()
+		log.Printf("[AUTO-WITHDRAW] Insufficient balance for player %d: has %.2f, needs %.2f", playerID, wAcc.Balance, amount)
+		return
+	}
+
+	// Transfer player_winnings -> settlement (reserve full amount for provider)
+	if err := accounts.Transfer(tx, wAcc.ID, sett.ID, amount, "WITHDRAW_REQUEST", sql.NullInt64{Int64: 0, Valid: false}, "Auto-withdraw reserve"); err != nil {
+		tx.Rollback()
+		log.Printf("[AUTO-WITHDRAW] Failed to reserve funds: %v", err)
+		return
+	}
+
+	// Create withdraw request (fee and net_amount are 0 since provider handles fees)
+	var reqID int
+	if err := tx.QueryRowx(`INSERT INTO withdraw_requests (player_id, amount, fee, net_amount, method, destination, status, created_at) VALUES ($1,$2,$3,$4,'mobile_money',$5,'PENDING',NOW()) RETURNING id`,
+		playerID, amount, 0.0, amount, player.PhoneNumber).Scan(&reqID); err != nil {
+		tx.Rollback()
+		log.Printf("[AUTO-WITHDRAW] Failed to create withdraw request: %v", err)
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Printf("[AUTO-WITHDRAW] Failed to commit: %v", err)
+		return
+	}
+
+	log.Printf("[AUTO-WITHDRAW] Created withdraw request %d for player %d, amount %.2f UGX", reqID, playerID, amount)
+
+	// If in mock mode, process immediately
+	if gm.config.MockMode {
+		gm.processAutoWithdrawMock(reqID, playerID, amount, player.PhoneNumber, pot, taxAmount)
+	}
+
+	// Send initial SMS notification with breakdown
+	message := fmt.Sprintf("Congratulations! You won on PlayMatatu!\nPot: %.0f UGX\nTax (%.0f%%): -%.0f UGX\nWinnings: %.0f UGX\n\nPayout being sent to %s. (Telecom fees apply)",
+		pot, taxRate*100, taxAmount, amount, player.PhoneNumber)
+	if _, err := sms.SendSMS(context.Background(), player.PhoneNumber, message); err != nil {
+		log.Printf("[AUTO-WITHDRAW] Failed to send SMS to %s: %v", player.PhoneNumber, err)
+	}
+}
+
+// processAutoWithdrawMock handles mock withdrawal processing
+func (gm *GameManager) processAutoWithdrawMock(reqID, playerID int, amount float64, phone string, pot, taxAmount float64) {
+	log.Printf("[AUTO-WITHDRAW MOCK] Processing withdraw=%d for player %d, amount=%.2f UGX", reqID, playerID, amount)
+
+	time.Sleep(2 * time.Second) // Simulate processing delay
+
+	tx, err := gm.db.Beginx()
+	if err != nil {
+		log.Printf("[AUTO-WITHDRAW MOCK] Failed to begin tx: %v", err)
+		return
+	}
+
+	sett, err := accounts.GetOrCreateAccount(gm.db, accounts.AccountSettlement, nil)
+	if err != nil {
+		tx.Rollback()
+		log.Printf("[AUTO-WITHDRAW MOCK] Failed to get settlement account: %v", err)
+		return
+	}
+
+	// In mock mode, send full amount to provider
+	// Provider will deduct their own fee (we don't know what it is)
+	if _, err := tx.Exec(`UPDATE accounts SET balance = balance - $1 WHERE id = $2`, amount, sett.ID); err != nil {
+		tx.Rollback()
+		log.Printf("[AUTO-WITHDRAW MOCK] Failed to deduct payout from settlement: %v", err)
+		return
+	}
+
+	// Update withdraw request status
+	if _, err := tx.Exec(`UPDATE withdraw_requests SET status='COMPLETED', processed_at=NOW() WHERE id=$1`, reqID); err != nil {
+		tx.Rollback()
+		log.Printf("[AUTO-WITHDRAW MOCK] Failed to update withdraw request: %v", err)
+		return
+	}
+
+	// Insert transaction record (full amount sent to provider)
+	if _, err := tx.Exec(`INSERT INTO transactions (player_id, transaction_type, amount, status, created_at) VALUES ($1,'WITHDRAW',$2,'COMPLETED',NOW())`, playerID, amount); err != nil {
+		log.Printf("[AUTO-WITHDRAW MOCK] Failed to insert transaction: %v", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Printf("[AUTO-WITHDRAW MOCK] Failed to commit: %v", err)
+		return
+	}
+
+	log.Printf("[AUTO-WITHDRAW MOCK] Successfully sent %.2f UGX to provider for %s (provider will deduct their fee)", amount, phone)
+
+	// Send confirmation SMS
+	message := fmt.Sprintf("PlayMatatu: Your winnings of %.0f UGX have been sent to %s. (Telecom fees apply). Thank you for playing!",
+		amount, phone)
+	if _, err := sms.SendSMS(context.Background(), phone, message); err != nil {
+		log.Printf("[AUTO-WITHDRAW MOCK] Failed to send confirmation SMS: %v", err)
+	}
 }

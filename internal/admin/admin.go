@@ -7,6 +7,7 @@ import (
 	"log"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
 	"github.com/playmatatu/backend/internal/models"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -43,7 +44,7 @@ func CreateAdminAccount(db *sqlx.DB, phone, displayName, plainToken string, role
 			roles = EXCLUDED.roles,
 			allowed_ips = EXCLUDED.allowed_ips,
 			updated_at = NOW()
-	`, phone, displayName, string(hashedToken), roles, allowedIPs)
+	`, phone, displayName, string(hashedToken), pq.Array(roles), pq.Array(allowedIPs))
 
 	return err
 }
@@ -97,17 +98,25 @@ func GetAdminAuditLogsByPhone(db *sqlx.DB, phone string, limit, offset int) ([]m
 
 // ValidateAdminPhoneAndToken validates phone + token combination
 func ValidateAdminPhoneAndToken(db *sqlx.DB, phone, token string) (*models.AdminAccount, error) {
+	log.Printf("[ADMIN] Validating phone: %s", phone)
+
 	admin, err := GetAdminAccount(db, phone)
 	if err != nil {
 		if err == sql.ErrNoRows {
+			log.Printf("[ADMIN] No admin account found for phone: %s", phone)
 			return nil, fmt.Errorf("admin account not found")
 		}
+		log.Printf("[ADMIN] Database error: %v", err)
 		return nil, fmt.Errorf("database error: %w", err)
 	}
 
+	log.Printf("[ADMIN] Found admin account for: %s", phone)
+
 	if !VerifyAdminToken(admin.TokenHash, token) {
+		log.Printf("[ADMIN] Token verification failed for phone: %s", phone)
 		return nil, fmt.Errorf("invalid token")
 	}
 
+	log.Printf("[ADMIN] Token verified successfully for: %s", phone)
 	return admin, nil
 }

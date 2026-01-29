@@ -74,6 +74,8 @@ type Config struct {
 	// Withdraw settings
 	MockMode          bool
 	MinWithdrawAmount int
+	AdminToken        string
+	AdminPhone        string
 }
 
 func Load() *Config {
@@ -148,6 +150,8 @@ func Load() *Config {
 		// Withdraw configuration
 		MockMode:          getEnv("MOCK_MODE", "true") == "true",
 		MinWithdrawAmount: getEnvInt("MIN_WITHDRAW_AMOUNT", 1000),
+		AdminToken: 	 getEnv("ADMIN_TOKEN", "change-me-in-production"),
+		AdminPhone: 	 getEnv("ADMIN_PHONE", "256700000000"),
 	}
 }
 

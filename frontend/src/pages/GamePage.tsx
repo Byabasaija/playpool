@@ -383,17 +383,26 @@ export const GamePage: React.FC = () => {
           <div className="space-y-3 text-gray-700">
             {isDraw ? (
               <p className="font-semibold">Stakes refunded to your account</p>
+            ) : youWon ? (
+              <div className="space-y-2">
+                <p className="text-2xl font-bold text-green-600">
+                  You won {((gameState.stakeAmount || 1000) * 2 * 0.85).toLocaleString()} UGX!
+                </p>
+                <p className="text-sm text-gray-600">
+                  Payout sent to your mobile money
+                </p>
+              </div>
             ) : (
-              <p className="font-semibold">{youWon ? 'Classic win' : 'Better luck next time'}</p>
+              <p className="font-semibold">Better luck next time</p>
             )}
           </div>
-  
+
           <div className="flex gap-3 mt-6">
             <button
               onClick={() => window.location.href = '/'}
               className="flex-1 bg-[#373536] text-white py-2 px-4 rounded-md text-sm font-semibold hover:bg-[#2c2b2a] transition-colors"
             >
-              New
+              New Game
             </button>
 
             <button
@@ -412,13 +421,14 @@ export const GamePage: React.FC = () => {
               Rematch
             </button>
 
-
+            {/* COMMENTED OUT - MVP launch without profile access
             <button
               onClick={() => window.location.href = '/profile'}
               className="flex-1 bg-white border py-2 px-4 rounded-md text-sm font-semibold hover:bg-gray-50 transition-colors"
             >
               Profile
             </button>
+            */}
           </div>
         </div>
       </div>

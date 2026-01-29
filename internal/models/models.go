@@ -3,6 +3,8 @@ package models
 import (
 	"database/sql"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 // Player represents a user in the system
@@ -130,8 +132,8 @@ type AdminAccount struct {
 	Phone       string         `db:"phone" json:"phone"`
 	DisplayName sql.NullString `db:"display_name" json:"display_name,omitempty"`
 	TokenHash   string         `db:"token_hash" json:"-"`
-	Roles       []string       `db:"roles" json:"roles,omitempty"`
-	AllowedIPs  []string       `db:"allowed_ips" json:"allowed_ips,omitempty"`
+	Roles       pq.StringArray `db:"roles" json:"roles,omitempty"`
+	AllowedIPs  pq.StringArray `db:"allowed_ips" json:"allowed_ips,omitempty"`
 	CreatedAt   time.Time      `db:"created_at" json:"created_at"`
 	UpdatedAt   time.Time      `db:"updated_at" json:"updated_at"`
 }
