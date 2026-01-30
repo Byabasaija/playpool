@@ -17,6 +17,7 @@ import (
 	"github.com/playmatatu/backend/internal/accounts"
 	"github.com/playmatatu/backend/internal/config"
 	"github.com/playmatatu/backend/internal/models"
+	"github.com/playmatatu/backend/internal/payment"
 	"github.com/playmatatu/backend/internal/sms"
 	"github.com/redis/go-redis/v9"
 )
@@ -2148,16 +2149,16 @@ func (gm *GameManager) autoWithdrawWinnings(playerID int, amount float64, sessio
 
 	log.Printf("[AUTO-WITHDRAW] Created withdraw request %d for player %d, amount %.2f UGX", reqID, playerID, amount)
 
-	// If in mock mode, process immediately
-	if gm.config.MockMode {
+	// Process payout (real or mock)
+	if payment.Default != nil {
+		// Real DMarkPay payout (synchronous)
+		go gm.processAutoWithdrawReal(reqID, playerID, amount, player.PhoneNumber, pot, taxAmount)
+	} else if gm.config.MockMode {
+		// Mock mode fallback
 		gm.processAutoWithdrawMock(reqID, playerID, amount, player.PhoneNumber, pot, taxAmount)
-	}
-
-	// Send initial SMS notification with breakdown
-	message := fmt.Sprintf("Congratulations! You won on PlayMatatu!\nPot: %.0f UGX\nTax (%.0f%%): -%.0f UGX\nWinnings: %.0f UGX\n\nPayout being sent to %s. (Telecom fees apply)",
-		pot, taxRate*100, taxAmount, amount, player.PhoneNumber)
-	if _, err := sms.SendSMS(context.Background(), player.PhoneNumber, message); err != nil {
-		log.Printf("[AUTO-WITHDRAW] Failed to send SMS to %s: %v", player.PhoneNumber, err)
+	} else {
+		// No payment client and not in mock mode
+		log.Printf("[AUTO-WITHDRAW] No payment client available and MockMode=false, cannot process withdrawal")
 	}
 }
 
@@ -2213,4 +2214,148 @@ func (gm *GameManager) processAutoWithdrawMock(reqID, playerID int, amount float
 	if _, err := sms.SendSMS(context.Background(), phone, message); err != nil {
 		log.Printf("[AUTO-WITHDRAW MOCK] Failed to send confirmation SMS: %v", err)
 	}
+}
+
+// processAutoWithdrawReal handles real DMarkPay payout (synchronous)
+func (gm *GameManager) processAutoWithdrawReal(reqID, playerID int, amount float64, phone string, pot, taxAmount float64) {
+	log.Printf("[AUTO-WITHDRAW] Processing real payout: req=%d player=%d amount=%.2f phone=%s", reqID, playerID, amount, phone)
+
+	// Generate transaction ID
+	txnID := fmt.Sprintf("%d", payment.GenerateTransactionID())
+
+	// Send initial SMS
+	smsMsg := fmt.Sprintf(
+		"Congratulations! You won on PlayMatatu!\n\nPot: %.0f UGX\nTax (15%%): -%.0f UGX\nWinnings: %.0f UGX\n\nPayout being sent to %s. (Telecom fees apply)",
+		pot, taxAmount, amount, phone,
+	)
+	if _, err := sms.SendSMS(context.Background(), phone, smsMsg); err != nil {
+		log.Printf("[AUTO-WITHDRAW] Failed to send initial SMS: %v", err)
+	}
+
+	// Initiate payout (SYNCHRONOUS - no callback needed)
+	payoutReq := payment.PayoutRequest{
+		Phone:         phone,
+		Amount:        amount,
+		TransactionID: txnID,
+		Description:   fmt.Sprintf("Matatu winnings payout: %.0f UGX", amount),
+	}
+
+	payoutResp, err := payment.Default.Payout(context.Background(), payoutReq)
+	if err != nil {
+		log.Printf("[AUTO-WITHDRAW] Payout failed: %v", err)
+		gm.refundWithdrawal(reqID, playerID, amount, fmt.Sprintf("Payout failed: %v", err))
+		return
+	}
+
+	// Check immediate response
+	if payoutResp.StatusCode != "0" {
+		log.Printf("[AUTO-WITHDRAW] Payout rejected: %s", payoutResp.Message)
+		gm.refundWithdrawal(reqID, playerID, amount, payoutResp.Message)
+		return
+	}
+
+	// SUCCESS - complete payout immediately
+	tx, err := gm.db.Beginx()
+	if err != nil {
+		log.Printf("[AUTO-WITHDRAW] Failed to begin transaction: %v", err)
+		return
+	}
+	defer tx.Rollback()
+
+	settlementAcc, _ := accounts.GetOrCreateAccount(gm.db, accounts.AccountSettlement, nil)
+
+	// Deduct from settlement
+	_, err = tx.Exec(`UPDATE accounts SET balance = balance - $1, updated_at = NOW() WHERE id = $2`, amount, settlementAcc.ID)
+	if err != nil {
+		log.Printf("[AUTO-WITHDRAW] Failed to deduct from settlement: %v", err)
+		return
+	}
+
+	// Record external payout
+	_, err = tx.Exec(`INSERT INTO account_transactions
+        (debit_account_id, credit_account_id, amount, reference_type, reference_id, description, created_at)
+        VALUES ($1, NULL, $2, 'WITHDRAW', $3, 'Payout completed', NOW())`,
+		settlementAcc.ID, amount, reqID)
+	if err != nil {
+		log.Printf("[AUTO-WITHDRAW] Failed to record payout: %v", err)
+		return
+	}
+
+	// Insert transaction record
+	_, err = tx.Exec(`INSERT INTO transactions
+        (player_id, transaction_type, amount, status, dmark_transaction_id, provider_status_code, provider_status_message, created_at, completed_at)
+        VALUES ($1, 'WITHDRAW', $2, 'COMPLETED', $3, $4, $5, NOW(), NOW())`,
+		playerID, amount, payoutResp.TransactionID, payoutResp.StatusCode, payoutResp.Status)
+	if err != nil {
+		log.Printf("[AUTO-WITHDRAW] Failed to insert transaction: %v", err)
+		return
+	}
+
+	// Update withdraw request
+	_, err = tx.Exec(`UPDATE withdraw_requests SET
+        status='COMPLETED',
+        processed_at=NOW(),
+        dmark_transaction_id=$1,
+        provider_status_code=$2,
+        provider_status_message=$3
+        WHERE id=$4`,
+		payoutResp.TransactionID, payoutResp.StatusCode, payoutResp.Status, reqID)
+	if err != nil {
+		log.Printf("[AUTO-WITHDRAW] Failed to update withdraw request: %v", err)
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Printf("[AUTO-WITHDRAW] Failed to commit: %v", err)
+		return
+	}
+
+	log.Printf("[AUTO-WITHDRAW] ✓ Payout completed: req=%d amount=%.2f dmark_txn=%s", reqID, amount, payoutResp.TransactionID)
+
+	// Send confirmation SMS
+	confirmMsg := fmt.Sprintf(
+		"PlayMatatu: Your winnings of %.0f UGX have been sent to %s. (Telecom fees apply). Thank you for playing!",
+		amount, phone,
+	)
+	if _, err := sms.SendSMS(context.Background(), phone, confirmMsg); err != nil {
+		log.Printf("[AUTO-WITHDRAW] Failed to send confirmation SMS: %v", err)
+	}
+}
+
+// refundWithdrawal handles payout failure by refunding to player winnings
+func (gm *GameManager) refundWithdrawal(reqID, playerID int, amount float64, reason string) {
+	log.Printf("[AUTO-WITHDRAW] Refunding withdrawal %d: %.2f UGX", reqID, amount)
+
+	tx, err := gm.db.Beginx()
+	if err != nil {
+		log.Printf("[AUTO-WITHDRAW] Failed to begin refund transaction: %v", err)
+		return
+	}
+	defer tx.Rollback()
+
+	settlementAcc, _ := accounts.GetOrCreateAccount(gm.db, accounts.AccountSettlement, nil)
+	winningsAcc, _ := accounts.GetOrCreateAccount(gm.db, accounts.AccountPlayerWinnings, &playerID)
+
+	// SETTLEMENT → PLAYER_WINNINGS (refund)
+	err = accounts.Transfer(tx, settlementAcc.ID, winningsAcc.ID, amount,
+		"WITHDRAW_REFUND", sql.NullInt64{Int64: int64(reqID), Valid: true}, "Payout failed - refund")
+
+	if err != nil {
+		log.Printf("[AUTO-WITHDRAW] Failed to refund: %v", err)
+		return
+	}
+
+	// Update withdraw request
+	_, err = tx.Exec(`UPDATE withdraw_requests SET status='FAILED', processed_at=NOW(), note=$1 WHERE id=$2`, reason, reqID)
+	if err != nil {
+		log.Printf("[AUTO-WITHDRAW] Failed to update withdraw request: %v", err)
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Printf("[AUTO-WITHDRAW] Failed to commit refund: %v", err)
+		return
+	}
+
+	log.Printf("[AUTO-WITHDRAW] ✓ Withdrawal refunded: req=%d amount=%.2f", reqID, amount)
 }

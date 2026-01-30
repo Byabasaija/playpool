@@ -21,6 +21,7 @@ import (
 	"github.com/playmatatu/backend/internal/accounts"
 	"github.com/playmatatu/backend/internal/config"
 	"github.com/playmatatu/backend/internal/game"
+	"github.com/playmatatu/backend/internal/payment"
 	"github.com/playmatatu/backend/internal/sms"
 	"github.com/redis/go-redis/v9"
 )
@@ -312,15 +313,62 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 			log.Printf("[WINNINGS STAKE] Successfully processed winnings stake for player %d: commission=%.2f, net=%.2f", player.ID, commission, netAmount)
 
 		} else {
-			// NORMAL FLOW: Existing settlement/commission logic
-			log.Printf("[DUMMY PAYMENT] Would charge %s %d UGX (transaction: %s)",
-				phone, req.StakeAmount+cfg.CommissionFlat, transactionID)
+			// NORMAL FLOW: Real DMarkPay payin integration
+			var realPayment bool
+			if payment.Default != nil {
+				realPayment = true
+				// Generate unique transaction ID
+				txnID := fmt.Sprintf("%d", payment.GenerateTransactionID())
 
-			// Record a transaction in DB and capture its id
-			if db != nil {
-				if err := db.QueryRowx(`INSERT INTO transactions (player_id, transaction_type, amount, status, created_at) VALUES ($1,'STAKE',$2,'COMPLETED',NOW()) RETURNING id`, player.ID, float64(req.StakeAmount+cfg.CommissionFlat)).Scan(&txID); err != nil {
-					log.Printf("[DB] Failed to insert transaction for player %d: %v", player.ID, err)
-					// continue - transaction best-effort for now
+				// Build callback URL
+				callbackURL := fmt.Sprintf("%s/api/v1/webhooks/dmark", cfg.DMarkPayCallbackURL)
+
+				// Initiate payin
+				payinReq := payment.PayinRequest{
+					Phone:         phone,
+					Amount:        float64(req.StakeAmount + cfg.CommissionFlat),
+					TransactionID: txnID,
+					NotifyURL:     callbackURL,
+					Description:   fmt.Sprintf("Matatu stake: %d UGX", req.StakeAmount),
+				}
+
+				payinResp, err := payment.Default.Payin(context.Background(), payinReq)
+				if err != nil {
+					log.Printf("[PAYMENT] Payin failed for %s: %v", phone, err)
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "payment initiation failed"})
+					return
+				}
+
+				// Create transaction record with status='PENDING' (account movements happen in webhook)
+				if db != nil {
+					if err := db.QueryRowx(`INSERT INTO transactions
+						(player_id, transaction_type, amount, status, dmark_transaction_id, provider_status_code, provider_status_message, created_at)
+						VALUES ($1, 'STAKE', $2, 'PENDING', $3, $4, $5, NOW()) RETURNING id`,
+						player.ID,
+						float64(req.StakeAmount+cfg.CommissionFlat),
+						payinResp.TransactionID,
+						payinResp.StatusCode,
+						payinResp.Status).Scan(&txID); err != nil {
+						log.Printf("[PAYMENT] Failed to create transaction: %v", err)
+						c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record transaction"})
+						return
+					}
+				}
+
+				log.Printf("[PAYMENT] Payin initiated: txn=%s dmark_id=%s status=%s", txnID, payinResp.TransactionID, payinResp.Status)
+
+			} else {
+				// Fallback to dummy mode (no DMarkPay configured)
+				realPayment = false
+				log.Printf("[DUMMY PAYMENT] Would charge %s %d UGX (transaction: %s)",
+					phone, req.StakeAmount+cfg.CommissionFlat, transactionID)
+
+				// Record a transaction in DB and capture its id
+				if db != nil {
+					if err := db.QueryRowx(`INSERT INTO transactions (player_id, transaction_type, amount, status, created_at) VALUES ($1,'STAKE',$2,'COMPLETED',NOW()) RETURNING id`, player.ID, float64(req.StakeAmount+cfg.CommissionFlat)).Scan(&txID); err != nil {
+						log.Printf("[DB] Failed to insert transaction for player %d: %v", player.ID, err)
+						// continue - transaction best-effort for now
+					}
 				}
 			}
 
@@ -331,52 +379,55 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 				return
 			}
 
-			// Perform account movements: debit settlement, credit platform (commission), credit player_winnings (net)
-			commission := float64(cfg.CommissionFlat)
-			tx, err := db.Beginx()
-			if err != nil {
-				log.Printf("[DB] Failed to begin tx for stake deposit: %v", err)
-			} else {
-				// Get system accounts
-				settlementAcc, errGet := accounts.GetOrCreateAccount(db, accounts.AccountSettlement, nil)
-				if errGet != nil {
-					log.Printf("[DB] Failed to get settlement account: %v", errGet)
-					tx.Rollback()
+			// Perform account movements ONLY in dummy mode (real payment happens in webhook)
+			if !realPayment {
+				// Perform account movements: debit settlement, credit platform (commission), credit player_winnings (net)
+				commission := float64(cfg.CommissionFlat)
+				tx, err := db.Beginx()
+				if err != nil {
+					log.Printf("[DB] Failed to begin tx for stake deposit: %v", err)
 				} else {
-					platformAcc, errGet2 := accounts.GetOrCreateAccount(db, accounts.AccountPlatform, nil)
-					if errGet2 != nil {
-						log.Printf("[DB] Failed to get platform account: %v", errGet2)
+					// Get system accounts
+					settlementAcc, errGet := accounts.GetOrCreateAccount(db, accounts.AccountSettlement, nil)
+					if errGet != nil {
+						log.Printf("[DB] Failed to get settlement account: %v", errGet)
 						tx.Rollback()
 					} else {
-						winningsAcc, errGet3 := accounts.GetOrCreateAccount(db, accounts.AccountPlayerWinnings, &player.ID)
-						if errGet3 != nil {
-							log.Printf("[DB] Failed to get player winnings account for player %d: %v", player.ID, errGet3)
+						platformAcc, errGet2 := accounts.GetOrCreateAccount(db, accounts.AccountPlatform, nil)
+						if errGet2 != nil {
+							log.Printf("[DB] Failed to get platform account: %v", errGet2)
 							tx.Rollback()
 						} else {
-							// Credit settlement account with the gross amount (stake + commission) so transfers can debit it
-							gross := float64(req.StakeAmount + cfg.CommissionFlat)
-							if _, err := tx.Exec(`UPDATE accounts SET balance = balance + $1, updated_at = NOW() WHERE id = $2`, gross, settlementAcc.ID); err != nil {
-								log.Printf("[DB] Failed to credit settlement account: %v", err)
+							winningsAcc, errGet3 := accounts.GetOrCreateAccount(db, accounts.AccountPlayerWinnings, &player.ID)
+							if errGet3 != nil {
+								log.Printf("[DB] Failed to get player winnings account for player %d: %v", player.ID, errGet3)
 								tx.Rollback()
 							} else {
-								// Record deposit as an account transaction (external -> settlement)
-								if _, err := tx.Exec(`INSERT INTO account_transactions (debit_account_id, credit_account_id, amount, reference_type, reference_id, description, created_at) VALUES ($1,$2,$3,$4,$5,$6,NOW())`, nil, settlementAcc.ID, gross, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Deposit (gross)"); err != nil {
-									log.Printf("[DB] Failed to insert settlement deposit account_transaction: %v", err)
+								// Credit settlement account with the gross amount (stake + commission) so transfers can debit it
+								gross := float64(req.StakeAmount + cfg.CommissionFlat)
+								if _, err := tx.Exec(`UPDATE accounts SET balance = balance + $1, updated_at = NOW() WHERE id = $2`, gross, settlementAcc.ID); err != nil {
+									log.Printf("[DB] Failed to credit settlement account: %v", err)
 									tx.Rollback()
 								} else {
-									log.Printf("[DB] Credited settlement account id=%d amount=%.2f (tx=%d)", settlementAcc.ID, gross, txID)
-									// Debit settlement -> credit platform (commission)
-									if err := accounts.Transfer(tx, settlementAcc.ID, platformAcc.ID, commission, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Commission (flat)"); err != nil {
-										log.Printf("[DB] Failed to transfer commission: %v", err)
+									// Record deposit as an account transaction (external -> settlement)
+									if _, err := tx.Exec(`INSERT INTO account_transactions (debit_account_id, credit_account_id, amount, reference_type, reference_id, description, created_at) VALUES ($1,$2,$3,$4,$5,$6,NOW())`, nil, settlementAcc.ID, gross, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Deposit (gross)"); err != nil {
+										log.Printf("[DB] Failed to insert settlement deposit account_transaction: %v", err)
 										tx.Rollback()
 									} else {
-										// Debit settlement -> credit player winnings (net amount)
-										if err := accounts.Transfer(tx, settlementAcc.ID, winningsAcc.ID, netAmount, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Deposit (net)"); err != nil {
-											log.Printf("[DB] Failed to credit player winnings: %v", err)
+										log.Printf("[DB] Credited settlement account id=%d amount=%.2f (tx=%d)", settlementAcc.ID, gross, txID)
+										// Debit settlement -> credit platform (commission)
+										if err := accounts.Transfer(tx, settlementAcc.ID, platformAcc.ID, commission, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Commission (flat)"); err != nil {
+											log.Printf("[DB] Failed to transfer commission: %v", err)
 											tx.Rollback()
 										} else {
-											if err := tx.Commit(); err != nil {
-												log.Printf("[DB] Commit failed for stake deposit tx: %v", err)
+											// Debit settlement -> credit player winnings (net amount)
+											if err := accounts.Transfer(tx, settlementAcc.ID, winningsAcc.ID, netAmount, "TRANSACTION", sql.NullInt64{Int64: int64(txID), Valid: txID > 0}, "Deposit (net)"); err != nil {
+												log.Printf("[DB] Failed to credit player winnings: %v", err)
+												tx.Rollback()
+											} else {
+												if err := tx.Commit(); err != nil {
+													log.Printf("[DB] Commit failed for stake deposit tx: %v", err)
+												}
 											}
 										}
 									}

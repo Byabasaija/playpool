@@ -12,6 +12,7 @@ import (
 	"github.com/playmatatu/backend/internal/database"
 	"github.com/playmatatu/backend/internal/game"
 	"github.com/playmatatu/backend/internal/migrations"
+	"github.com/playmatatu/backend/internal/payment"
 	"github.com/playmatatu/backend/internal/redis"
 	"github.com/playmatatu/backend/internal/sms"
 	"github.com/playmatatu/backend/internal/ws"
@@ -60,6 +61,17 @@ func main() {
 		}
 	} else {
 		log.Printf("[SMS] SMS is not configured (SMS_SERVICE_BASE_URL/SMS_SERVICE_USERNAME missing)")
+	}
+
+	// Initialize DMarkPay client (if configured)
+	if cfg.DMarkPayBaseURL != "" && cfg.DMarkPayUsername != "" && cfg.DMarkPayPassword != "" {
+		paymentClient := payment.NewClient(cfg, rdb)
+		if paymentClient != nil {
+			payment.SetDefault(paymentClient)
+			log.Printf("[PAYMENT] DMarkPay client initialized (wallet=%s)", cfg.DMarkPayWallet)
+		}
+	} else {
+		log.Printf("[PAYMENT] DMarkPay not configured - payment operations will use mock mode")
 	}
 
 	// Wire Redis and start idle event subscriber in WS layer

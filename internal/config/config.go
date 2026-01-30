@@ -50,11 +50,20 @@ type Config struct {
 	SMSRateLimitSeconds     int
 	SMSTokenFallbackSeconds int
 
-	// Mobile Money
+	// Mobile Money (Legacy)
 	MomoAPIKey          string
 	MomoAPISecret       string
 	MomoCollectionURL   string
 	MomoDisbursementURL string
+
+	// DMarkPay Mobile Money Gateway
+	DMarkPayBaseURL     string
+	DMarkPayTokenURL    string
+	DMarkPayUsername    string
+	DMarkPayPassword    string
+	DMarkPayWallet      string
+	DMarkPayCallbackURL string
+	DMarkPayTimeout     int
 
 	// Security
 	JWTSecret         string
@@ -125,11 +134,20 @@ func Load() *Config {
 		SMSRateLimitSeconds:     getEnvInt("SMS_RATE_LIMIT_SECONDS", 30),
 		SMSTokenFallbackSeconds: getEnvInt("SMS_TOKEN_FALLBACK_SECONDS", 3000),
 
-		// Mobile Money
+		// Mobile Money (Legacy)
 		MomoAPIKey:          getEnv("MOMO_API_KEY", ""),
 		MomoAPISecret:       getEnv("MOMO_API_SECRET", ""),
 		MomoCollectionURL:   getEnv("MOMO_COLLECTION_URL", ""),
 		MomoDisbursementURL: getEnv("MOMO_DISBURSEMENT_URL", ""),
+
+		// DMarkPay Mobile Money Gateway
+		DMarkPayBaseURL:     getEnv("DMARK_PAY_BASE_URL", "https://wallet.dmarkmobile.com"),
+		DMarkPayTokenURL:    getEnv("DMARK_PAY_TOKEN_URL", "/o/token/"),
+		DMarkPayUsername:    getEnv("DMARK_PAY_USERNAME", ""),
+		DMarkPayPassword:    getEnv("DMARK_PAY_PASSWORD", ""),
+		DMarkPayWallet:      getEnv("DMARK_PAY_WALLET", "dmark"),
+		DMarkPayCallbackURL: getEnv("DMARK_PAY_CALLBACK_URL", ""),
+		DMarkPayTimeout:     getEnvInt("DMARK_PAY_TIMEOUT", 30),
 
 		// Security
 		JWTSecret:         getEnv("JWT_SECRET", "change-me-in-production"),

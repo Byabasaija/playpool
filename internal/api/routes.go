@@ -51,6 +51,9 @@ func SetupRoutes(router *gin.Engine, db *sqlx.DB, rdb *redis.Client, cfg *config
 		// Mobile Money callbacks
 		v1.POST("/momo/callback", handlers.HandleMomoCallback(db, rdb, cfg))
 
+		// DMarkPay webhook endpoint (no auth required)
+		v1.POST("/webhooks/dmark", handlers.DMarkPayinWebhook(db, cfg))
+
 		// Game endpoints
 		game := v1.Group("/game")
 		{
