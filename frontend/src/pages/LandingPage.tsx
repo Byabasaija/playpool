@@ -2,7 +2,9 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMatchmaking } from '../hooks/useMatchmaking';
 import { validatePhone, formatPhone } from '../utils/phoneUtils';
-import { getPlayerProfile, requeuePlayer, getConfig, requestOTP, verifyOTPAction } from '../utils/apiClient';
+import { getPlayerProfile, requeuePlayer, getConfig,
+  //  requestOTP, verifyOTPAction 
+  } from '../utils/apiClient';
 
 export const LandingPage: React.FC = () => {
   const [phoneRest, setPhoneRest] = useState('');
@@ -23,13 +25,13 @@ export const LandingPage: React.FC = () => {
   const [retryLoading, setRetryLoading] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
   const [recentPrivate, setRecentPrivate] = useState<{match_code: string; expires_at?: string; queue_token?: string} | null>(null);
-  const [useWinnings, setUseWinnings] = useState(false);
-  const [playerWinnings, setPlayerWinnings] = useState<number>(0);
-  const [otpSent, setOtpSent] = useState(false);
-  const [otpCode, setOtpCode] = useState('');
-  const [actionToken, setActionToken] = useState<string | null>(null);
-  const [otpError, setOtpError] = useState<string | null>(null);
-  const [otpLoading, setOtpLoading] = useState(false);
+  // const [useWinnings, setUseWinnings] = useState(false);
+  // const [playerWinnings, setPlayerWinnings] = useState<number>(0);
+  // const [otpSent, setOtpSent] = useState(false);
+  // const [otpCode, setOtpCode] = useState('');
+  // const [actionToken, setActionToken] = useState<string | null>(null);
+  // const [otpError, setOtpError] = useState<string | null>(null);
+  // const [otpLoading, setOtpLoading] = useState(false);
   const navigate = useNavigate();
   
   // const baseUrl = import.meta.env.VITE_BACKEND_URL
@@ -145,55 +147,55 @@ export const LandingPage: React.FC = () => {
         setExpiredQueue(null);
       }
       if (profile && profile.player_winnings !== undefined) {
-        setPlayerWinnings(profile.player_winnings);
+        // setPlayerWinnings(profile.player_winnings);
       }
     } catch (e) {
       setDisplayNameInput(generateRandomName());
       setExpiredQueue(null);
-      setPlayerWinnings(0);
+      // setPlayerWinnings(0);
     }
   };
 
-  const handleRequestOTP = async () => {
-    const full = '256' + phoneRest.replace(/\D/g, '');
-    if (!validatePhone(full)) {
-      setOtpError('Please enter a valid phone number first');
-      return;
-    }
+  // const handleRequestOTP = async () => {
+  //   const full = '256' + phoneRest.replace(/\D/g, '');
+  //   if (!validatePhone(full)) {
+  //     setOtpError('Please enter a valid phone number first');
+  //     return;
+  //   }
 
-    setOtpLoading(true);
-    setOtpError(null);
-    try {
-      await requestOTP(full);
-      setOtpSent(true);
-    } catch (err: any) {
-      setOtpError(err.message || 'Failed to send OTP');
-    } finally {
-      setOtpLoading(false);
-    }
-  };
+  //   setOtpLoading(true);
+  //   setOtpError(null);
+  //   try {
+  //     await requestOTP(full);
+  //     setOtpSent(true);
+  //   } catch (err: any) {
+  //     setOtpError(err.message || 'Failed to send OTP');
+  //   } finally {
+  //     setOtpLoading(false);
+  //   }
+  // };
 
-  const handleVerifyOTP = async () => {
-    const full = '256' + phoneRest.replace(/\D/g, '');
+  // const handleVerifyOTP = async () => {
+  //   const full = '256' + phoneRest.replace(/\D/g, '');
 
-    if (otpCode.length !== 4) {
-      setOtpError('Please enter the 4-digit code');
-      return;
-    }
+  //   if (otpCode.length !== 4) {
+  //     setOtpError('Please enter the 4-digit code');
+  //     return;
+  //   }
 
-    setOtpLoading(true);
-    setOtpError(null);
-    try {
-      const result = await verifyOTPAction(full, otpCode, 'stake_winnings');
-      setActionToken(result.action_token);
-      setOtpError(null);
-    } catch (err: any) {
-      setOtpError(err.message || 'Invalid OTP code');
-      setActionToken(null);
-    } finally {
-      setOtpLoading(false);
-    }
-  };
+  //   setOtpLoading(true);
+  //   setOtpError(null);
+  //   try {
+  //     const result = await verifyOTPAction(full, otpCode, 'stake_winnings');
+  //     setActionToken(result.action_token);
+  //     setOtpError(null);
+  //   } catch (err: any) {
+  //     setOtpError(err.message || 'Invalid OTP code');
+  //     setActionToken(null);
+  //   } finally {
+  //     setOtpLoading(false);
+  //   }
+  // };
 
   const handleCustomStakeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value.replace(/[^0-9]/g, '');
@@ -220,15 +222,15 @@ export const LandingPage: React.FC = () => {
     }
 
     // Validate winnings flow
-    if (useWinnings && !actionToken) {
-      setPhoneError('Please verify OTP to use winnings');
-      return;
-    }
+    // if (useWinnings && !actionToken) {
+    //   setPhoneError('Please verify OTP to use winnings');
+    //   return;
+    // }
 
-    if (useWinnings && commission !== null && playerWinnings < stake + commission) {
-      setPhoneError(`Insufficient winnings (need ${stake + commission} UGX including commission)`);
-      return;
-    }
+    // if (useWinnings && commission !== null && playerWinnings < stake + commission) {
+    //   setPhoneError(`Insufficient winnings (need ${stake + commission} UGX including commission)`);
+    //   return;
+    // }
 
     // If match code is supplied, validate format
     if (matchCodeInput) {
@@ -274,10 +276,10 @@ export const LandingPage: React.FC = () => {
     if (matchCodeInput) opts.match_code = matchCodeInput.trim().toUpperCase();
 
     // Include action token if using winnings
-    if (useWinnings && actionToken) {
-      opts.source = 'winnings';
-      opts.action_token = actionToken;
-    }
+    // if (useWinnings && actionToken) {
+    //   opts.source = 'winnings';
+    //   opts.action_token = actionToken;
+    // }
 
     await startGame(full, stake, displayNameInput || generateRandomName(), opts);
   };

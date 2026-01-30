@@ -93,7 +93,7 @@ func Load() *Config {
 		RedisURL: getEnv("REDIS_URL", "redis://localhost:6379/0"),
 
 		// Server
-		Port:        getEnv("APP_PORT", "8080"),
+		Port:        getEnv("APP_PORT", "8000"),
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
 
 		// Game Settings
