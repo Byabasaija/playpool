@@ -43,6 +43,9 @@ export async function initiateStake(phone: string, stake: number, displayName?: 
     match_code: data.match_code,
     expires_at: data.expires_at,
     queue_id: data.queue_id,
+    transaction_id: data.transaction_id,
+    dmark_transaction_id: data.dmark_transaction_id,
+    message: data.message,
   } as StakeResponse;
 }
 
@@ -70,11 +73,11 @@ export async function requeuePlayer(phone: string, queueId?: number, stakeAmount
 export async function pollMatchStatus(queueToken: string): Promise<QueueStatusResponse> {
   const response = await fetch(`${API_BASE}/game/queue/status?queue_token=${queueToken}`);
   const data = await response.json();
-  
+
   if (!response.ok) {
     throw new Error(data.error || 'Failed to check match status');
   }
-  
+
   return {
     status: data.status,
     game_link: data.game_link,
@@ -82,6 +85,24 @@ export async function pollMatchStatus(queueToken: string): Promise<QueueStatusRe
     opponent_display_name: data.opponent_display_name,
     message: data.message,
   } as QueueStatusResponse;
+}
+
+export async function pollMatchStatusByPhone(phone: string): Promise<QueueStatusResponse & { queue_token?: string }> {
+  const response = await fetch(`${API_BASE}/game/queue/status?phone=${formatPhone(phone)}`);
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to check match status');
+  }
+
+  return {
+    status: data.status,
+    game_link: data.game_link,
+    my_display_name: data.my_display_name,
+    opponent_display_name: data.opponent_display_name,
+    message: data.message,
+    queue_token: data.queue_token,
+  };
 }
 
 export async function updateDisplayName(phone: string, name: string): Promise<{ display_name: string }> {

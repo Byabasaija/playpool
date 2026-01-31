@@ -12,7 +12,7 @@ function generateRandomName() {
 
 export const RematchPage: React.FC = () => {
   const navigate = useNavigate();
-  const { stage, gameLink, isLoading, startGame, displayName, error } = useMatchmaking();
+  const { stage, gameLink, isLoading, startGame, displayName, error, reset } = useMatchmaking();
 
   // Get opponent phone and stake from URL
   const params = new URLSearchParams(window.location.search);
@@ -150,6 +150,39 @@ export const RematchPage: React.FC = () => {
 
     await startGame(full, initialStake, displayNameInput || generateRandomName(), opts);
   };
+
+  if (stage === 'payment_pending') {
+    return (
+      <div className="max-w-md mx-auto rounded-2xl p-8 text-center">
+        <div className="mb-6">
+          <div className="animate-pulse">
+            <div className="h-16 w-16 bg-yellow-100 rounded-full mx-auto flex items-center justify-center">
+              <span className="text-yellow-600 text-3xl">📱</span>
+            </div>
+          </div>
+        </div>
+        <h2 className="text-2xl font-bold text-gray-900 mb-2">Complete Payment on Your Phone</h2>
+        <p className="text-gray-600 mb-4">Check your phone for the Mobile Money payment prompt.</p>
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-left">
+          <p className="text-sm text-blue-900">
+            <strong>What to do:</strong>
+          </p>
+          <ol className="list-decimal list-inside text-sm text-blue-800 mt-2 space-y-1">
+            <li>Check for an MTN or Airtel Money prompt on your phone</li>
+            <li>Enter your Mobile Money PIN to approve the payment</li>
+            <li>Wait for confirmation</li>
+          </ol>
+        </div>
+        <div className="mt-6">
+          <div className="inline-flex items-center space-x-2 text-gray-600">
+            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600"></div>
+            <span className="text-sm">Waiting for payment confirmation... Changed your mind? <button onClick={() => reset()} className="text-blue-600 underline">Cancel</button></span>
+          </div>
+        </div>
+        <p className="mt-4 text-xs text-gray-500">This may take some time. Do not close this page.</p>
+      </div>
+    );
+  }
 
   if (stage === 'matching') {
     return (

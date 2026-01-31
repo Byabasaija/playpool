@@ -25,8 +25,7 @@ export const LandingPage: React.FC = () => {
   const [retryLoading, setRetryLoading] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
   const [recentPrivate, setRecentPrivate] = useState<{match_code: string; expires_at?: string; queue_token?: string} | null>(null);
-  // const [useWinnings, setUseWinnings] = useState(false);
-  // const [playerWinnings, setPlayerWinnings] = useState<number>(0);
+  const [playerWinnings, setPlayerWinnings] = useState<number>(0);
   // const [otpSent, setOtpSent] = useState(false);
   // const [otpCode, setOtpCode] = useState('');
   // const [actionToken, setActionToken] = useState<string | null>(null);
@@ -147,12 +146,12 @@ export const LandingPage: React.FC = () => {
         setExpiredQueue(null);
       }
       if (profile && profile.player_winnings !== undefined) {
-        // setPlayerWinnings(profile.player_winnings);
+        setPlayerWinnings(profile.player_winnings);
       }
     } catch (e) {
       setDisplayNameInput(generateRandomName());
       setExpiredQueue(null);
-      // setPlayerWinnings(0);
+      setPlayerWinnings(0);
     }
   };
 
@@ -555,6 +554,18 @@ export const LandingPage: React.FC = () => {
                 <div className="mt-1 text-sm text-gray-500">
                   {commission !== null ? (<span>Commission: {commission} UGX — Total payable: {stake + commission} UGX</span>) : null}
                 </div>
+                {playerWinnings > 0 && commission !== null && (
+                  <div className="mt-2 p-3 bg-green-50 border border-green-200 rounded-lg">
+                    <p className="text-sm text-green-800">
+                      <span className="font-medium">Available Balance: {playerWinnings.toLocaleString()} UGX</span>
+                      {playerWinnings >= stake + commission ? (
+                        <span className="block mt-1 text-green-700">Your balance will be used automatically - no payment needed!</span>
+                      ) : (
+                        <span className="block mt-1 text-yellow-700">Insufficient for this stake. Mobile Money payment will be required.</span>
+                      )}
+                    </p>
+                  </div>
+                )}
                 {expiredQueue && (
                   <div className="mt-2 text-sm text-yellow-600">
                     <div>You have pending stake UGX {expiredQueue.stake_amount}.</div>
@@ -686,7 +697,39 @@ export const LandingPage: React.FC = () => {
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#373536] mx-auto"></div>
             </div>
             <h2 className="text-2xl font-bold text-gray-900 mb-2">Processing Payment</h2>
-            <p className="text-gray-600">Please check your phone for the Mobile Money prompt...</p>
+            <p className="text-gray-600">Initiating Mobile Money payment...</p>
+          </div>
+        );
+
+      case 'payment_pending':
+        return (
+          <div className="max-w-md mx-auto rounded-2xl p-8 text-center">
+            <div className="mb-6">
+              <div className="animate-pulse">
+                <div className="h-16 w-16 bg-yellow-100 rounded-full mx-auto flex items-center justify-center">
+                  <span className="text-yellow-600 text-3xl">📱</span>
+                </div>
+              </div>
+            </div>
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">Complete Payment on Your Phone</h2>
+            <p className="text-gray-600 mb-4">Check your phone for the Mobile Money payment prompt.</p>
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-left">
+              <p className="text-sm text-blue-900">
+                <strong>What to do:</strong>
+              </p>
+              <ol className="list-decimal list-inside text-sm text-blue-800 mt-2 space-y-1">
+                <li>Check for an MTN or Airtel Money prompt on your phone</li>
+                <li>Enter your Mobile Money PIN to approve the payment</li>
+                <li>Wait for confirmation</li>
+              </ol>
+            </div>
+            <div className="mt-6">
+              <div className="inline-flex items-center space-x-2 text-gray-600">
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600"></div>
+                <span className="text-sm">Waiting for payment confirmation... Changed your mind? <button onClick={() => reset()} className="text-blue-600 underline">Cancel</button></span>
+              </div>
+            </div>
+            <p className="mt-4 text-xs text-gray-500">This may take some time. Do not close this page.</p>
           </div>
         );
 
@@ -788,6 +831,40 @@ export const LandingPage: React.FC = () => {
               <button onClick={() => { navigator.clipboard?.writeText(privateMatch?.match_code || ''); }} className="px-4 py-2 bg-[#373536] text-white rounded-lg mr-3">Copy Code</button>
               <button onClick={handleWaitForFriend} disabled={!privateMatch?.queue_token} className="px-4 py-2 bg-[#0ea5e9] text-white rounded-lg mr-3">Wait for Friend</button>
               <button onClick={() => { reset(); }} className="px-4 py-2 border rounded-lg">Done</button>
+            </div>
+          </div>
+        );
+
+      case 'expired':
+        return (
+          <div className="max-w-md mx-auto rounded-2xl p-8 text-center">
+            <div className="mb-6">
+              <div className="h-16 w-16 bg-yellow-100 rounded-full mx-auto flex items-center justify-center">
+                <span className="text-yellow-600 text-3xl">⏰</span>
+              </div>
+            </div>
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">No Opponent Found</h2>
+            <p className="text-gray-600 mb-4">
+              {error || "We couldn't find an opponent within the time limit."}
+            </p>
+            <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
+              <p className="text-green-800 text-sm">
+                Your stake amount has been added to your balance and is available to play again or withdraw.
+              </p>
+            </div>
+            <div className="flex flex-col space-y-3">
+              <button
+                onClick={reset}
+                className="w-full bg-[#373536] text-white py-3 px-6 rounded-lg font-semibold hover:bg-[#2c2b2a] transition-colors"
+              >
+                Play Again
+              </button>
+              <button
+                onClick={() => navigate('/profile')}
+                className="w-full bg-white border border-gray-300 text-gray-700 py-3 px-6 rounded-lg font-semibold hover:bg-gray-50 transition-colors"
+              >
+                View Balance / Withdraw
+              </button>
             </div>
           </div>
         );

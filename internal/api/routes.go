@@ -48,11 +48,8 @@ func SetupRoutes(router *gin.Engine, db *sqlx.DB, rdb *redis.Client, cfg *config
 		// USSD endpoint (internal gateway)
 		v1.GET("/ussd", handlers.HandleUSSD(db, rdb, cfg))
 
-		// Mobile Money callbacks
-		v1.POST("/momo/callback", handlers.HandleMomoCallback(db, rdb, cfg))
-
 		// DMarkPay webhook endpoint (no auth required)
-		v1.POST("/webhooks/dmark", handlers.DMarkPayinWebhook(db, cfg))
+		v1.POST("/webhooks/dmark", handlers.DMarkPayinWebhook(db, rdb, cfg))
 
 		// Game endpoints
 		game := v1.Group("/game")

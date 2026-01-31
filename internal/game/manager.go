@@ -257,6 +257,46 @@ func (gm *GameManager) LeaveQueue(queueToken string) bool {
 	return false
 }
 
+// CreateGameFromMatch creates an in-memory game from a DB-matched pair (called by matchmaker worker)
+func (gm *GameManager) CreateGameFromMatch(player1, player2 QueuedPlayer, gameToken string, stake float64, cfg *config.Config) {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+
+	// Generate game ID and player tokens
+	gameID := generateGameID()
+	player1Token := generateToken(16)
+	player2Token := generateToken(16)
+
+	// Create the game
+	game := NewGame(
+		gameID,
+		gameToken,
+		player1.QueueToken,
+		player1.PhoneNumber,
+		player1Token,
+		player1.PlayerID,
+		player1.DisplayName,
+		player2.QueueToken,
+		player2.PhoneNumber,
+		player2Token,
+		player2.PlayerID,
+		player2.DisplayName,
+		int(stake),
+	)
+
+	// Store the game
+	gm.games[gameID] = game
+	gm.playerToGame[player1.QueueToken] = gameID
+	gm.playerToGame[player2.QueueToken] = gameID
+
+	log.Printf("[MATCHMAKER] Game created in memory: %s (token=%s)", gameID, gameToken)
+	log.Printf("[MATCHMAKER] Player1: %s (db_id=%d) → Game: %s", player1.QueueToken, player1.PlayerID, gameID)
+	log.Printf("[MATCHMAKER] Player2: %s (db_id=%d) → Game: %s", player2.QueueToken, player2.PlayerID, gameID)
+
+	// Save to Redis for persistence
+	gm.saveGameToRedis(game)
+}
+
 // GetGame retrieves a game by ID
 func (gm *GameManager) GetGame(gameID string) (*GameState, error) {
 	gm.mu.RLock()
@@ -987,39 +1027,62 @@ func (gm *GameManager) StartQueueExpiryChecker() {
 	}()
 }
 
-// ExpireQueuedEntries moves expired queued rows to status='expired' and removes them from Redis lists
+// ExpireQueuedEntries moves expired queued rows to status='expired', removes from Redis, and sends SMS notifications
 func (gm *GameManager) ExpireQueuedEntries() (int, error) {
 	if gm.db == nil || gm.rdb == nil {
 		return 0, nil
 	}
 
 	ctx := context.Background()
-	// Atomically update expired rows and return their ids and stake_amounts
-	rows, err := gm.db.Queryx(`UPDATE matchmaking_queue SET status='expired' WHERE expires_at < NOW() AND status='queued' RETURNING id, stake_amount`)
+	// Atomically update expired rows and return their details for SMS notification
+	rows, err := gm.db.Queryx(`UPDATE matchmaking_queue SET status='expired' WHERE expires_at < NOW() AND status='queued' RETURNING id, phone_number, stake_amount`)
 	if err != nil {
 		return 0, err
 	}
 	defer rows.Close()
 
-	removed := 0
+	type expiredEntry struct {
+		ID          int
+		PhoneNumber string
+		StakeAmount float64
+	}
+	var expired []expiredEntry
+
 	for rows.Next() {
-		var id int
-		var stakeAmount float64
-		if err := rows.Scan(&id, &stakeAmount); err != nil {
+		var e expiredEntry
+		if err := rows.Scan(&e.ID, &e.PhoneNumber, &e.StakeAmount); err != nil {
 			log.Printf("[QUEUE EXPIRY] Scan error: %v", err)
 			continue
 		}
-		key := fmt.Sprintf("queue:stake:%d", int(stakeAmount))
-		if err := gm.rdb.LRem(ctx, key, 0, id).Err(); err != nil {
-			log.Printf("[QUEUE EXPIRY] Failed to LREM id %d from %s: %v", id, key, err)
+
+		// Remove from Redis
+		key := fmt.Sprintf("queue:stake:%d", int(e.StakeAmount))
+		if err := gm.rdb.LRem(ctx, key, 0, e.ID).Err(); err != nil {
+			log.Printf("[QUEUE EXPIRY] Failed to LREM id %d from %s: %v", e.ID, key, err)
 		}
-		removed++
+
+		expired = append(expired, e)
 	}
 
-	if removed > 0 {
-		log.Printf("[QUEUE EXPIRY] Expired %d queued entries", removed)
+	if len(expired) > 0 {
+		log.Printf("[QUEUE EXPIRY] Expired %d queued entries", len(expired))
+
+		// Send SMS notifications (best-effort, async)
+		for _, e := range expired {
+			go func(phone string, stake float64) {
+				if sms.Default == nil {
+					return
+				}
+				msg := fmt.Sprintf("PlayMatatu: No match found for your %.0f UGX stake. Your balance is available to play again or withdraw.", stake)
+				if _, err := sms.SendSMS(ctx, phone, msg); err != nil {
+					log.Printf("[QUEUE EXPIRY] Failed to send expiry SMS to %s: %v", phone, err)
+				} else {
+					log.Printf("[QUEUE EXPIRY] Expiry SMS sent to %s", phone)
+				}
+			}(e.PhoneNumber, e.StakeAmount)
+		}
 	}
-	return removed, nil
+	return len(expired), nil
 }
 
 // RecordMove records a single move in game_moves (synchronous). It's best-effort and logs errors.

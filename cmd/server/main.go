@@ -68,11 +68,14 @@ func main() {
 		paymentClient := payment.NewClient(cfg, rdb)
 		if paymentClient != nil {
 			payment.SetDefault(paymentClient)
-			log.Printf("[PAYMENT] DMarkPay client initialized (wallet=%s)", cfg.DMarkPayWallet)
+			log.Printf("[PAYMENT] DMarkPay client initialized (account=%s, wallet=%s)", cfg.DMarkPayAccountCode, cfg.DMarkPayWallet)
 		}
 	} else {
 		log.Printf("[PAYMENT] DMarkPay not configured - payment operations will use mock mode")
 	}
+
+	// Start payment status checker (polls DMarkPay for PENDING transaction status)
+	go payment.StartStatusChecker(context.Background(), db, rdb, cfg, 2) // Check every 2 minutes
 
 	// Wire Redis and start idle event subscriber in WS layer
 	ws.SetRedisClient(rdb, cfg)
@@ -80,6 +83,9 @@ func main() {
 
 	// Start idle worker (warning -> forfeit) for idle detection
 	game.StartIdleWorker(context.Background(), db, rdb, cfg)
+
+	// Start matchmaker worker (pairs players from DB queue and sends SMS)
+	go game.StartMatchmakerWorker(context.Background(), db, rdb, cfg)
 
 	// Set up Gin router
 	if cfg.Environment == "production" {

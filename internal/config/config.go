@@ -61,6 +61,7 @@ type Config struct {
 	DMarkPayTokenURL    string
 	DMarkPayUsername    string
 	DMarkPayPassword    string
+	DMarkPayAccountCode string
 	DMarkPayWallet      string
 	DMarkPayCallbackURL string
 	DMarkPayTimeout     int
@@ -78,6 +79,9 @@ type Config struct {
 	IdleWarningSeconds     int
 	IdleForfeitSeconds     int
 	IdleWorkerPollInterval int
+
+	// Matchmaker worker
+	MatchmakerPollSeconds int
 	// Withdraw provider fee percent (telecom fee applied at payout time)
 	WithdrawProviderFeePercent int
 	// Withdraw settings
@@ -145,6 +149,7 @@ func Load() *Config {
 		DMarkPayTokenURL:    getEnv("DMARK_PAY_TOKEN_URL", "/o/token/"),
 		DMarkPayUsername:    getEnv("DMARK_PAY_USERNAME", ""),
 		DMarkPayPassword:    getEnv("DMARK_PAY_PASSWORD", ""),
+		DMarkPayAccountCode: getEnv("DMARK_PAY_ACCOUNT_CODE", ""),
 		DMarkPayWallet:      getEnv("DMARK_PAY_WALLET", "dmark"),
 		DMarkPayCallbackURL: getEnv("DMARK_PAY_CALLBACK_URL", ""),
 		DMarkPayTimeout:     getEnvInt("DMARK_PAY_TIMEOUT", 30),
@@ -163,6 +168,10 @@ func Load() *Config {
 		IdleWarningSeconds:     getEnvInt("IDLE_WARNING_SECONDS", 45),
 		IdleForfeitSeconds:     getEnvInt("IDLE_FORFEIT_SECONDS", 90),
 		IdleWorkerPollInterval: getEnvInt("IDLE_WORKER_POLL_INTERVAL", 1),
+
+		// Matchmaker worker (how often to check for pairs to match)
+		MatchmakerPollSeconds: getEnvInt("MATCHMAKER_POLL_SECONDS", 2),
+
 		// Withdraw provider fee percent (e.g., telecom/MOMO fee applied at payout time)
 		WithdrawProviderFeePercent: getEnvInt("WITHDRAW_PROVIDER_FEE_PERCENT", 3),
 		// Withdraw configuration

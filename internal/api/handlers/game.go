@@ -357,6 +357,15 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 
 				log.Printf("[PAYMENT] Payin initiated: txn=%s dmark_id=%s status=%s", txnID, payinResp.TransactionID, payinResp.Status)
 
+				// Return immediately - player will be added to queue after webhook confirms payment
+				c.JSON(http.StatusOK, gin.H{
+					"message":              "Payment initiated. Complete payment on your phone to join the queue.",
+					"transaction_id":       txnID,
+					"dmark_transaction_id": payinResp.TransactionID,
+					"status":               "PENDING",
+				})
+				return
+
 			} else {
 				// Fallback to dummy mode (no DMarkPay configured)
 				realPayment = false
@@ -624,21 +633,8 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 			}
 		}
 
-		// No immediate match - queued
+		// No immediate match - queued (matchmaker worker will match from DB)
 		log.Printf("[QUEUE] Player queued: player=%s phone=%s stake=%d queue_id=%d", queueToken, phone, req.StakeAmount, queueID)
-
-		// Add to in-memory matchmaking queue so CheckQueueStatus can see the player
-		if game.Manager != nil {
-			entry := game.QueueEntry{
-				QueueToken:  queueToken,
-				PhoneNumber: phone,
-				StakeAmount: req.StakeAmount,
-				DBPlayerID:  player.ID,
-				DisplayName: player.DisplayName,
-				JoinedAt:    time.Now(),
-			}
-			game.Manager.AddQueueEntry(req.StakeAmount, entry)
-		}
 
 		c.JSON(http.StatusOK, gin.H{
 			"status":         "queued",
@@ -654,61 +650,134 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 	}
 }
 
-// CheckQueueStatus checks if a player has been matched
+// CheckQueueStatus checks if a player has been matched (DB-only, matchmaker worker handles matching)
 func CheckQueueStatus(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		queueToken := c.Query("queue_token")
 		if queueToken == "" {
 			queueToken = c.Query("player_id") // legacy fallback
 		}
+
+		// Support querying by phone number (for payment confirmation polling)
+		phone := c.Query("phone")
+		if queueToken == "" && phone != "" {
+			// Look up most recent active or matched queue entry for this phone
+			var queue struct {
+				QueueToken string `db:"queue_token"`
+			}
+			err := db.Get(&queue, `
+				SELECT queue_token
+				FROM matchmaking_queue
+				WHERE phone_number = $1
+				  AND status IN ('queued', 'processing', 'matching', 'matched')
+				ORDER BY created_at DESC
+				LIMIT 1
+			`, phone)
+
+			if err == nil {
+				queueToken = queue.QueueToken
+			} else {
+				// No active queue found for this phone
+				log.Printf("[QUEUE STATUS] No active queue found for phone %s", phone)
+				c.JSON(http.StatusOK, gin.H{
+					"status":  "not_found",
+					"message": "Payment not yet confirmed. Please wait...",
+				})
+				return
+			}
+		}
+
 		if queueToken == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "queue_token or player_id required"})
 			return
 		}
 
-		// Check if player is in a game
-		gameState, err := game.Manager.GetGameForPlayer(queueToken)
-		if err == nil {
-			// Player is in a game! Get their link
-			var gameLink string
-			if gameState.Player1.ID == queueToken {
-				gameLink = cfg.FrontendURL + "/g/" + gameState.Token + "?pt=" + gameState.Player1.PlayerToken
-			} else {
-				gameLink = cfg.FrontendURL + "/g/" + gameState.Token + "?pt=" + gameState.Player2.PlayerToken
+		// Query DB for queue entry status (single source of truth)
+		var dbQueue struct {
+			ID          int      `db:"id"`
+			PlayerID    int      `db:"player_id"`
+			PhoneNumber string   `db:"phone_number"`
+			StakeAmount float64  `db:"stake_amount"`
+			QueueToken  string   `db:"queue_token"`
+			Status      string   `db:"status"`
+			SessionID   *int     `db:"session_id"`
+			GameToken   *string  `db:"game_token"`
+		}
+		err := db.Get(&dbQueue, `
+			SELECT mq.id, mq.player_id, mq.phone_number, mq.stake_amount, mq.queue_token, mq.status, mq.session_id, gs.game_token
+			FROM matchmaking_queue mq
+			LEFT JOIN game_sessions gs ON mq.session_id = gs.id
+			WHERE mq.queue_token = $1
+			ORDER BY mq.created_at DESC
+			LIMIT 1
+		`, queueToken)
+
+		if err != nil {
+			log.Printf("[QUEUE STATUS] Queue token %s not found in DB", queueToken)
+			c.JSON(http.StatusOK, gin.H{
+				"status":  "not_found",
+				"message": "Player not in queue. Please stake again.",
+			})
+			return
+		}
+
+		log.Printf("[QUEUE STATUS] Queue entry found: token=%s status=%s session_id=%v", queueToken, dbQueue.Status, dbQueue.SessionID)
+
+		switch dbQueue.Status {
+		case "matched":
+			if dbQueue.GameToken == nil {
+				log.Printf("[QUEUE STATUS] Player %s matched but no game token yet", queueToken)
+				c.JSON(http.StatusOK, gin.H{
+					"status":      "queued",
+					"queue_token": queueToken,
+					"message":     "Match found, preparing game...",
+				})
+				return
 			}
 
-			log.Printf("[QUEUE STATUS] Player %s matched! Game: %s, Link: %s", queueToken, gameState.ID, gameLink)
+			// Get game from in-memory for player token lookup
+			gameState, err := game.Manager.GetGameByToken(*dbQueue.GameToken)
+			var gameLink string
+			if err == nil {
+				// Found in memory - use player tokens
+				if gameState.Player1.ID == queueToken {
+					gameLink = cfg.FrontendURL + "/g/" + *dbQueue.GameToken + "?pt=" + gameState.Player1.PlayerToken
+				} else {
+					gameLink = cfg.FrontendURL + "/g/" + *dbQueue.GameToken + "?pt=" + gameState.Player2.PlayerToken
+				}
+			} else {
+				// Not in memory yet - use basic link (player will auth via queue token)
+				gameLink = cfg.FrontendURL + "/g/" + *dbQueue.GameToken
+			}
 
 			c.JSON(http.StatusOK, gin.H{
 				"status":       "matched",
-				"game_id":      gameState.ID,
-				"game_token":   gameState.Token,
+				"game_token":   *dbQueue.GameToken,
 				"game_link":    gameLink,
-				"player_id":    queueToken,
-				"stake_amount": gameState.StakeAmount,
-				"prize_amount": int(float64(gameState.StakeAmount*2) * 0.9),
-				"expires_at":   gameState.ExpiresAt,
+				"queue_token":  queueToken,
+				"stake_amount": int(dbQueue.StakeAmount),
 				"message":      "Opponent found! Click link to play.",
 			})
-			return
-		}
 
-		// Check if still in queue
-		if game.Manager.IsPlayerInQueue(queueToken) {
-			log.Printf("[QUEUE STATUS] Player %s still in queue", queueToken)
+		case "queued", "processing", "matching":
 			c.JSON(http.StatusOK, gin.H{
-				"status":  "queued",
-				"message": "Still waiting for opponent...",
+				"status":      "queued",
+				"queue_token": queueToken,
+				"message":     "Still waiting for opponent...",
 			})
-			return
-		}
 
-		// Not in queue or game
-		log.Printf("[QUEUE STATUS] Player %s not found in queue or game", queueToken)
-		c.JSON(http.StatusOK, gin.H{
-			"status":  "not_found",
-			"message": "Player not in queue. Please stake again.",
-		})
+		case "expired":
+			c.JSON(http.StatusOK, gin.H{
+				"status":  "expired",
+				"message": "Queue expired. Your balance is available to play again or withdraw.",
+			})
+
+		default:
+			c.JSON(http.StatusOK, gin.H{
+				"status":  dbQueue.Status,
+				"message": "Queue status: " + dbQueue.Status,
+			})
+		}
 	}
 }
 

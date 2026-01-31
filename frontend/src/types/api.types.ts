@@ -9,7 +9,7 @@ export interface StakeRequest {
 
 export interface StakeResponse {
   player_id: string;
-  status: 'queued' | 'matched' | 'private_created';
+  status: 'queued' | 'matched' | 'private_created' | 'PENDING';
   game_link?: string;
   // When queued, server returns your generated display name
   display_name?: string;
@@ -22,16 +22,22 @@ export interface StakeResponse {
   match_code?: string;
   expires_at?: string;
   queue_id?: number;
+  // Payment fields (when status is PENDING)
+  transaction_id?: string;
+  dmark_transaction_id?: string;
+  message?: string;
 }
 
 export interface QueueStatusResponse {
-  status: 'queued' | 'matched' | 'not_found';
+  status: 'queued' | 'matched' | 'not_found' | 'expired';
   game_link?: string;
   // When matched, include display names
   my_display_name?: string;
   opponent_display_name?: string;
   // Human-readable server message (e.g. 'Player not in queue')
   message?: string;
+  // Queue token (returned when polling by phone finds an active queue)
+  queue_token?: string;
 }
 
 export interface WithdrawRequestResponse {

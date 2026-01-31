@@ -420,22 +420,7 @@ func RequeueStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handle
 			return
 		}
 
-		// Add to in-memory matchmaking queue
-		if game.Manager != nil {
-			entry := game.QueueEntry{
-				QueueToken:  playerEphemeral,
-				PhoneNumber: phone,
-				StakeAmount: stakeAmount,
-				DBPlayerID:  player.ID,
-				DisplayName: player.DisplayName,
-				JoinedAt:    time.Now(),
-			}
-			game.Manager.AddQueueEntry(stakeAmount, entry)
-			// Return the queue token in the response
-			c.JSON(http.StatusOK, gin.H{"status": "queued", "queue_id": queueID, "stake_amount": stakeAmount, "queue_token": playerEphemeral, "player_token": player.PlayerToken})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{"status": "queued", "queue_id": queueID, "stake_amount": stakeAmount})
+		// Matchmaker worker will pick up from DB and match players
+		c.JSON(http.StatusOK, gin.H{"status": "queued", "queue_id": queueID, "stake_amount": stakeAmount, "queue_token": playerEphemeral, "player_token": player.PlayerToken})
 	}
 }

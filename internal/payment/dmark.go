@@ -19,14 +19,15 @@ import (
 
 // Client handles DMarkPay API integration
 type Client struct {
-	baseURL    string
-	tokenURL   string
-	username   string
-	password   string
-	wallet     string
-	rdb        *redis.Client
-	httpClient *http.Client
-	cacheKey   string
+	baseURL     string
+	tokenURL    string
+	username    string
+	password    string
+	accountCode string
+	wallet      string
+	rdb         *redis.Client
+	httpClient  *http.Client
+	cacheKey    string
 }
 
 // Default is the package-level default client
@@ -40,14 +41,15 @@ func NewClient(cfg *config.Config, rdb *redis.Client) *Client {
 	}
 
 	return &Client{
-		baseURL:    strings.TrimRight(cfg.DMarkPayBaseURL, "/"),
-		tokenURL:   cfg.DMarkPayTokenURL,
-		username:   cfg.DMarkPayUsername,
-		password:   cfg.DMarkPayPassword,
-		wallet:     cfg.DMarkPayWallet,
-		rdb:        rdb,
-		httpClient: &http.Client{Timeout: time.Duration(cfg.DMarkPayTimeout) * time.Second},
-		cacheKey:   "dmark_pay_token:",
+		baseURL:     strings.TrimRight(cfg.DMarkPayBaseURL, "/"),
+		tokenURL:    cfg.DMarkPayTokenURL,
+		username:    cfg.DMarkPayUsername,
+		password:    cfg.DMarkPayPassword,
+		accountCode: cfg.DMarkPayAccountCode,
+		wallet:      cfg.DMarkPayWallet,
+		rdb:         rdb,
+		httpClient:  &http.Client{Timeout: time.Duration(cfg.DMarkPayTimeout) * time.Second},
+		cacheKey:    "dmark_pay_token:",
 	}
 }
 
@@ -202,7 +204,7 @@ func (c *Client) Payin(ctx context.Context, req PayinRequest) (*PayinResponse, e
 	}
 
 	// Build request
-	endpoint := fmt.Sprintf("%s/api/v1/accounts/%s/transactions/payin/", c.baseURL, c.wallet)
+	endpoint := fmt.Sprintf("%s/api/v1/accounts/%s/transactions/payin/", c.baseURL, c.accountCode)
 
 	payload := map[string]interface{}{
 		"wallet":            wallet,
@@ -353,7 +355,7 @@ func (c *Client) Payout(ctx context.Context, req PayoutRequest) (*PayoutResponse
 	}
 
 	// Build request
-	endpoint := fmt.Sprintf("%s/api/v1/accounts/%s/transactions/payout/", c.baseURL, c.wallet)
+	endpoint := fmt.Sprintf("%s/api/v1/accounts/%s/transactions/payout/", c.baseURL, c.accountCode)
 
 	payload := map[string]interface{}{
 		"wallet":            wallet,
@@ -425,6 +427,8 @@ func (c *Client) Payout(ctx context.Context, req PayoutRequest) (*PayoutResponse
 }
 
 // GetTransactionStatus checks the status of a transaction
+// Note: DMarkPay API status is determined by response body "status" field ("Successful", "Pending", "Failed")
+// not by HTTP status codes. Only treat 400+/500+ HTTP codes as errors.
 func (c *Client) GetTransactionStatus(ctx context.Context, dmarkTransactionID string) (*PayinResponse, error) {
 	if c == nil {
 		return nil, errors.New("dmark pay client not initialized")
@@ -435,7 +439,7 @@ func (c *Client) GetTransactionStatus(ctx context.Context, dmarkTransactionID st
 		return nil, fmt.Errorf("failed to get access token: %w", err)
 	}
 
-	endpoint := fmt.Sprintf("%s/api/v1/accounts/%s/transactions/%s/", c.baseURL, c.wallet, dmarkTransactionID)
+	endpoint := fmt.Sprintf("%s/api/v1/accounts/%s/transactions/%s/", c.baseURL, c.accountCode, dmarkTransactionID)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
 	if err != nil {
@@ -456,15 +460,19 @@ func (c *Client) GetTransactionStatus(ctx context.Context, dmarkTransactionID st
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
+	log.Printf("[PAYMENT] GetTransactionStatus response: http_status=%d body=%s", resp.StatusCode, string(body))
+
+	// Only treat HTTP 400+/500+ as hard errors
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("status check failed with HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
 	var statusResp PayinResponse
 	if err := json.Unmarshal(body, &statusResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return &statusResp, fmt.Errorf("status check failed: %d - %s", resp.StatusCode, statusResp.Message)
-	}
-
+	// Return the response - caller should check statusResp.Status ("Successful", "Pending", "Failed")
 	return &statusResp, nil
 }
 

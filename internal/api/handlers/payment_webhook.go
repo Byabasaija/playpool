@@ -1,18 +1,15 @@
 package handlers
 
 import (
-	"context"
-	"database/sql"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
-	"github.com/playmatatu/backend/internal/accounts"
 	"github.com/playmatatu/backend/internal/config"
-	"github.com/playmatatu/backend/internal/sms"
+	"github.com/playmatatu/backend/internal/payment"
+	"github.com/redis/go-redis/v9"
 )
 
 // WebhookPayload represents DMarkPay webhook callback
@@ -25,7 +22,7 @@ type WebhookPayload struct {
 }
 
 // DMarkPayinWebhook handles payin (deposit) callbacks
-func DMarkPayinWebhook(db *sqlx.DB, cfg *config.Config) gin.HandlerFunc {
+func DMarkPayinWebhook(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var webhook WebhookPayload
 		if err := c.BindJSON(&webhook); err != nil {
@@ -74,24 +71,19 @@ func DMarkPayinWebhook(db *sqlx.DB, cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
-		// Determine event type
-		var eventType string
-		if webhook.Status == "Successful" && webhook.StatusCode == "0" {
-			eventType = "payment.succeeded"
-		} else if webhook.StatusCode != "0" {
-			eventType = "payment.failed"
-		} else {
-			eventType = "payment.pending"
-		}
-
-		// Handle based on event type
-		switch eventType {
-		case "payment.succeeded":
-			handlePayinSuccess(db, cfg, txn.ID, txn.PlayerID, txn.Amount, txn.PhoneNumber, webhook)
-		case "payment.failed":
-			handlePayinFailed(db, txn.ID, webhook)
-		case "payment.pending":
+		// Determine event type based on response status field (not status_code)
+		// DMarkPay returns: "Successful", "Pending", or "Failed"
+		switch webhook.Status {
+		case "Successful":
+			log.Printf("[WEBHOOK] Payment succeeded for transaction %d", txn.ID)
+			payment.ProcessPayinSuccess(db, rdb, cfg, txn.ID, txn.PlayerID, txn.Amount, txn.PhoneNumber, webhook.StatusCode, webhook.Status)
+		case "Failed":
+			log.Printf("[WEBHOOK] Payment failed for transaction %d", txn.ID)
+			payment.ProcessPayinFailed(db, txn.ID, webhook.StatusCode, webhook.Message)
+		case "Pending":
 			log.Printf("[WEBHOOK] Payment still pending for transaction %d", txn.ID)
+		default:
+			log.Printf("[WEBHOOK] Unknown payment status '%s' for transaction %d", webhook.Status, txn.ID)
 		}
 
 		// Mark webhook as processed
@@ -101,101 +93,3 @@ func DMarkPayinWebhook(db *sqlx.DB, cfg *config.Config) gin.HandlerFunc {
 	}
 }
 
-func handlePayinSuccess(db *sqlx.DB, cfg *config.Config, txnID, playerID int, amount float64, phone string, webhook WebhookPayload) {
-	log.Printf("[WEBHOOK] Processing payin success for transaction %d", txnID)
-
-	tx, err := db.Beginx()
-	if err != nil {
-		log.Printf("[WEBHOOK] Failed to begin transaction: %v", err)
-		return
-	}
-	defer tx.Rollback()
-
-	// Get accounts
-	settlementAcc, _ := accounts.GetOrCreateAccount(db, accounts.AccountSettlement, nil)
-	platformAcc, _ := accounts.GetOrCreateAccount(db, accounts.AccountPlatform, nil)
-	winningsAcc, _ := accounts.GetOrCreateAccount(db, accounts.AccountPlayerWinnings, &playerID)
-
-	// Calculate commission
-	commission := float64(cfg.CommissionFlat)
-	grossAmount := amount
-	netAmount := grossAmount - commission
-
-	// Credit settlement account with gross amount
-	_, err = tx.Exec(`UPDATE accounts SET balance = balance + $1, updated_at = NOW() WHERE id = $2`, grossAmount, settlementAcc.ID)
-	if err != nil {
-		log.Printf("[WEBHOOK] Failed to credit settlement: %v", err)
-		return
-	}
-
-	// Record external deposit
-	_, err = tx.Exec(`INSERT INTO account_transactions
-        (debit_account_id, credit_account_id, amount, reference_type, reference_id, description, created_at)
-        VALUES (NULL, $1, $2, 'TRANSACTION', $3, 'Deposit (gross)', NOW())`,
-		settlementAcc.ID, grossAmount, txnID)
-	if err != nil {
-		log.Printf("[WEBHOOK] Failed to record deposit: %v", err)
-		return
-	}
-
-	// Transfer: SETTLEMENT → PLATFORM (commission)
-	err = accounts.Transfer(tx, settlementAcc.ID, platformAcc.ID, commission,
-		"TRANSACTION", sql.NullInt64{Int64: int64(txnID), Valid: true}, "Commission (flat)")
-	if err != nil {
-		log.Printf("[WEBHOOK] Failed to transfer commission: %v", err)
-		return
-	}
-
-	// Transfer: SETTLEMENT → PLAYER_WINNINGS (net)
-	err = accounts.Transfer(tx, settlementAcc.ID, winningsAcc.ID, netAmount,
-		"TRANSACTION", sql.NullInt64{Int64: int64(txnID), Valid: true}, "Deposit (net)")
-	if err != nil {
-		log.Printf("[WEBHOOK] Failed to transfer net amount: %v", err)
-		return
-	}
-
-	// Update transaction status
-	_, err = tx.Exec(`UPDATE transactions SET
-        status='COMPLETED',
-        completed_at=NOW(),
-        provider_status_code=$1,
-        provider_status_message=$2
-        WHERE id=$3`,
-		webhook.StatusCode, webhook.Status, txnID)
-	if err != nil {
-		log.Printf("[WEBHOOK] Failed to update transaction: %v", err)
-		return
-	}
-
-	if err := tx.Commit(); err != nil {
-		log.Printf("[WEBHOOK] Failed to commit: %v", err)
-		return
-	}
-
-	log.Printf("[WEBHOOK] ✓ Payin completed: txn=%d gross=%.2f commission=%.2f net=%.2f", txnID, grossAmount, commission, netAmount)
-
-	// Best-effort SMS
-	if sms.Default != nil {
-		msg := fmt.Sprintf("PlayMatatu: Payment of %.0f UGX received. You can now join a game!", amount)
-		go func() {
-			if _, err := sms.SendSMS(context.Background(), phone, msg); err != nil {
-				log.Printf("[WEBHOOK] Failed to send deposit SMS: %v", err)
-			}
-		}()
-	}
-}
-
-func handlePayinFailed(db *sqlx.DB, txnID int, webhook WebhookPayload) {
-	log.Printf("[WEBHOOK] Payment failed for transaction %d: %s", txnID, webhook.Message)
-
-	_, err := db.Exec(`UPDATE transactions SET
-        status='FAILED',
-        provider_status_code=$1,
-        provider_status_message=$2
-        WHERE id=$3`,
-		webhook.StatusCode, webhook.Message, txnID)
-
-	if err != nil {
-		log.Printf("[WEBHOOK] Failed to update transaction: %v", err)
-	}
-}
