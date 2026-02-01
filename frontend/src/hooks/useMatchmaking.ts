@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { initiateStake, pollMatchStatus, pollMatchStatusByPhone } from '../utils/apiClient';
 
-export type MatchmakingStage = 'form' | 'payment' | 'payment_pending' | 'matching' | 'found' | 'error' | 'expired' | 'private_created';
+export type MatchmakingStage = 'form' | 'payment' | 'payment_pending' | 'matching' | 'found' | 'error' | 'expired' | 'declined' | 'private_created';
 
 export function useMatchmaking() {
   const [stage, setStage] = useState<MatchmakingStage>('form');
@@ -71,6 +71,14 @@ export function useMatchmaking() {
           return;
         }
 
+        // Backend says invite was declined
+        if (result.status === 'declined') {
+          setError(result.message || 'Your match invite was declined.');
+          setStage('declined');
+          setIsLoading(false);
+          return;
+        }
+
         if (result.status === 'not_found') {
           throw new Error(result.message || 'Session expired. Please try again.');
         }
@@ -78,7 +86,7 @@ export function useMatchmaking() {
         attempts++;
         if (attempts >= maxAttempts) {
           // Frontend timeout - treat as expired
-          setError('No opponent found within 3 minutes. Your balance is available to play again or withdraw.');
+          setError('No opponent found in this session. wait a bit and try again.');
           setStage('expired');
           setIsLoading(false);
           return;
@@ -96,7 +104,7 @@ export function useMatchmaking() {
     }
   }, [setDisplayName]);
 
-  const startGame = useCallback(async (phone: string, stake: number, displayName?: string, opts?: { create_private?: boolean; match_code?: string }) => {
+  const startGame = useCallback(async (phone: string, stake: number, displayName?: string, opts?: { create_private?: boolean; match_code?: string; invite_phone?: string; source?: string; action_token?: string }) => {
     setIsLoading(true);
     setError(null);
     setStage('payment');
@@ -104,6 +112,11 @@ export function useMatchmaking() {
     try {
       // Initiate stake
       const stakeResult = await initiateStake(phone, stake, displayName, opts);
+
+      // Save player_token to localStorage if provided
+      if (stakeResult.player_token) {
+        localStorage.setItem('player_token', stakeResult.player_token);
+      }
 
       // Handle PENDING payment status (real mobile money flow)
       if (stakeResult.status === 'PENDING') {
@@ -117,6 +130,11 @@ export function useMatchmaking() {
         const pollPayment = async (): Promise<void> => {
           try {
             const result = await pollMatchStatusByPhone(phone);
+
+            // Save player_token if provided
+            if (result.player_token) {
+              localStorage.setItem('player_token', result.player_token);
+            }
 
             // If player appears in queue (payment confirmed), transition to matching
             if (result.status === 'queued' && result.queue_token) {
@@ -255,6 +273,14 @@ export function useMatchmaking() {
           return;
         }
 
+        // Backend says invite was declined
+        if (result.status === 'declined') {
+          setError(result.message || 'Your match invite was declined.');
+          setStage('declined');
+          setIsLoading(false);
+          return;
+        }
+
         if (result.status === 'not_found') {
           throw new Error(result.message || 'Session expired. Please try again.');
         }
@@ -262,7 +288,7 @@ export function useMatchmaking() {
         attempts++;
         if (attempts >= maxAttempts) {
           // Frontend timeout - treat as expired
-          setError('No opponent found within 3 minutes. Your balance is available to play again or withdraw.');
+          setError('No opponent found in this session. wait a bit and try again.');
           setStage('expired');
           setIsLoading(false);
           return;

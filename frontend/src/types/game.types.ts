@@ -25,6 +25,7 @@ export interface GameState {
   // Persisted display names (optional)
   myDisplayName?: string | null;
   opponentDisplayName?: string | null;
+  myPhone?: string | null;
   opponentPhone?: string | null;
 
   // Connection flags

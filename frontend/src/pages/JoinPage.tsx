@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMatchmaking } from '../hooks/useMatchmaking';
-import { formatPhone, validatePhone } from '../utils/phoneUtils';
-import { getPlayerProfile } from '../utils/apiClient';
+import { formatPhone } from '../utils/phoneUtils';
+import { getPlayerProfile, checkPlayerStatus, verifyPIN, declineMatchInvite } from '../utils/apiClient';
+import PinInput from '../components/PinInput';
 
 function generateRandomName() {
   const adjectives = ["Lucky", "Swift", "Brave", "Jolly", "Mighty", "Quiet", "Clever", "Happy", "Kitenge", "Zesty"];
@@ -24,144 +25,294 @@ export const JoinPage: React.FC = () => {
     }
   }, [stage, gameLink, navigate]);
 
-  const [phoneRest, setPhoneRest] = useState('');
-  const [displayName, setDisplayName] = useState('');
+  // State management
+  const [invitePhone, setInvitePhone] = useState('');
+  const [matchCode, setMatchCode] = useState('');
   const [stake, setStake] = useState<number>(1000);
-  const [minStake] = useState<number>(1000);
-  const [matchCode, setMatchCode] = useState<string>('');
+  const [playerExists, setPlayerExists] = useState<boolean>(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [playerProfile, setPlayerProfile] = useState<any>(null);
+  const [useWinnings, setUseWinnings] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
+  // URL parsing and player check
   useEffect(() => {
-    // Parse URL params
-    (async () => {
-      try {
-        const params = new URLSearchParams(window.location.search);
-        const code = params.get('match_code');
-        const s = params.get('stake');
-        const invitePhone = params.get('invite_phone');
-        if (code) setMatchCode(code.toUpperCase());
-        if (s && !Number.isNaN(Number(s))) setStake(Number(s));
-        if (invitePhone) {
-          // normalize and strip leading 256 for the input field
-          const normalized = formatPhone(invitePhone);
-          if (normalized && normalized.startsWith('256')) {
-            setPhoneRest(normalized.slice(3));
-          } else {
-            setPhoneRest(invitePhone);
-          }
-
-          // Fetch player profile to prefill display name
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('match_code');
+    const s = params.get('stake');
+    const phone = params.get('invite_phone');
+    
+    if (code) setMatchCode(code.toUpperCase());
+    if (s && !Number.isNaN(Number(s))) setStake(Number(s));
+    if (phone) {
+      const normalized = formatPhone(phone);
+      setInvitePhone(normalized);
+      
+      // Check if player exists in database
+      checkPlayerStatus(normalized).then(async (status) => {
+        if (status && status.exists) {
+          setPlayerExists(true);
+          // Fetch full profile for display (balance info)
           try {
             const profile = await getPlayerProfile(normalized);
-            if (profile && profile.display_name) {
-              setDisplayName(profile.display_name);
-            } else {
-              setDisplayName(generateRandomName());
-            }
-          } catch (e) {
-            setDisplayName(generateRandomName());
+            setPlayerProfile({
+              display_name: status.display_name,
+              phone_number: normalized,
+              player_winnings: profile?.player_winnings || 0
+            });
+          } catch (err) {
+            // Fallback to basic info if profile fetch fails
+            setPlayerProfile({ 
+              display_name: status.display_name,
+              phone_number: normalized 
+            });
           }
         } else {
-          setDisplayName(generateRandomName());
+          setPlayerExists(false);
         }
-      } catch (e) {
-        setDisplayName(generateRandomName());
-      }
-    })();
+      }).catch(() => {
+        setPlayerExists(false);
+      });
+    }
   }, []);
 
-  const handleConfirm = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    setFormError(null);
-
-    const full = '256' + phoneRest.replace(/\D/g, '');
-    if (!validatePhone(full)) {
-      setFormError('Please enter a valid Ugandan phone number (e.g., 7XXXXXXXX)');
-      return;
-    }
-
-    if (stake < minStake) {
-      setFormError(`Minimum stake is ${minStake} UGX`);
-      return;
-    }
-
-    // Ensure we have a match code to join
-    if (!matchCode || matchCode.length !== 6) {
-      setFormError('Missing/invalid match code');
-      return;
-    }
-
-    // Call startGame with match_code to join the private match
+  const handlePinSubmit = async (pin: string) => {
+    if (!invitePhone) return;
+    
     try {
-      await startGame(full, stake, displayName || generateRandomName(), { match_code: matchCode });
-      // startGame will manage navigation on match found
+      setFormError(null);
+      const result = await verifyPIN(invitePhone, pin, 'rematch');
+      if (result.action_token) {
+        setIsAuthenticated(true);
+        // Refresh player profile for latest balance
+        const profile = await getPlayerProfile(invitePhone);
+        setPlayerProfile(profile);
+      } else {
+        setFormError('PIN verification failed');
+      }
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Failed to verify PIN');
+    }
+  };
+
+  const handleJoinMatch = async () => {
+    try {
+      setFormError(null);
+      
+      // For authenticated players, use their profile data
+      if (isAuthenticated && playerProfile) {
+        const opts: any = { match_code: matchCode };
+        if (useWinnings) {
+          opts.source = 'winnings';
+        }
+        await startGame(invitePhone, stake, playerProfile.display_name, opts);
+      } else {
+        // For new/guest players, use phone and generate display name
+        const displayName = generateRandomName();
+        await startGame(invitePhone, stake, displayName, { 
+          match_code: matchCode
+        });
+      }
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Failed to join match');
     }
   };
 
+  const handleDecline = async () => {
+    try {
+      setFormError(null);
+      await declineMatchInvite(invitePhone, matchCode);
+      // Navigate back with a success message or indication
+      navigate('/', { state: { message: 'Match invite declined' } });
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Failed to decline invite');
+    }
+  };
+
+  // Show PIN entry for existing players
+  if (playerExists && !isAuthenticated) {
+    return (
+      <div className="max-w-md mx-auto rounded-2xl p-8">
+        <div className="text-center mb-6">
+          <img src="/logo.png" alt="PlayMatatu Logo" width={180} className="mx-auto" />
+        </div>
+        
+        <h2 className="text-2xl font-bold text-gray-900 mb-6 text-center">Join Match</h2>
+        
+        {playerProfile && (
+          <div className="text-center mb-6">
+            <div className="text-xl font-semibold text-gray-900 mb-1">
+              {playerProfile.display_name || 'Player'}
+            </div>
+            <div className="text-gray-600 mb-2">
+              {formatPhone(invitePhone)}
+            </div>
+            <div className="text-sm text-gray-600">
+              Balance: <span className="font-semibold text-green-600">
+                {(playerProfile.player_winnings || 0).toLocaleString()}
+              </span>
+            </div>
+          </div>
+        )}
+
+        <div className="text-center mb-6">
+          <div className="text-lg text-gray-700">
+            Joining for: <span className="font-bold text-gray-900">{stake.toLocaleString()}</span>
+          </div>
+        </div>
+
+        <p className="text-gray-600 mb-6 text-center">
+          Enter your PIN to continue
+        </p>
+
+        <PinInput onSubmit={handlePinSubmit} />
+        
+        {formError && (
+          <div className="mt-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded">
+            {formError}
+          </div>
+        )}
+
+        <div className="mt-6 space-y-3">
+          <button
+            onClick={handleDecline}
+            className="w-full px-4 py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold hover:bg-gray-300"
+          >
+            Decline Invite
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Show confirmation screen for authenticated players
+  if (isAuthenticated && playerProfile) {
+    return (
+      <div className="max-w-md mx-auto rounded-2xl p-8">
+        <div className="text-center mb-6">
+          <img src="/logo.png" alt="PlayMatatu Logo" width={180} className="mx-auto" />
+        </div>
+        
+        <h2 className="text-2xl font-bold text-gray-900 mb-6 text-center">Join Match</h2>
+        
+        <div className="text-center mb-6">
+          <div className="text-xl font-semibold text-gray-900 mb-1">
+            {playerProfile.display_name || 'Player'}
+          </div>
+          <div className="text-gray-600 mb-2">
+            {formatPhone(invitePhone)}
+          </div>
+          <div className="text-sm text-gray-600">
+            Balance: <span className="font-semibold text-green-600">
+              {(playerProfile.player_winnings || 0).toLocaleString()}
+            </span>
+          </div>
+        </div>
+
+        <div className="text-center mb-6">
+          <div className="text-lg text-gray-700">
+            Joining for: <span className="font-bold text-gray-900">{stake.toLocaleString()}</span>
+          </div>
+        </div>
+
+        {(playerProfile.player_winnings > 0) && (
+          <div className="mb-6">
+            <label className="flex items-center justify-center space-x-3">
+              <input
+                type="checkbox"
+                checked={useWinnings}
+                onChange={(e) => setUseWinnings(e.target.checked)}
+                className="w-4 h-4 text-blue-600"
+              />
+              <span className="text-sm">Use balance</span>
+            </label>
+          </div>
+        )}
+
+        {formError && (
+          <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded">
+            {formError}
+          </div>
+        )}
+        
+        {error && (
+          <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded">
+            {error}
+          </div>
+        )}
+
+        <div className="space-y-3">
+          <button
+            onClick={handleJoinMatch}
+            disabled={isLoading}
+            className="w-full bg-[#373536] text-white py-3 px-6 rounded-lg font-semibold disabled:opacity-50"
+          >
+            {isLoading ? 'Processing...' : 'Confirm & Pay'}
+          </button>
+          
+          <button
+            onClick={handleDecline}
+            className="w-full px-4 py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold hover:bg-gray-300"
+          >
+            Decline Invite
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Show guest form for new players (with prefilled, non-editable values)
   return (
     <div className="max-w-md mx-auto rounded-2xl p-8">
       <div className="text-center mb-4">
         <img src="/logo.png" alt="PlayMatatu Logo" width={180} className="mx-auto" />
       </div>
       <h2 className="text-2xl font-bold mb-4">Join PlayMatatu Match</h2>
-      <form onSubmit={handleConfirm} className="space-y-4">
-        <div>
-          <p className="text-sm text-gray-600">Match code: <span className="font-mono">{matchCode || '—'}</span></p>
+      
+      <div className="space-y-4">
+        <div className="bg-gray-50 p-4 rounded-lg">
+          <div className="text-sm text-gray-600 mb-2">Match Details:</div>
+          <div className="text-sm text-gray-600">Match Code:</div>
+          <div className="font-mono text-lg mb-2">{matchCode}</div>
+          <div className="text-sm text-gray-600">Stake Amount:</div>
+          <div className="font-semibold text-lg">{stake.toLocaleString()} UGX</div>
         </div>
 
-        <div>
-          <label className="block text-sm text-gray-700 mb-2">Phone Number</label>
-          <div className="flex">
-            <span className="inline-flex items-center px-3 rounded-l-md border border-r-0 bg-gray-100 text-gray-700">256</span>
-            <input
-              name="phone"
-              type="tel"
-              value={phoneRest}
-              onChange={(e) => setPhoneRest(e.target.value)}
-              placeholder="7XX XXX XXX"
-              className="w-full px-4 py-3 border border-gray-300 rounded-r-lg"
-              required
-            />
+        <div className="bg-gray-50 p-4 rounded-lg">
+          <div className="text-sm text-gray-600 mb-2">Playing as:</div>
+          <div className="font-semibold">{formatPhone(invitePhone)}</div>
+          <div className="text-sm text-gray-500">Guest Player</div>
+        </div>
+
+        {formError && (
+          <div className="p-3 bg-red-100 border border-red-400 text-red-700 rounded">
+            {formError}
           </div>
+        )}
+        
+        {error && (
+          <div className="p-3 bg-red-100 border border-red-400 text-red-700 rounded">
+            {error}
+          </div>
+        )}
+
+        <div className="space-y-3">
+          <button
+            onClick={handleJoinMatch}
+            disabled={isLoading}
+            className="w-full bg-[#373536] text-white py-3 px-6 rounded-lg font-semibold disabled:opacity-50"
+          >
+            {isLoading ? 'Processing...' : 'Confirm & Pay'}
+          </button>
+          
+          <button
+            onClick={handleDecline}
+            className="w-full px-4 py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold hover:bg-gray-300"
+          >
+            Decline Invite
+          </button>
         </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">Display Name</label>
-          <input
-            type="text"
-            value={displayName}
-            onChange={(e) => setDisplayName(e.target.value)}
-            maxLength={50}
-            placeholder="Your display name"
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg"
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm text-gray-700 mb-2">Stake (UGX)</label>
-          <input
-            type="number"
-            min={minStake}
-            value={stake}
-            onChange={(e) => setStake(Number(e.target.value))}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg"
-          />
-          <p className="mt-1 text-sm text-gray-500">This stake is prefilled from the invite; you can change it before confirming.</p>
-        </div>
-
-        {formError && <p className="text-red-600 text-sm">{formError}</p>}
-        {error && <p className="text-red-600 text-sm">{error}</p>}
-
-        <button
-          type="submit"
-          className="w-full bg-[#373536] text-white py-3 px-6 rounded-lg font-semibold disabled:opacity-50"
-          disabled={isLoading}
-        >
-          {isLoading ? 'Processing...' : 'Confirm & Pay'}
-        </button>
-      </form>
+      </div>
     </div>
   );
 };

@@ -1067,17 +1067,18 @@ func (gm *GameManager) ExpireQueuedEntries() (int, error) {
 	if len(expired) > 0 {
 		log.Printf("[QUEUE EXPIRY] Expired %d queued entries", len(expired))
 
-		// Send SMS notifications (best-effort, async)
+		// Send SMS notifications with requeue link (best-effort, async)
 		for _, e := range expired {
 			go func(phone string, stake float64) {
 				if sms.Default == nil {
 					return
 				}
-				msg := fmt.Sprintf("PlayMatatu: No match found for your %.0f UGX stake. Your balance is available to play again or withdraw.", stake)
+				requeueLink := fmt.Sprintf("%s/requeue?phone=%s", gm.config.FrontendURL, phone)
+				msg := fmt.Sprintf("PlayMatatu: No match found for your %.0f UGX stake. Click to try again: %s", stake, requeueLink)
 				if _, err := sms.SendSMS(ctx, phone, msg); err != nil {
 					log.Printf("[QUEUE EXPIRY] Failed to send expiry SMS to %s: %v", phone, err)
 				} else {
-					log.Printf("[QUEUE EXPIRY] Expiry SMS sent to %s", phone)
+					log.Printf("[QUEUE EXPIRY] Expiry SMS sent to %s with requeue link", phone)
 				}
 			}(e.PhoneNumber, e.StakeAmount)
 		}

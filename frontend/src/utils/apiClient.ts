@@ -130,7 +130,11 @@ export async function getPlayerProfile(phone: string): Promise<{display_name?: s
     throw new Error(data.error || 'Failed to fetch player');
   }
 
-  return { display_name: data.display_name, player_winnings: data.player_winnings, expired_queue: data.expired_queue };
+  return { 
+    display_name: data.display_name, 
+    player_winnings: data.player_winnings, 
+    expired_queue: data.expired_queue 
+  };
 }
 
 export async function getConfig(): Promise<{ commission_flat: number; payout_tax_percent: number; min_stake_amount: number; withdraw_provider_fee_percent?: number; min_withdraw_amount?: number }> {
@@ -180,4 +184,100 @@ export async function verifyOTPAction(phone: string, code: string, action: strin
     throw new Error(data.error || 'Failed to verify OTP');
   }
   return { action_token: data.action_token, expires_at: data.expires_at };
+}
+
+// PIN-related API functions
+
+export async function checkPlayerStatus(phone: string): Promise<{
+  exists: boolean;
+  has_pin: boolean;
+  display_name: string;
+}> {
+  const response = await fetch(`${API_BASE}/player/check?phone=${formatPhone(phone)}`);
+  const data = await response.json();
+  if (!response.ok) {
+    if (response.status >= 500) throw new Error('Server error, please try again later');
+    throw new Error(data.error || 'Failed to check player status');
+  }
+  return { exists: data.exists, has_pin: data.has_pin, display_name: data.display_name };
+}
+
+export async function setPIN(phone: string, pin: string): Promise<{ success: boolean }> {
+  const response = await fetch(`${API_BASE}/auth/set-pin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone: formatPhone(phone), pin })
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    if (response.status >= 500) throw new Error('Server error, please try again later');
+    throw new Error(data.error || 'Failed to set PIN');
+  }
+  return { success: data.success };
+}
+
+export async function verifyPIN(phone: string, pin: string, action: string): Promise<{
+  action_token: string;
+  expires_at: string;
+  attempts_remaining?: number;
+  locked_until?: string;
+}> {
+  const response = await fetch(`${API_BASE}/auth/verify-pin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone: formatPhone(phone), pin, action })
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    if (response.status === 429) {
+      const err: any = new Error(data.error || 'Account locked');
+      err.locked_until = data.locked_until;
+      err.minutes_remaining = data.minutes_remaining;
+      throw err;
+    }
+    if (response.status === 401) {
+      const err: any = new Error(data.error || 'Incorrect PIN');
+      err.attempts_remaining = data.attempts_remaining;
+      throw err;
+    }
+    if (response.status >= 500) throw new Error('Server error, please try again later');
+    throw new Error(data.error || 'Failed to verify PIN');
+  }
+  return { action_token: data.action_token, expires_at: data.expires_at };
+}
+
+export async function resetPIN(phone: string, newPin: string, actionToken: string): Promise<{ success: boolean }> {
+  const response = await fetch(`${API_BASE}/auth/reset-pin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone: formatPhone(phone), new_pin: newPin, action_token: actionToken })
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    if (response.status >= 500) throw new Error('Server error, please try again later');
+    throw new Error(data.error || 'Failed to reset PIN');
+  }
+  return { success: data.success };
+}
+
+export async function declineMatchInvite(phone: string, matchCode: string): Promise<{success: boolean}> {
+  const response = await fetch(`${API_BASE}/match/decline`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ 
+      phone: formatPhone(phone), 
+      match_code: matchCode 
+    })
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    if (response.status >= 500) throw new Error('Server error, please try again later');
+    throw new Error(data.error || 'Failed to decline invite');
+  }
+
+  return { success: true };
 }

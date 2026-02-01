@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -174,8 +175,9 @@ func VerifyOTPAction(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Han
 			return
 		}
 
-		// Validate action type (only stake_winnings supported for now)
-		if action != "stake_winnings" {
+		// Validate action type
+		validActions := map[string]bool{"stake_winnings": true, "requeue": true, "set_pin": true, "reset_pin": true}
+		if !validActions[action] {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported action type"})
 			return
 		}
@@ -252,36 +254,62 @@ func VerifyOTPAction(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Han
 }
 
 // AuthMiddleware validates bearer JWT and sets player_id in context
-func AuthMiddleware(cfg *config.Config) gin.HandlerFunc {
+// For action tokens from PIN verification, also validates those for specific actions
+func AuthMiddleware(cfg *config.Config, rdb *redis.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		auth := c.GetHeader("Authorization")
 		if auth == "" || !strings.HasPrefix(auth, "Bearer ") {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing token"})
 			return
 		}
-		tok := strings.TrimPrefix(auth, "Bearer ")
-		parsed, err := jwt.Parse(tok, func(token *jwt.Token) (interface{}, error) {
+		token := strings.TrimPrefix(auth, "Bearer ")
+
+		// Try JWT first
+		parsed, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
 			if token.Method.Alg() != jwt.SigningMethodHS256.Alg() {
 				return nil, fmt.Errorf("unexpected signing method")
 			}
 			return []byte(cfg.JWTSecret), nil
 		})
-		if err != nil || !parsed.Valid {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+		if err == nil && parsed.Valid {
+			claims, ok := parsed.Claims.(jwt.MapClaims)
+			if !ok {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+				return
+			}
+			playerIDf, ok := claims["player_id"].(float64)
+			if !ok {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+				return
+			}
+			c.Set("player_id", int(playerIDf))
+			c.Next()
 			return
 		}
-		claims, ok := parsed.Claims.(jwt.MapClaims)
-		if !ok {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
-			return
+
+		// Try action token (for PIN-based auth)
+		tokenHash := sha256.Sum256([]byte(token))
+		tokenHashStr := hex.EncodeToString(tokenHash[:])
+
+		ctx := context.Background()
+		payload, err := rdb.Get(ctx, fmt.Sprintf("action_token:%s", tokenHashStr)).Result()
+		if err == nil {
+			// Parse player_id from action token payload
+			if strings.Contains(payload, `"player_id":`) {
+				// Extract player_id from JSON payload
+				parts := strings.Split(payload, `"player_id":`)
+				if len(parts) > 1 {
+					idPart := strings.Split(parts[1], ",")[0]
+					if playerID, err := strconv.Atoi(strings.TrimSpace(idPart)); err == nil {
+						c.Set("player_id", playerID)
+						c.Next()
+						return
+					}
+				}
+			}
 		}
-		playerIDf, ok := claims["player_id"].(float64)
-		if !ok {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
-			return
-		}
-		c.Set("player_id", int(playerIDf))
-		c.Next()
+
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
 	}
 }
 

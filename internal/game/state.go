@@ -765,7 +765,7 @@ func (g *GameState) GetGameStateForPlayer(playerID string) map[string]interface{
 	var myID, opponentID string
 	var myDisplayName, opponentDisplayName string
 	var myConnected, opponentConnected bool
-	var opponentPhone string
+	var myPhone, opponentPhone string
 
 	if g.Player1.ID == playerID {
 		myHand = g.Player1.Hand
@@ -776,6 +776,7 @@ func (g *GameState) GetGameStateForPlayer(playerID string) map[string]interface{
 		opponentDisplayName = g.Player2.DisplayName
 		myConnected = g.Player1.Connected
 		opponentConnected = g.Player2.Connected
+		myPhone = g.Player1.PhoneNumber
 		opponentPhone = g.Player2.PhoneNumber
 	} else {
 		myHand = g.Player2.Hand
@@ -786,6 +787,7 @@ func (g *GameState) GetGameStateForPlayer(playerID string) map[string]interface{
 		opponentDisplayName = g.Player1.DisplayName
 		myConnected = g.Player2.Connected
 		opponentConnected = g.Player1.Connected
+		myPhone = g.Player2.PhoneNumber
 		opponentPhone = g.Player1.PhoneNumber
 	}
 
@@ -811,6 +813,7 @@ func (g *GameState) GetGameStateForPlayer(playerID string) map[string]interface{
 		"status":                g.Status,
 		"my_id":                 myID,
 		"my_display_name":       myDisplayName,
+		"my_phone":              myPhone,
 		"my_hand":               myHand,
 		"opponent_id":           opponentID,
 		"opponent_display_name": opponentDisplayName,

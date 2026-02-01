@@ -5,6 +5,7 @@ import { JoinPage } from './pages/JoinPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { TestPage } from './pages/TestPage';
 import { RematchPage } from './pages/RematchPage';
+import { RequeuePage } from './pages/RequeuePage';
 import { AdminLoginPage } from './pages/AdminLoginPage';
 import { AdminDashboardPage } from './pages/AdminDashboardPage';
 
@@ -13,6 +14,7 @@ function App() {
     <div className="min-h-screen">
       <Routes>
         <Route path="/" element={<LandingPage />} />
+        <Route path="/requeue" element={<RequeuePage />} />
         <Route path="/join" element={<JoinPage />} />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/test" element={<TestPage />} />

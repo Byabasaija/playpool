@@ -57,7 +57,7 @@ func SetupRoutes(router *gin.Engine, db *sqlx.DB, rdb *redis.Client, cfg *config
 			game.POST("/stake", handlers.InitiateStake(db, rdb, cfg))
 			game.GET("/queue/status", handlers.CheckQueueStatus(db, rdb, cfg))
 			game.GET("/status", handlers.GetQueueStatus(rdb))
-			game.POST("/test", handlers.CreateTestGame(db, rdb, cfg))      // Dev only
+			game.POST("/test", handlers.CreateTestGame(db, rdb, cfg))          // Dev only
 			game.POST("/test/draw", handlers.CreateTestDrawGame(db, rdb, cfg)) // Dev only - test draw scenario
 			game.GET("/:token", handlers.GetGameState(db, rdb, cfg))
 			game.GET("/:token/ws", handlers.HandleGameWebSocket(db, rdb, cfg))
@@ -77,11 +77,20 @@ func SetupRoutes(router *gin.Engine, db *sqlx.DB, rdb *redis.Client, cfg *config
 		v1.POST("/auth/verify-otp", handlers.VerifyOTP(db, rdb, cfg))
 		v1.POST("/auth/verify-otp-action", handlers.VerifyOTPAction(db, rdb, cfg))
 
+		// Game/Match endpoints
+		v1.POST("/match/decline", handlers.DeclineMatchInvite(db, rdb, cfg))
+
+		// PIN auth endpoints
+		v1.GET("/player/check", handlers.CheckPlayerStatus(db))
+		v1.POST("/auth/set-pin", handlers.SetPIN(db, rdb, cfg))
+		v1.POST("/auth/verify-pin", handlers.VerifyPIN(db, rdb, cfg))
+		v1.POST("/auth/reset-pin", handlers.ResetPIN(db, rdb, cfg))
+
 		// Protected profile endpoint
-		v1.GET("/me", handlers.AuthMiddleware(cfg), handlers.GetMe(db))
+		v1.GET("/me", handlers.AuthMiddleware(cfg, rdb), handlers.GetMe(db))
 		// Withdraw
-		v1.POST("/me/withdraw", handlers.AuthMiddleware(cfg), handlers.RequestWithdraw(db, cfg))
-		v1.GET("/me/withdraws", handlers.AuthMiddleware(cfg), handlers.GetMyWithdraws(db))
+		v1.POST("/me/withdraw", handlers.AuthMiddleware(cfg, rdb), handlers.RequestWithdraw(db, cfg))
+		v1.GET("/me/withdraws", handlers.AuthMiddleware(cfg, rdb), handlers.GetMyWithdraws(db))
 
 		// Config endpoint
 		v1.GET("/config", handlers.GetConfig(cfg))

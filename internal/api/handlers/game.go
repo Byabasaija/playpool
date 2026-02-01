@@ -144,57 +144,55 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 			req.MatchCode = code
 		}
 
-		// If source is "winnings", validate action token and perform winnings transfer
+		// If source is "winnings", validate and perform winnings transfer
 		var useWinnings bool
 		if req.Source == "winnings" {
 			useWinnings = true
 
-			// Require action token
-			if req.ActionToken == "" {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "action_token required for winnings source"})
-				return
+			// Action token is optional for PIN-authenticated users
+			// If provided, validate it; if not, proceed with basic validation
+			if req.ActionToken != "" {
+				// Validate and consume action token (atomic GET+DEL with Lua)
+				ctx := context.Background()
+				tokenHash := sha256.Sum256([]byte(req.ActionToken))
+				tokenHashStr := hex.EncodeToString(tokenHash[:])
+
+				luaScript := `
+					local payload = redis.call('GET', KEYS[1])
+					if payload then
+						redis.call('DEL', KEYS[1])
+						return payload
+					else
+						return nil
+					end
+				`
+
+				result, err := rdb.Eval(ctx, luaScript, []string{fmt.Sprintf("action_token:%s", tokenHashStr)}).Result()
+				if err != nil || result == nil {
+					c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired action token"})
+					return
+				}
+
+				// Parse and validate payload
+				var tokenPayload struct {
+					Phone    string `json:"phone"`
+					Action   string `json:"action"`
+					PlayerID int    `json:"player_id"`
+				}
+				if err := json.Unmarshal([]byte(result.(string)), &tokenPayload); err != nil {
+					log.Printf("Failed to parse action token payload: %v", err)
+					c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid action token"})
+					return
+				}
+
+				// Validate phone, action, and player_id match
+				if tokenPayload.Phone != phone || tokenPayload.Action != "stake_winnings" || tokenPayload.PlayerID != player.ID {
+					c.JSON(http.StatusUnauthorized, gin.H{"error": "action token validation failed"})
+					return
+				}
 			}
 
-			// Validate and consume action token (atomic GET+DEL with Lua)
-			ctx := context.Background()
-			tokenHash := sha256.Sum256([]byte(req.ActionToken))
-			tokenHashStr := hex.EncodeToString(tokenHash[:])
-
-			luaScript := `
-				local payload = redis.call('GET', KEYS[1])
-				if payload then
-					redis.call('DEL', KEYS[1])
-					return payload
-				else
-					return nil
-				end
-			`
-
-			result, err := rdb.Eval(ctx, luaScript, []string{fmt.Sprintf("action_token:%s", tokenHashStr)}).Result()
-			if err != nil || result == nil {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired action token"})
-				return
-			}
-
-			// Parse and validate payload
-			var tokenPayload struct {
-				Phone    string `json:"phone"`
-				Action   string `json:"action"`
-				PlayerID int    `json:"player_id"`
-			}
-			if err := json.Unmarshal([]byte(result.(string)), &tokenPayload); err != nil {
-				log.Printf("Failed to parse action token payload: %v", err)
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid action token"})
-				return
-			}
-
-			// Validate phone, action, and player_id match
-			if tokenPayload.Phone != phone || tokenPayload.Action != "stake_winnings" || tokenPayload.PlayerID != player.ID {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "action token validation failed"})
-				return
-			}
-
-			// Check sufficient winnings balance
+			// Check sufficient winnings balance (regardless of action token)
 			winningsAcc, err := accounts.GetOrCreateAccount(db, accounts.AccountPlayerWinnings, &player.ID)
 			if err != nil {
 				log.Printf("[ERROR] Failed to get winnings account for player %d: %v", player.ID, err)
@@ -313,9 +311,9 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 			log.Printf("[WINNINGS STAKE] Successfully processed winnings stake for player %d: commission=%.2f, net=%.2f", player.ID, commission, netAmount)
 
 		} else {
-			// NORMAL FLOW: Real DMarkPay payin integration
+			// NORMAL FLOW: Real DMarkPay payin integration (unless MockMode is enabled)
 			var realPayment bool
-			if payment.Default != nil {
+			if payment.Default != nil && !cfg.MockMode {
 				realPayment = true
 				// Generate unique transaction ID
 				txnID := fmt.Sprintf("%d", payment.GenerateTransactionID())
@@ -367,10 +365,15 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 				return
 
 			} else {
-				// Fallback to dummy mode (no DMarkPay configured)
+				// MOCK MODE: Dummy payment (no DMarkPay call or MockMode=true)
 				realPayment = false
-				log.Printf("[DUMMY PAYMENT] Would charge %s %d UGX (transaction: %s)",
-					phone, req.StakeAmount+cfg.CommissionFlat, transactionID)
+				if cfg.MockMode {
+					log.Printf("[MOCK PAYMENT] MockMode enabled - simulating payment for %s %d UGX (transaction: %s)",
+						phone, req.StakeAmount+cfg.CommissionFlat, transactionID)
+				} else {
+					log.Printf("[DUMMY PAYMENT] DMarkPay not configured - would charge %s %d UGX (transaction: %s)",
+						phone, req.StakeAmount+cfg.CommissionFlat, transactionID)
+				}
 
 				// Record a transaction in DB and capture its id
 				if db != nil {
@@ -694,14 +697,14 @@ func CheckQueueStatus(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Ha
 
 		// Query DB for queue entry status (single source of truth)
 		var dbQueue struct {
-			ID          int      `db:"id"`
-			PlayerID    int      `db:"player_id"`
-			PhoneNumber string   `db:"phone_number"`
-			StakeAmount float64  `db:"stake_amount"`
-			QueueToken  string   `db:"queue_token"`
-			Status      string   `db:"status"`
-			SessionID   *int     `db:"session_id"`
-			GameToken   *string  `db:"game_token"`
+			ID          int     `db:"id"`
+			PlayerID    int     `db:"player_id"`
+			PhoneNumber string  `db:"phone_number"`
+			StakeAmount float64 `db:"stake_amount"`
+			QueueToken  string  `db:"queue_token"`
+			Status      string  `db:"status"`
+			SessionID   *int    `db:"session_id"`
+			GameToken   *string `db:"game_token"`
 		}
 		err := db.Get(&dbQueue, `
 			SELECT mq.id, mq.player_id, mq.phone_number, mq.stake_amount, mq.queue_token, mq.status, mq.session_id, gs.game_token
@@ -723,14 +726,19 @@ func CheckQueueStatus(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Ha
 
 		log.Printf("[QUEUE STATUS] Queue entry found: token=%s status=%s session_id=%v", queueToken, dbQueue.Status, dbQueue.SessionID)
 
+		// Get player's player_token for auth purposes
+		var playerToken string
+		db.Get(&playerToken, `SELECT player_token FROM players WHERE id = $1`, dbQueue.PlayerID)
+
 		switch dbQueue.Status {
 		case "matched":
 			if dbQueue.GameToken == nil {
 				log.Printf("[QUEUE STATUS] Player %s matched but no game token yet", queueToken)
 				c.JSON(http.StatusOK, gin.H{
-					"status":      "queued",
-					"queue_token": queueToken,
-					"message":     "Match found, preparing game...",
+					"status":       "queued",
+					"queue_token":  queueToken,
+					"player_token": playerToken,
+					"message":      "Match found, preparing game...",
 				})
 				return
 			}
@@ -755,21 +763,29 @@ func CheckQueueStatus(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Ha
 				"game_token":   *dbQueue.GameToken,
 				"game_link":    gameLink,
 				"queue_token":  queueToken,
+				"player_token": playerToken,
 				"stake_amount": int(dbQueue.StakeAmount),
 				"message":      "Opponent found! Click link to play.",
 			})
 
 		case "queued", "processing", "matching":
 			c.JSON(http.StatusOK, gin.H{
-				"status":      "queued",
-				"queue_token": queueToken,
-				"message":     "Still waiting for opponent...",
+				"status":       "queued",
+				"queue_token":  queueToken,
+				"player_token": playerToken,
+				"message":      "Still waiting for opponent...",
 			})
 
 		case "expired":
 			c.JSON(http.StatusOK, gin.H{
 				"status":  "expired",
 				"message": "Queue expired. Your balance is available to play again or withdraw.",
+			})
+
+		case "declined":
+			c.JSON(http.StatusOK, gin.H{
+				"status":  "declined",
+				"message": "Your match invite was declined. You can create a new match anytime!",
 			})
 
 		default:
@@ -979,6 +995,80 @@ func CreateTestDrawGame(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.
 			"target_suit":   gameState.TargetSuit,
 			"message":       "Test draw game created. Player 1 has the 7 of target suit. When played, game will end in a draw (both players have 17 points).",
 			"instructions":  "Connect both players via WebSocket, then have Player 1 play the 7 of Hearts to trigger the draw.",
+		})
+	}
+}
+
+// DeclineMatchInvite handles declining a match invitation
+// POST /api/v1/match/decline
+func DeclineMatchInvite(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Phone     string `json:"phone"`
+			MatchCode string `json:"match_code"`
+		}
+
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+			return
+		}
+
+		phone := strings.TrimSpace(req.Phone)
+		matchCode := strings.TrimSpace(req.MatchCode)
+
+		if phone == "" || matchCode == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "phone and match_code required"})
+			return
+		}
+
+		// Find the private match queue entry by match_code
+		var queue struct {
+			ID           int    `db:"id"`
+			PlayerID     int    `db:"player_id"`
+			InviterPhone string `db:"inviter_phone"`
+			Status       string `db:"status"`
+		}
+
+		err := db.Get(&queue, `
+			SELECT mq.id, mq.player_id, p.phone_number as inviter_phone, mq.status
+			FROM matchmaking_queue mq
+			JOIN players p ON p.id = mq.player_id
+			WHERE mq.match_code = $1 AND mq.is_private = true AND mq.status IN ('queued', 'matching')
+		`, matchCode)
+
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "match not found or already expired"})
+			return
+		}
+		if err != nil {
+			log.Printf("DeclineMatchInvite DB error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+			return
+		}
+
+		// Update queue status to 'declined'
+		_, err = db.Exec(`UPDATE matchmaking_queue SET status = 'declined' WHERE id = $1`, queue.ID)
+		if err != nil {
+			log.Printf("DeclineMatchInvite update error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to decline match"})
+			return
+		}
+
+		// Notify the inviter about the decline via SMS
+		go func() {
+			ctx := context.Background()
+			message := fmt.Sprintf("Your PlayMatatu match invite (Code: %s) was declined. You can create a new match anytime!", matchCode)
+
+			if _, err := sms.SendSMS(ctx, queue.InviterPhone, message); err != nil {
+				log.Printf("Failed to send decline SMS to %s: %v", queue.InviterPhone, err)
+			} else {
+				log.Printf("Decline SMS sent to %s for match %s", queue.InviterPhone, matchCode)
+			}
+		}()
+
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"message": "Match invitation declined successfully",
 		})
 	}
 }

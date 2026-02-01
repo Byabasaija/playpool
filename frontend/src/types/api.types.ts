@@ -18,6 +18,8 @@ export interface StakeResponse {
   opponent_display_name?: string;
   // New standardized queue token
   queue_token?: string;
+  // Player token for authenticated actions
+  player_token?: string;
   // Private match fields
   match_code?: string;
   expires_at?: string;
@@ -29,7 +31,7 @@ export interface StakeResponse {
 }
 
 export interface QueueStatusResponse {
-  status: 'queued' | 'matched' | 'not_found' | 'expired';
+  status: 'queued' | 'matched' | 'not_found' | 'expired' | 'declined';
   game_link?: string;
   // When matched, include display names
   my_display_name?: string;
@@ -38,6 +40,8 @@ export interface QueueStatusResponse {
   message?: string;
   // Queue token (returned when polling by phone finds an active queue)
   queue_token?: string;
+  // Player token for authenticated actions
+  player_token?: string;
 }
 
 export interface WithdrawRequestResponse {

@@ -25,6 +25,10 @@ type Player struct {
 	DisconnectCount  int            `db:"disconnect_count" json:"disconnect_count"`
 	NoShowCount      int            `db:"no_show_count" json:"no_show_count"`
 	LastActive       sql.NullTime   `db:"last_active" json:"last_active,omitempty"`
+	// PIN authentication
+	PINHash           sql.NullString `db:"pin_hash" json:"-"`
+	PINFailedAttempts int            `db:"pin_failed_attempts" json:"-"`
+	PINLockedUntil    sql.NullTime   `db:"pin_locked_until" json:"-"`
 }
 
 // Transaction represents a money transaction

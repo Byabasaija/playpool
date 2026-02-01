@@ -1,10 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMatchmaking } from '../hooks/useMatchmaking';
 import { validatePhone, formatPhone } from '../utils/phoneUtils';
-import { getPlayerProfile, requeuePlayer, getConfig,
-  //  requestOTP, verifyOTPAction 
-  } from '../utils/apiClient';
+import { getPlayerProfile, requeuePlayer, getConfig, requestOTP, checkPlayerStatus, verifyPIN } from '../utils/apiClient';
+import PinInput from '../components/PinInput';
 
 export const LandingPage: React.FC = () => {
   const [phoneRest, setPhoneRest] = useState('');
@@ -20,25 +19,46 @@ export const LandingPage: React.FC = () => {
   const [invitePhoneRest, setInvitePhoneRest] = useState<string>('');
   const invitePhoneRef = React.useRef<HTMLInputElement | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
-  const [showRetryPrivate, setShowRetryPrivate] = useState(false);
-  const [retryInvitePhoneRest, setRetryInvitePhoneRest] = useState<string>('');
-  const [retryLoading, setRetryLoading] = useState(false);
-  const [retryError, setRetryError] = useState<string | null>(null);
-  const [recentPrivate, setRecentPrivate] = useState<{match_code: string; expires_at?: string; queue_token?: string} | null>(null);
-  const [playerWinnings, setPlayerWinnings] = useState<number>(0);
-  // const [otpSent, setOtpSent] = useState(false);
-  // const [otpCode, setOtpCode] = useState('');
-  // const [actionToken, setActionToken] = useState<string | null>(null);
-  // const [otpError, setOtpError] = useState<string | null>(null);
-  // const [otpLoading, setOtpLoading] = useState(false);
   const navigate = useNavigate();
-  
-  // const baseUrl = import.meta.env.VITE_BACKEND_URL
   const { stage, gameLink, isLoading, startGame, startPolling, reset, displayName, error, privateMatch } = useMatchmaking();
 
   const [displayNameInput, setDisplayNameInput] = useState<string>('');
   const [expiredQueue, setExpiredQueue] = useState<{id:number, stake_amount:number, match_code?: string, is_private?: boolean} | null>(null);
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
+  const [requeueLoading, setRequeueLoading] = useState(false);
+  const [requeueError, setRequeueError] = useState<string | null>(null);
+
+  // PIN authentication state
+  const [showPinEntry, setShowPinEntry] = useState(false);
+  const [playerHasPin, setPlayerHasPin] = useState(false);
+  const [pinError, setPinError] = useState('');
+  const [pinLoading, setPinLoading] = useState(false);
+  const [pinAttemptsRemaining, setPinAttemptsRemaining] = useState<number | undefined>();
+  const [pinLockedUntil, setPinLockedUntil] = useState<string | undefined>();
+
+  // Authenticated user state (after PIN verification)
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [playerBalance, setPlayerBalance] = useState<number>(0);
+  const [useWinnings, setUseWinnings] = useState<boolean>(false);
+  const [actionToken, setActionToken] = useState<string | null>(null);
+
+  // Check localStorage for remembered phone on mount
+  React.useEffect(() => {
+    const savedPhone = localStorage.getItem('matatu_phone');
+    if (savedPhone) {
+      // Check if this player has a PIN
+      checkPlayerStatus(savedPhone).then((status) => {
+        if (status.exists && status.has_pin) {
+          setPhoneRest(savedPhone.replace(/^256/, ''));
+          setDisplayNameInput(status.display_name || '');
+          setPlayerHasPin(true);
+          setShowPinEntry(true);
+        }
+      }).catch(() => {
+        // Ignore errors, just show normal form
+      });
+    }
+  }, []);
 
   React.useEffect(() => {
     if (displayName) setDisplayNameInput(displayName);
@@ -120,6 +140,24 @@ export const LandingPage: React.FC = () => {
     }
   }, []);
 
+  // Handle requeue redirect (from /requeue page or SMS link)
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('requeue') === '1') {
+      const queueToken = sessionStorage.getItem('queueToken');
+      const phone = sessionStorage.getItem('requeuePhone');
+      if (queueToken) {
+        // Clean up URL and session storage
+        window.history.replaceState({}, '', '/');
+        sessionStorage.removeItem('requeuePhone');
+        // Restore phone to state for display
+        if (phone) setPhoneRest(phone.replace(/^256/, ''));
+        // Start polling with the queue token
+        startPolling(queueToken);
+      }
+    }
+  }, [startPolling]);
+
   const generateRandomName = () => {
     const adjectives = ["Lucky", "Swift", "Brave", "Jolly", "Mighty", "Quiet", "Clever", "Happy", "Kitenge", "Zesty"];
     const nouns = ["Zebu", "Rider", "Matatu", "Champion", "Sevens", "Ace", "Mamba", "Jua", "Lion", "Drift"];
@@ -134,6 +172,15 @@ export const LandingPage: React.FC = () => {
     if (!validatePhone(full)) return;
 
     try {
+      // Check if player has PIN
+      const status = await checkPlayerStatus(full);
+      if (status.exists && status.has_pin) {
+        setPlayerHasPin(true);
+        setShowPinEntry(true);
+        if (status.display_name) setDisplayNameInput(status.display_name);
+        return;
+      }
+
       const profile = await getPlayerProfile(full);
       if (profile && profile.display_name) {
         setDisplayNameInput(profile.display_name);
@@ -145,14 +192,123 @@ export const LandingPage: React.FC = () => {
       } else {
         setExpiredQueue(null);
       }
-      if (profile && profile.player_winnings !== undefined) {
-        setPlayerWinnings(profile.player_winnings);
-      }
     } catch (e) {
       setDisplayNameInput(generateRandomName());
       setExpiredQueue(null);
-      setPlayerWinnings(0);
     }
+  };
+
+  // Handle "Play Again" from expired screen - direct requeue without going back to form
+  const handlePlayAgain = async () => {
+    const full = '256' + phoneRest.replace(/\D/g, '');
+    if (!validatePhone(full)) {
+      // If phone somehow invalid, fall back to reset
+      reset();
+      return;
+    }
+
+    try {
+      const result = await requeuePlayer(full);
+      if (result.queue_token) {
+        // Start polling with the new queue token
+        startPolling(result.queue_token, displayNameInput || undefined);
+      } else {
+        // Fallback if no queue_token returned
+        reset();
+      }
+    } catch (err) {
+      console.error('Requeue failed:', err);
+      // If requeue fails, fall back to form
+      reset();
+    }
+  };
+
+  // Handle requeue with OTP verification - sends OTP and navigates to /requeue page
+  const handleRequeueWithOTP = async () => {
+    const full = '256' + phoneRest.replace(/\D/g, '');
+    if (!validatePhone(full)) {
+      setRequeueError('Invalid phone number');
+      return;
+    }
+
+    setRequeueLoading(true);
+    setRequeueError(null);
+
+    try {
+      await requestOTP(full);
+      // Navigate to requeue page with phone param - OTP will be verified there
+      navigate(`/requeue?phone=${full}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to send OTP';
+      setRequeueError(message);
+      setRequeueLoading(false);
+    }
+  };
+
+  // Handle PIN verification for returning users
+  const handlePinVerify = useCallback(async (pin: string) => {
+    const full = '256' + phoneRest.replace(/\D/g, '');
+    setPinLoading(true);
+    setPinError('');
+    setPinAttemptsRemaining(undefined);
+
+    try {
+      await verifyPIN(full, pin, 'view_profile');
+      // PIN verified successfully - save phone to localStorage
+      localStorage.setItem('matatu_phone', full);
+      
+      // Load profile data including balance
+      const profile = await getPlayerProfile(full);
+      if (profile) {
+        setPlayerBalance(profile.player_winnings || 0);
+        if (profile.expired_queue) {
+          setExpiredQueue(profile.expired_queue);
+        }
+      }
+      
+      // Mark as authenticated and hide PIN entry
+      setShowPinEntry(false);
+      setIsAuthenticated(true);
+    } catch (err: any) {
+      if (err.locked_until) {
+        setPinLockedUntil(err.locked_until);
+        setPinError('Account locked due to too many failed attempts');
+      } else {
+        setPinError(err.message || 'Incorrect PIN');
+        setPinAttemptsRemaining(err.attempts_remaining);
+      }
+    } finally {
+      setPinLoading(false);
+    }
+  }, [phoneRest]);
+
+  // Handle "Forgot PIN" - switch to OTP flow
+  const handleForgotPin = async () => {
+    const full = '256' + phoneRest.replace(/\D/g, '');
+    try {
+      await requestOTP(full);
+      // Navigate to profile page with reset_pin intent
+      navigate(`/profile?phone=${full}&reset_pin=1`);
+    } catch (err: any) {
+      setPinError(err.message || 'Failed to send OTP');
+    }
+  };
+
+  // Handle switching to a different phone (for returning users)
+  const handleSwitchPhone = () => {
+    setShowPinEntry(false);
+    setPlayerHasPin(false);
+    setIsAuthenticated(false);
+    setPlayerBalance(0);
+    setPhoneRest('');
+    setDisplayNameInput('');
+    setExpiredQueue(null);
+    localStorage.removeItem('matatu_phone');
+  };
+
+  // Handle useWinnings toggle change - simplified for PIN-authenticated users
+  const handleUseWinningsChange = async (enabled: boolean) => {
+    setUseWinnings(enabled);
   };
 
   // const handleRequestOTP = async () => {
@@ -253,25 +409,6 @@ export const LandingPage: React.FC = () => {
     }
     setPhoneError('');
 
-    if (expiredQueue) {
-      // Requeue flow
-      try {
-        const res = await requeuePlayer(full, expiredQueue.id);
-        if (res && res.status === 'matched' && res.game_id) {
-          // navigate to matched game
-          navigate(`/g/${res.game_token}`);
-        } else if (res && res.status === 'queued') {
-          const token = res.queue_token || res.player_id;
-          try { sessionStorage.setItem('queueToken', token); } catch (e) {}
-          // start polling using existing requeue token
-          startPolling(token, displayNameInput || generateRandomName());
-        }
-      } catch (err) {
-        console.error('Requeue failed', err);
-      }
-      return;
-    }
-
     if (matchCodeInput) opts.match_code = matchCodeInput.trim().toUpperCase();
 
     // Include action token if using winnings
@@ -360,13 +497,309 @@ export const LandingPage: React.FC = () => {
   const renderContent = () => {
     switch (stage) {
       case 'form':
+        // Show PIN entry for returning users with PIN
+        if (showPinEntry && playerHasPin) {
+          return (
+            <div className="max-w-md mx-auto rounded-2xl p-8">
+              <div className="text-center mb-6">
+                <div className="mb-3">
+                  <img src="public/logo.png" alt="PlayMatatu Logo" width={200} className="mx-auto"/>
+                </div>
+                <h2 className="text-xl font-bold text-[#373536] mb-1">Welcome back{displayNameInput ? `, ${displayNameInput}` : ''}!</h2>
+                <p className="text-gray-600 text-sm">256{phoneRest}</p>
+              </div>
+
+              <PinInput
+                title="Enter your PIN"
+                subtitle="Enter your 4-digit PIN to continue"
+                onSubmit={handlePinVerify}
+                onForgot={handleForgotPin}
+                loading={pinLoading}
+                error={pinError}
+                attemptsRemaining={pinAttemptsRemaining}
+                lockedUntil={pinLockedUntil}
+              />
+            </div>
+          );
+        }
+
+        // Authenticated dashboard (after PIN verification)
+        if (isAuthenticated) {
+          // If has pending stake, show requeue UI
+          if (expiredQueue) {
+            return (
+              <div className="max-w-md mx-auto rounded-2xl p-8">
+                <div className="text-center mb-4">
+                  <img src="public/logo.png" alt="PlayMatatu Logo" width={200} className="mx-auto"/>
+                </div>
+                
+                <div className="text-center mb-4">
+                  <p className="text-sm text-gray-600">{displayNameInput || 'Player'} • 256{phoneRest}</p>
+                  <p className="text-2xl font-bold text-[#373536]">{playerBalance.toLocaleString()} UGX</p>
+                </div>
+
+                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
+                  <p className="text-sm text-yellow-800">
+                    Pending stake: <span className="font-bold">{expiredQueue.stake_amount.toLocaleString()} UGX</span>
+                    {expiredQueue.is_private && expiredQueue.match_code && (
+                      <span className="block text-xs mt-1">Code: {expiredQueue.match_code}</span>
+                    )}
+                  </p>
+                </div>
+
+                {requeueError && (
+                  <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
+                    {requeueError}
+                  </div>
+                )}
+
+                <button
+                  onClick={handlePlayAgain}
+                  disabled={isLoading}
+                  className="w-full bg-[#373536] text-white py-3 px-6 rounded-lg font-semibold hover:bg-[#2c2b2a] transition-colors disabled:opacity-50 mb-3"
+                >
+                  {isLoading ? 'Rejoining...' : 'Rejoin Queue'}
+                </button>
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => navigate(`/profile?phone=256${phoneRest}`)}
+                    className="flex-1 py-2 px-4 border border-gray-300 rounded-lg text-sm hover:bg-gray-50"
+                  >
+                    Profile
+                  </button>
+                  <button
+                    onClick={() => navigate(`/profile?phone=256${phoneRest}&withdraw=1`)}
+                    className="flex-1 py-2 px-4 border border-gray-300 rounded-lg text-sm hover:bg-gray-50"
+                  >
+                    Withdraw
+                  </button>
+                </div>
+              </div>
+            );
+          }
+
+          // No pending stake - show play form
+          return (
+            <div className="max-w-md mx-auto rounded-2xl p-8">
+              <div className="text-center mb-4">
+                <img src="public/logo.png" alt="PlayMatatu Logo" width={200} className="mx-auto"/>
+              </div>
+              
+              <div className="text-center mb-6">
+                <p className="text-sm text-gray-600">{displayNameInput || 'Player'} • 256{phoneRest}</p>
+                <p className="text-2xl font-bold text-[#373536]">{playerBalance.toLocaleString()} UGX</p>
+                
+                {/* Use Winnings Toggle */}
+                {playerBalance > 0 && (
+                  <div className="mt-3">
+                    <label className="flex items-center justify-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={useWinnings}
+                        onChange={(e) => handleUseWinningsChange(e.target.checked)}
+                        className="mr-2 h-4 w-4 accent-[#373536]"
+                      />
+                      <span className="text-sm text-gray-700">
+                        Use Balance ({playerBalance.toLocaleString()} UGX)
+                      </span>
+                    </label>
+                  </div>
+                )}
+              </div>
+
+              {/* Stake Selection */}
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">Stake Amount</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {[1000, 2000, 5000, 10000].map((opt) => (
+                    <label key={opt} className={`flex items-center space-x-2 px-3 py-2 border rounded-lg cursor-pointer ${selectedPredefinedStake === opt && !useCustomStake ? 'border-[#373536] bg-gray-50' : 'border-gray-300 bg-white'}`}>
+                      <input
+                        type="radio"
+                        name="auth-stake"
+                        value={opt}
+                        checked={selectedPredefinedStake === opt && !useCustomStake}
+                        onChange={() => { setSelectedPredefinedStake(opt); setStake(opt); setUseCustomStake(false); setCustomStakeInput(''); }}
+                        className="accent-[#373536]"
+                      />
+                      <span>{opt.toLocaleString()} UGX</span>
+                    </label>
+                  ))}
+                </div>
+
+                <div className="mt-3 flex items-center">
+                  <input id="auth-stake-other" type="checkbox" checked={useCustomStake} onChange={(e) => {
+                    const checked = e.target.checked;
+                    setUseCustomStake(checked);
+                    if (checked) {
+                      setCustomStakeInput(String(selectedPredefinedStake));
+                      setStake(Number(selectedPredefinedStake));
+                    } else {
+                      setStake(selectedPredefinedStake);
+                    }
+                  }} className="mr-2" />
+                  <label htmlFor="auth-stake-other" className="text-sm">Custom amount</label>
+                </div>
+
+                {useCustomStake && (
+                  <div className="mt-3">
+                    <input
+                      type="number"
+                      min={minStake}
+                      value={customStakeInput}
+                      onChange={handleCustomStakeChange}
+                      placeholder={`${minStake} or more`}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-lg"
+                    />
+                  </div>
+                )}
+
+                {commission !== null && (
+                  <p className="mt-1 text-sm text-gray-500">
+                    Commission: {commission} UGX — Total: {stake + commission} UGX
+                  </p>
+                )}
+              </div>
+
+              {/* Private Match Option */}
+              <div className="mb-4">
+                <div className="flex items-center space-x-2 mb-2">
+                  <input type="checkbox" checked={isPrivate} onChange={(e) => setIsPrivate(e.target.checked)} id="auth-create-private" />
+                  <label htmlFor="auth-create-private" className="text-sm">Invite a friend</label>
+                </div>
+                {isPrivate && (
+                  <div className="mt-2">
+                    <div className="flex">
+                      <span className="inline-flex items-center px-3 rounded-l-md border border-r-0 bg-gray-100 text-gray-700 text-sm">256</span>
+                      <input
+                        type="tel"
+                        value={invitePhoneRest}
+                        onChange={(e) => setInvitePhoneRest(e.target.value)}
+                        placeholder="7XX XXX XXX"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-r-lg text-sm"
+                      />
+                    </div>
+                    <p className="mt-1 text-xs text-gray-500">We'll send them the invite code via SMS.</p>
+                  </div>
+                )}
+              </div>
+
+              {error && (
+                <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
+                  {error}
+                </div>
+              )}
+
+              <button
+                onClick={() => {
+                  // Ensure sufficient balance when using winnings
+                  if (useWinnings && playerBalance < stake + (commission || 0)) {
+                    alert('Insufficient balance. Please check and try again.');
+                    return;
+                  }
+
+                  const full = '256' + phoneRest.replace(/\D/g, '');
+                  const inviteFull = isPrivate && invitePhoneRest ? '256' + invitePhoneRest.replace(/\D/g, '') : undefined;
+                  
+                  const opts: { create_private?: boolean; invite_phone?: string; source?: string } = {
+                    create_private: isPrivate,
+                    invite_phone: inviteFull
+                  };
+
+                  // Add winnings source if using balance
+                  if (useWinnings) {
+                    opts.source = 'winnings';
+                  }
+
+                  startGame(full, stake, displayNameInput || undefined, opts);
+                }}
+                disabled={isLoading}
+                className="w-full bg-[#373536] text-white py-3 px-6 rounded-lg font-semibold hover:bg-[#2c2b2a] transition-colors disabled:opacity-50 mb-3"
+              >
+                {isLoading ? 'Processing...' : 'Play Now'}
+              </button>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={() => navigate(`/profile?phone=256${phoneRest}`)}
+                  className="flex-1 py-2 px-4 border border-gray-300 rounded-lg text-sm hover:bg-gray-50"
+                >
+                  Profile
+                </button>
+                <button
+                  onClick={() => navigate(`/profile?phone=256${phoneRest}&withdraw=1`)}
+                  className="flex-1 py-2 px-4 border border-gray-300 rounded-lg text-sm hover:bg-gray-50"
+                >
+                  Withdraw
+                </button>
+              </div>
+            </div>
+          );
+        }
+
+        // If user has an expired queue, show dedicated pending stake UI (no form)
+        if (expiredQueue) {
+          return (
+            <div className="max-w-md mx-auto rounded-2xl p-8">
+              <div className="text-center mb-4 mb-md-5">
+                <div className="mb-3">
+                  <img src="public/logo.png" alt="PlayMatatu Logo" width={200}/>
+                </div>
+              </div>
+
+              <div className="text-center">
+                <div className="mb-6">
+                  <div className="h-16 w-16 bg-yellow-100 rounded-full mx-auto flex items-center justify-center">
+                    <span className="text-yellow-600 text-3xl">💰</span>
+                  </div>
+                </div>
+
+                <h2 className="text-2xl font-bold text-gray-900 mb-2">Pending Stake Found</h2>
+                <p className="text-gray-600 mb-2">
+                  Phone: <span className="font-semibold">256{phoneRest}</span>
+                </p>
+                <p className="text-gray-600 mb-4">
+                  You have a pending stake of <span className="font-bold text-lg">{expiredQueue.stake_amount.toLocaleString()} UGX</span>
+                </p>
+
+                {expiredQueue.is_private && expiredQueue.match_code && (
+                  <p className="text-sm text-gray-500 mb-4">
+                    Private match code: <span className="font-mono">{expiredQueue.match_code}</span>
+                  </p>
+                )}
+
+                <p className="text-sm text-gray-500 mb-6">
+                  Click the button below to rejoin the queue. We'll send a verification code to your phone.
+                </p>
+
+                {requeueError && (
+                  <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
+                    {requeueError}
+                  </div>
+                )}
+
+                <div className="flex flex-col space-y-3">
+                  <button
+                    onClick={handleRequeueWithOTP}
+                    disabled={requeueLoading}
+                    className="w-full bg-[#373536] text-white py-3 px-6 rounded-lg font-semibold hover:bg-[#2c2b2a] transition-colors disabled:opacity-50"
+                  >
+                    {requeueLoading ? 'Sending verification...' : 'Requeue'}
+                  </button>
+                
+                </div>
+              </div>
+            </div>
+          );
+        }
+
         return (
           <div className="max-w-md mx-auto rounded-2xl p-8">
             <div className="text-center mb-4 mb-md-5">
                      <div className="mb-3">
                         <img src="public/logo.png" alt="PlayMatatu Logo" width={200}/>
                     </div>
-                   
+
                 </div>
 
             <form onSubmit={handleSubmit} className="space-y-6">
@@ -516,7 +949,6 @@ export const LandingPage: React.FC = () => {
 								value={opt}
 								checked={selectedPredefinedStake === opt && !useCustomStake}
 								onChange={() => { setSelectedPredefinedStake(opt); setStake(opt); setUseCustomStake(false); setCustomStakeInput(''); }}
-								disabled={!!expiredQueue}
 								className="accent-[#373536]"
 							  />
 							  <span>{opt.toLocaleString()} UGX</span>
@@ -534,7 +966,7 @@ export const LandingPage: React.FC = () => {
 					} else {
 						setStake(selectedPredefinedStake);
 					}
-				  }} disabled={!!expiredQueue} className="mr-2" />
+				  }} className="mr-2" />
 				  <label htmlFor="stake-other" className="text-sm">Stake other?</label>
 				</div>
 
@@ -547,118 +979,20 @@ export const LandingPage: React.FC = () => {
 					  onChange={handleCustomStakeChange}
 					  placeholder={`1000 or more`}
 					  className="w-full px-4 py-3 border border-gray-300 rounded-lg"
-					  disabled={!!expiredQueue}
 				  />
 				</div>
 
                 <div className="mt-1 text-sm text-gray-500">
                   {commission !== null ? (<span>Commission: {commission} UGX — Total payable: {stake + commission} UGX</span>) : null}
                 </div>
-                {playerWinnings > 0 && commission !== null && (
-                  <div className="mt-2 p-3 bg-green-50 border border-green-200 rounded-lg">
-                    <p className="text-sm text-green-800">
-                      <span className="font-medium">Available Balance: {playerWinnings.toLocaleString()} UGX</span>
-                      {playerWinnings >= stake + commission ? (
-                        <span className="block mt-1 text-green-700">Your balance will be used automatically - no payment needed!</span>
-                      ) : (
-                        <span className="block mt-1 text-yellow-700">Insufficient for this stake. Mobile Money payment will be required.</span>
-                      )}
-                    </p>
-                  </div>
-                )}
-                {expiredQueue && (
-                  <div className="mt-2 text-sm text-yellow-600">
-                    <div>You have pending stake UGX {expiredQueue.stake_amount}.</div>
-                    <div className="mt-2 flex items-center space-x-2">
-                      {expiredQueue.is_private ? (
-                        <>
-                          <button onClick={async () => {
-                            // requeue public (small action)
-                            setRetryError(null);
-                            try {
-                              const myPhone = '256' + phoneRest.replace(/\D/g, '');
-                              const res = await requeuePlayer(myPhone, expiredQueue.id);
-                              if (res && res.status === 'queued') {
-                                const token = res.queue_token || res.player_id;
-                                try { sessionStorage.setItem('queueToken', token); } catch (e) {}
-                                startPolling(token, displayNameInput || generateRandomName());
-                              }
-                            } catch (err:any) {
-                              setRetryError(err.message || String(err));
-                            }
-                          }} className="px-3 py-1 bg-[#373536] text-white rounded">Requeue public</button>
-
-                          <button onClick={() => { setShowRetryPrivate((s)=>!s); setRetryError(null); }} className="px-3 py-1 bg-yellow-500 text-black rounded">Retry private (resend invite)</button>
-                        </>
-                      ) : null}
-                    </div>
-                    {showRetryPrivate && (
-                      <div className="mt-3">
-                        <label className="block text-sm text-gray-700 mb-1">Invite phone to send to</label>
-                        <div className="flex">
-                          <span className="inline-flex items-center px-3 rounded-l-md border border-r-0 bg-gray-100 text-gray-700">256</span>
-                          <input type="tel" value={retryInvitePhoneRest} onChange={(e)=>setRetryInvitePhoneRest(e.target.value)} placeholder="7XX XXX XXX" className="w-full px-4 py-3 border border-gray-300 rounded-r-lg" />
-                        </div>
-                        <div className="mt-2 flex items-center space-x-2">
-                          <button onClick={async () => {
-                            // perform requeue private
-                            setRetryLoading(true); setRetryError(null);
-                            const myPhone = '256' + phoneRest.replace(/\D/g, '');
-                            const inviteFull = retryInvitePhoneRest ? ('256' + retryInvitePhoneRest.replace(/\D/g, '')) : undefined;
-                            try {
-                              const res = await requeuePlayer(myPhone, expiredQueue.id, undefined, { mode: 'private', invite_phone: inviteFull });
-                              if (res && res.status === 'private_created') {
-                                setRecentPrivate({ match_code: res.match_code, expires_at: res.expires_at, queue_token: res.queue_token });
-                                if (res.queue_token) {
-                                  startPolling(res.queue_token, displayNameInput || generateRandomName());
-                                }
-                                setShowRetryPrivate(false);
-                              } else {
-                                setRetryError('Failed to recreate private match');
-                              }
-                            } catch (err:any) {
-                              setRetryError(err.message || String(err));
-                            } finally {
-                              setRetryLoading(false);
-                            }
-                          }} disabled={retryLoading} className="px-3 py-2 bg-[#373536] text-white rounded">{retryLoading ? 'Retrying...' : 'Retry private'}</button>
-                          <button onClick={() => setShowRetryPrivate(false)} className="px-3 py-2 bg-white border rounded">Cancel</button>
-                        </div>
-                        {retryError && <div className="mt-2 text-sm text-red-600">{retryError}</div>}
-                      </div>
-                    )}
-                    {recentPrivate && (
-                      <div className="mt-3">
-                        <div className="bg-gray-100 p-3 rounded-lg inline-block">
-                          <div className="font-mono text-lg">{recentPrivate.match_code}</div>
-                          {recentPrivate.expires_at && <div className="text-sm text-gray-500">Expires: {new Date(recentPrivate.expires_at).toLocaleString()}</div>}
-                        </div>
-                        <div className="mt-2">
-                          <div className="flex items-center">
-                            <input readOnly value={buildInviteLink(recentPrivate.match_code, stake, retryInvitePhoneRest || undefined)} className="px-3 py-2 border rounded-l-lg w-72 bg-white text-sm" />
-                            <button onClick={async () => { await navigator.clipboard.writeText(buildInviteLink(recentPrivate.match_code, stake, retryInvitePhoneRest || undefined)); setCopiedLink(true); setTimeout(() => setCopiedLink(false), 2000); }} className="px-3 py-2 bg-gray-100 rounded-r-lg border">{copiedLink ? 'Copied' : 'Copy'}</button>
-                          </div>
-                          <div className="mt-2">
-                            <button onClick={handleShare} className="px-4 py-2 bg-gray-100 rounded-lg border">Share</button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                 )}
               </div>
 
               <div className="mt-4">
-                
-                {!expiredQueue && (
-                  <>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Match Options</label>
-                  <div className="flex items-center space-x-3 mb-2">
-                    <input type="checkbox" checked={isPrivate} onChange={(e) => setIsPrivate(e.target.checked)} disabled={!!matchCodeInput} id="create-private" />
-                    <label htmlFor="create-private" className="text-sm">Invite a friend (generate code)</label>
-                  </div>
-                  </>
-                )}
+                <label className="block text-sm font-medium text-gray-700 mb-2">Match Options</label>
+                <div className="flex items-center space-x-3 mb-2">
+                  <input type="checkbox" checked={isPrivate} onChange={(e) => setIsPrivate(e.target.checked)} disabled={!!matchCodeInput} id="create-private" />
+                  <label htmlFor="create-private" className="text-sm">Invite a friend (generate code)</label>
+                </div>
                 <div style={{ display: isPrivate ? 'block' : 'none' }} className="mt-3">
                   <label className="block text-sm text-gray-700 mb-1">Invite phone (required)</label>
                   <div className="flex">
@@ -676,16 +1010,13 @@ export const LandingPage: React.FC = () => {
                  </div>
               </div>
 
-              {/* main submit button: hide when expired private (we show small actions instead) */}
-              {!(expiredQueue && expiredQueue.is_private) && (
-                <button
-                  type="submit"
-                  disabled={isLoading}
-                  className="w-full bg-[#373536] text-white py-3 px-6 rounded-lg font-semibold  transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isLoading ? 'Processing...' : (expiredQueue ? 'Requeue' : 'Play Now')}
-                </button>
-              )}
+              <button
+                type="submit"
+                disabled={isLoading}
+                className="w-full bg-[#373536] text-white py-3 px-6 rounded-lg font-semibold  transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isLoading ? 'Processing...' : 'Play Now'}
+              </button>
             </form>
           </div>
         );
@@ -843,28 +1174,26 @@ export const LandingPage: React.FC = () => {
                 <span className="text-yellow-600 text-3xl">⏰</span>
               </div>
             </div>
-            <h2 className="text-2xl font-bold text-gray-900 mb-2">No Opponent Found</h2>
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">Session Timed Out</h2>
             <p className="text-gray-600 mb-4">
-              {error || "We couldn't find an opponent within the time limit."}
+              No opponent found for now. Your stake is still available.
             </p>
-            <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
-              <p className="text-green-800 text-sm">
-                Your stake amount has been added to your balance and is available to play again or withdraw.
-              </p>
-            </div>
+            <p className="text-gray-500 text-sm mb-6">
+              We've sent you an SMS with a link to rejoin the queue anytime.
+            </p>
             <div className="flex flex-col space-y-3">
               <button
-                onClick={reset}
+                onClick={handlePlayAgain}
                 className="w-full bg-[#373536] text-white py-3 px-6 rounded-lg font-semibold hover:bg-[#2c2b2a] transition-colors"
               >
-                Play Again
+                Requeue Now
               </button>
-              <button
+              {/* <button
                 onClick={() => navigate('/profile')}
                 className="w-full bg-white border border-gray-300 text-gray-700 py-3 px-6 rounded-lg font-semibold hover:bg-gray-50 transition-colors"
               >
                 View Balance / Withdraw
-              </button>
+              </button> */}
             </div>
           </div>
         );

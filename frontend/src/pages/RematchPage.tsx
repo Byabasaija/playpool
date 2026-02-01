@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMatchmaking } from '../hooks/useMatchmaking';
 import { validatePhone, formatPhone } from '../utils/phoneUtils';
-import { getPlayerProfile, getConfig, requestOTP, verifyOTPAction } from '../utils/apiClient';
+import { getPlayerProfile, getConfig, requestOTP, verifyOTPAction, checkPlayerStatus, verifyPIN, resetPIN } from '../utils/apiClient';
+import PinInput from '../components/PinInput';
 
 function generateRandomName() {
   const adj = ['Swift', 'Wise', 'Bold', 'Brave', 'Cool', 'Quick', 'Smart', 'Epic', 'Prime', 'Pro'];
@@ -12,7 +13,7 @@ function generateRandomName() {
 
 export const RematchPage: React.FC = () => {
   const navigate = useNavigate();
-  const { stage, gameLink, isLoading, startGame, displayName, error, reset } = useMatchmaking();
+  const { stage, gameLink, isLoading, startGame, displayName, error, reset, privateMatch } = useMatchmaking();
 
   // Get opponent phone and stake from URL
   const params = new URLSearchParams(window.location.search);
@@ -20,19 +21,48 @@ export const RematchPage: React.FC = () => {
   const stakeParam = params.get('stake');
   const initialStake = stakeParam ? Number(stakeParam) : 1000;
 
-  const [phoneRest, setPhoneRest] = useState('');
+  // Authenticated state
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [playerPhone, setPlayerPhone] = useState('');
   const [displayNameInput, setDisplayNameInput] = useState<string>('');
-  const [phoneError, setPhoneError] = useState('');
   const [commission, setCommission] = useState<number | null>(null);
-  const [useWinnings, setUseWinnings] = useState(false);
   const [playerWinnings, setPlayerWinnings] = useState<number>(0);
-  const [otpSent, setOtpSent] = useState(false);
-  const [otpCode, setOtpCode] = useState('');
-  const [actionToken, setActionToken] = useState<string | null>(null);
-  const [otpError, setOtpError] = useState<string | null>(null);
-  const [otpLoading, setOtpLoading] = useState(false);
+  const [useWinnings, setUseWinnings] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
 
-  // Load config and player profile
+  // PIN state
+  const [pinLoading, setPinLoading] = useState(false);
+  const [pinError, setPinError] = useState<string | undefined>(undefined);
+  const [pinLockoutUntil, setPinLockoutUntil] = useState<string | undefined>(undefined);
+
+  // Helper function to build invite link (similar to LandingPage)
+  const buildInviteLink = (matchCode: string, stake: number, invitePhone?: string) => {
+    const base = window.location.origin + '/join';
+    const params = new URLSearchParams();
+    params.set('match_code', matchCode);
+    params.set('stake', stake.toString());
+    if (invitePhone) params.set('invite_phone', formatPhone(invitePhone));
+    return base + '?' + params.toString();
+  };
+
+  // Share functionality
+  const handleShare = async () => {
+    if (!privateMatch) return;
+    const link = buildInviteLink(privateMatch.match_code, initialStake, opponentPhone);
+    const text = `Join my PlayMatatu rematch. Code: ${privateMatch.match_code}. Stake: ${initialStake} UGX`;
+    
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: 'PlayMatatu Rematch', text, url: link });
+      } catch (e) {
+        await navigator.clipboard.writeText(link);
+      }
+    } else {
+      await navigator.clipboard.writeText(link);
+    }
+  };
+
+  // Load config
   React.useEffect(() => {
     (async () => {
       try {
@@ -56,99 +86,100 @@ export const RematchPage: React.FC = () => {
     }
   }, [stage, gameLink, navigate]);
 
-  const handleGetWinningsBalance = async (phone: string) => {
+  // Try to get stored phone from localStorage first
+  React.useEffect(() => {
+    const storedPhone = localStorage.getItem('playmatatu_phone');
+    if (storedPhone && !isAuthenticated && !playerPhone) {
+      setPlayerPhone(storedPhone);
+      // Auto-prompt for PIN since we're at rematch stage, user must have an account
+      checkPlayerStatusAndPromptPin(storedPhone);
+    }
+  }, []);
+
+  const checkPlayerStatusAndPromptPin = async (phone: string) => {
+    try {
+      const status = await checkPlayerStatus(phone);
+      if (status.exists && status.has_pin) {
+        // Player exists with PIN - show PIN entry (handled by UI state)
+        return;
+      } else if (status.exists && !status.has_pin) {
+        setPinError('PIN not set for this account. Please set a PIN first.');
+        return;
+      } else {
+        setPinError('Account not found. Please play a game first.');
+        return;
+      }
+    } catch (e) {
+      setPinError('Unable to verify account. Please check your connection.');
+    }
+  };
+
+  const handleVerifyPIN = async (pin: string) => {
+    setPinLoading(true);
+    setPinError(undefined);
+    try {
+      // Simply verify PIN for authentication, no need for action token
+      await verifyPIN(playerPhone, pin, 'rematch');
+      
+      // Load player profile after PIN verification
+      await loadPlayerProfile(playerPhone);
+      setIsAuthenticated(true);
+    } catch (err: any) {
+      if (err.lockout_until) {
+        setPinLockoutUntil(err.lockout_until);
+        setPinError(`Too many attempts. Try again after ${new Date(err.lockout_until).toLocaleTimeString()}`);
+      } else {
+        setPinError(err.message || 'Invalid PIN');
+      }
+    } finally {
+      setPinLoading(false);
+    }
+  };
+
+  const loadPlayerProfile = async (phone: string) => {
     try {
       const profile = await getPlayerProfile(phone);
-      if (profile && profile.player_winnings !== undefined) {
-        setPlayerWinnings(profile.player_winnings);
-      }
-      if (profile && profile.display_name) {
-        setDisplayNameInput(profile.display_name);
-      } else {
-        setDisplayNameInput(generateRandomName());
+      if (profile) {
+        if (profile.player_winnings !== undefined) {
+          setPlayerWinnings(profile.player_winnings);
+        }
+        if (profile.display_name) {
+          setDisplayNameInput(profile.display_name);
+        } else {
+          setDisplayNameInput(generateRandomName());
+        }
       }
     } catch (e) {
       setDisplayNameInput(generateRandomName());
     }
   };
-
-  const handleRequestOTP = async () => {
-    const full = formatPhone(phoneRest);
-    if (!validatePhone(full)) {
-      setOtpError('Invalid phone number');
-      return;
-    }
-    setOtpLoading(true);
-    setOtpError(null);
-    try {
-      await requestOTP(full);
-      setOtpSent(true);
-    } catch (err: any) {
-      setOtpError(err.message || 'Failed to send OTP');
-    } finally {
-      setOtpLoading(false);
-    }
-  };
-
-  const handleVerifyOTP = async () => {
-    const full = formatPhone(phoneRest);
-    if (!otpCode.trim()) {
-      setOtpError('Please enter OTP code');
-      return;
-    }
-    setOtpLoading(true);
-    setOtpError(null);
-    try {
-      const res = await verifyOTPAction(full, otpCode.trim(), 'stake_winnings');
-      setActionToken(res.action_token);
-      setOtpSent(false);
-    } catch (err: any) {
-      setOtpError(err.message || 'Invalid OTP');
-    } finally {
-      setOtpLoading(false);
-    }
-  };
-
   const handleSubmit = async () => {
-    const full = formatPhone(phoneRest);
-    if (!validatePhone(full)) {
-      setPhoneError('Please enter a valid Ugandan phone number');
-      return;
-    }
-
     // Validate opponent phone
     const formattedOpponent = formatPhone(opponentPhone);
     if (!validatePhone(formattedOpponent)) {
-      setPhoneError('Invalid opponent phone number');
+      setPinError('Invalid opponent phone number');
       return;
     }
 
-    // Check winnings balance if using winnings
+    // Check if using winnings and validate balance
     if (useWinnings) {
-      if (!actionToken) {
-        setPhoneError('Please verify OTP first');
-        return;
-      }
       const requiredAmount = commission !== null ? initialStake + commission : initialStake;
       if (playerWinnings < requiredAmount) {
-        setPhoneError(`Insufficient winnings (need ${requiredAmount} UGX including commission)`);
+        setPinError(`Insufficient winnings (need ${requiredAmount} UGX including commission)`);
         return;
       }
     }
-
-    setPhoneError('');
 
     const opts: any = {
       create_private: true,
       invite_phone: formattedOpponent
     };
 
-    if (useWinnings && actionToken) {
+    if (useWinnings) {
       opts.source = 'winnings';
-      opts.action_token = actionToken;
     }
 
-    await startGame(full, initialStake, displayNameInput || generateRandomName(), opts);
+    await startGame(playerPhone, initialStake, displayNameInput || generateRandomName(), opts);
   };
 
   if (stage === 'payment_pending') {
@@ -188,10 +219,73 @@ export const RematchPage: React.FC = () => {
     return (
       <div className="max-w-md mx-auto rounded-2xl p-8 text-center">
         <div className="mb-6">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#373536] mx-auto"></div>
+          <div className="h-12 w-12 bg-[#373536] rounded-full mx-auto flex items-center justify-center animate-pulse">
+            <span className="text-white text-xl">🔄</span>
+          </div>
         </div>
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">Sending Rematch Invite</h2>
-        <p className="text-gray-600">Waiting for {opponentPhone.slice(-9)} to accept...</p>
+        <h2 className="text-2xl font-bold text-gray-900 mb-2">Rematch Invite Sent</h2>
+        <p className="text-gray-600 mb-4">We've sent the rematch invite — waiting for {opponentPhone.slice(-9)} to join.</p>
+        
+        {privateMatch && (
+          <>
+            <div className="bg-gray-100 p-4 rounded-lg inline-block mb-4">
+              <div className="text-2xl font-mono">{privateMatch.match_code}</div>
+              {privateMatch.expires_at && (
+                <div className="text-sm text-gray-500">Expires: {new Date(privateMatch.expires_at).toLocaleString()}</div>
+              )}
+            </div>
+
+            <div className="mb-4">
+              <div className="text-sm text-gray-600 mb-1">Stake Amount:</div>
+              <div className="text-lg font-semibold">{initialStake.toLocaleString()} UGX</div>
+            </div>
+
+            <div className="flex flex-col items-center space-y-3">
+              <div className="flex items-center space-x-2">
+                <input 
+                  readOnly 
+                  value={buildInviteLink(privateMatch.match_code, initialStake, opponentPhone)} 
+                  className="px-3 py-2 border rounded-l-lg w-72 bg-white text-sm" 
+                />
+                <button 
+                  onClick={async () => { 
+                    await navigator.clipboard.writeText(buildInviteLink(privateMatch.match_code, initialStake, opponentPhone)); 
+                    setCopiedLink(true); 
+                    setTimeout(() => setCopiedLink(false), 2000); 
+                  }} 
+                  className="px-3 py-2 bg-gray-100 rounded-r-lg border"
+                >
+                  {copiedLink ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+              <div className="flex space-x-3">
+                <button 
+                  onClick={handleShare} 
+                  className="px-4 py-2 bg-gray-100 rounded-lg border"
+                >
+                  Share
+                </button>
+                <button 
+                  onClick={() => { reset(); navigate('/'); }} 
+                  className="px-4 py-2 bg-white rounded-lg border"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+
+        {!privateMatch && (
+          <div className="mt-6">
+            <button
+              onClick={() => { reset(); navigate('/'); }}
+              className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg font-semibold hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
       </div>
     );
   }
@@ -209,148 +303,80 @@ export const RematchPage: React.FC = () => {
         </div>
       )}
 
-      {/* Opponent Info */}
-      <div className="mb-4 p-3 bg-gray-50 rounded">
-        <div className="text-sm text-gray-600">Playing against:</div>
-        <div className="font-semibold text-gray-800">{opponentPhone}</div>
-      </div>
-
-      {/* Stake Info */}
-      <div className="mb-4 p-3 bg-gray-50 rounded">
-        <div className="text-sm text-gray-600">Stake amount:</div>
-        <div className="font-semibold text-gray-800">{initialStake} UGX</div>
-        {commission !== null && (
-          <div className="text-xs text-gray-500 mt-1">+ {commission} UGX commission</div>
-        )}
-      </div>
-
-        {/* Phone Input */}
-        <div className="mb-4">
-          <label className="block text-sm font-medium text-gray-700 mb-2">Your Phone</label>
-          <div className="flex">
-            <span className="inline-flex items-center px-3 rounded-l-md border border-r-0 bg-gray-100 text-gray-700">256</span>
-            <input
-              type="tel"
-              value={phoneRest}
-              onChange={(e) => {
-                setPhoneRest(e.target.value);
-                setPhoneError('');
-              }}
-              onBlur={() => {
-                const full = formatPhone(phoneRest);
-                if (validatePhone(full)) {
-                  handleGetWinningsBalance(full);
-                }
-              }}
-              placeholder="7XX XXX XXX"
-              className="w-full px-4 py-3 border border-gray-300 rounded-r-lg"
-              maxLength={9}
-            />
+      {!isAuthenticated ? (
+        /* PIN Entry - First Step */
+        <div className="space-y-4">
+          <div className="text-center mb-6">
+            <div className="text-lg font-semibold mb-2">Rematch for: {initialStake.toLocaleString()} UGX</div>
+            <div className="text-sm text-gray-600">
+              {playerPhone ? `Phone: ${playerPhone}` : 'Verifying account...'}
+            </div>
           </div>
-          {phoneError && <div className="mt-1 text-sm text-red-600">{phoneError}</div>}
-        </div>
-
-        {/* Display Name */}
-        <div className="mb-4">
-          <label className="block text-sm font-medium text-gray-700 mb-2">Display Name</label>
-          <input
-            type="text"
-            value={displayNameInput}
-            onChange={(e) => setDisplayNameInput(e.target.value)}
-            placeholder="Your display name"
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg"
-            maxLength={50}
+          
+          <PinInput
+            title="Enter your PIN"
+            onSubmit={handleVerifyPIN}
+            loading={pinLoading}
+            error={pinError}
+            lockedUntil={pinLockoutUntil}
           />
+          
+          <button
+            onClick={() => navigate('/')}
+            className="w-full py-2 bg-white border border-gray-300 text-gray-700 rounded-lg font-semibold hover:bg-gray-50"
+          >
+            Cancel
+          </button>
         </div>
-
-        {/* Display player winnings if available */}
-        {playerWinnings > 0 && (
-          <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded">
-            <p className="text-sm text-green-800">
-              💰 Available Winnings: <strong>{playerWinnings.toLocaleString()} UGX</strong>
-            </p>
-          </div>
-        )}
-
-        {/* Use Winnings Toggle */}
-        {playerWinnings > 0 && (
-          <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded">
-            <label className="flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                checked={useWinnings}
-                onChange={(e) => {
-                  setUseWinnings(e.target.checked);
-                  if (e.target.checked) {
-                    setOtpSent(false);
-                    setActionToken(null);
-                    setOtpCode('');
-                    setOtpError(null);
-                  }
-                }}
-                className="mr-3"
-              />
-              <div className="flex-1">
-                <span className="text-blue-900 font-medium">Use Winnings</span>
-                <div className="text-sm text-blue-700 mt-1">Balance: {playerWinnings} UGX</div>
-              </div>
-            </label>
-
-            {/* OTP Flow */}
-            {useWinnings && !actionToken && (
-              <div className="mt-3 pt-3 border-t border-blue-300">
-                {!otpSent ? (
-                  <button
-                    onClick={handleRequestOTP}
-                    disabled={otpLoading}
-                    className="w-full py-2 bg-[#373536] text-white rounded-lg font-semibold hover:bg-[#2c2b2a] disabled:opacity-50"
-                  >
-                    {otpLoading ? 'Sending...' : 'Request OTP'}
-                  </button>
-                ) : (
-                  <div>
-                    <input
-                      type="text"
-                      value={otpCode}
-                      onChange={(e) => setOtpCode(e.target.value)}
-                      placeholder="Enter OTP code"
-                      className="w-full px-4 py-3 border border-gray-300 rounded-lg mb-2"
-                      maxLength={6}
-                    />
-                    <button
-                      onClick={handleVerifyOTP}
-                      disabled={otpLoading}
-                      className="w-full py-2 bg-[#373536] text-white rounded-lg font-semibold hover:bg-[#2c2b2a] disabled:opacity-50"
-                    >
-                      {otpLoading ? 'Verifying...' : 'Verify OTP'}
-                    </button>
-                  </div>
-                )}
-                {otpError && <div className="mt-2 text-sm text-red-600">{otpError}</div>}
-              </div>
-            )}
-
-            {useWinnings && actionToken && (
-              <div className="mt-2 text-sm text-green-600">✓ OTP verified</div>
+      ) : (
+        /* Authenticated - Minimal UI */
+        <div className="space-y-4">
+          <div className="text-center mb-6">
+            <div className="text-lg font-semibold mb-2">Rematch for: {initialStake.toLocaleString()} UGX</div>
+            <div className="text-sm text-gray-600">{displayNameInput} • {playerPhone}</div>
+            {playerWinnings > 0 && (
+              <div className="text-sm text-green-600 mt-1">Balance: {playerWinnings.toLocaleString()} UGX</div>
             )}
           </div>
-        )}
 
-        {/* Submit Button */}
-        <button
-          onClick={handleSubmit}
-          disabled={isLoading || (useWinnings && !actionToken)}
-          className="w-full py-3 bg-[#373536] text-white rounded-lg font-semibold hover:bg-[#2c2b2a] disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {isLoading ? 'Sending Invite...' : 'Rematch'}
-        </button>
+          {/* Use Winnings Toggle - simple and small */}
+          {playerWinnings > 0 && (
+            <div className="mb-4">
+              <label className="flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={useWinnings}
+                  onChange={(e) => setUseWinnings(e.target.checked)}
+                  className="mr-2"
+                />
+                <span className="text-sm">Use winnings for this game</span>
+              </label>
+            </div>
+          )}
 
-        <button
-          onClick={() => navigate('/')}
-          className="w-full mt-3 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg font-semibold hover:bg-gray-50"
-        >
-          Cancel
-        </button>
+          {pinError && (
+            <div className="p-3 bg-red-50 text-red-700 rounded text-sm">
+              {pinError}
+            </div>
+          )}
+
+          {/* Submit Button */}
+          <button
+            onClick={handleSubmit}
+            disabled={isLoading}
+            className="w-full py-3 bg-[#373536] text-white rounded-lg font-semibold hover:bg-[#2c2b2a] disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isLoading ? 'Sending Invite...' : 'Send Rematch Invite'}
+          </button>
+
+          <button
+            onClick={() => navigate('/')}
+            className="w-full py-2 bg-white border border-gray-300 text-gray-700 rounded-lg font-semibold hover:bg-gray-50"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
     </div>
   );
 };

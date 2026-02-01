@@ -1,19 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { getConfig } from '../utils/apiClient';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { getConfig, checkPlayerStatus, verifyPIN, requestOTP, verifyOTPAction, resetPIN } from '../utils/apiClient';
 import { GetWithdrawsResponse } from '../types/api.types';
+import PinInput from '../components/PinInput';
 
 export const ProfilePage: React.FC = () => {
   const [phoneRest, setPhoneRest] = useState('');
-  const [otpRequested, setOtpRequested] = useState(false);
-  const [code, setCode] = useState('');
   const [message, setMessage] = useState<string | null>(null);
   const [token, setToken] = useState<string | null>(() => sessionStorage.getItem('auth_token'));
   const [profile, setProfile] = useState<any>(null);
   const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [playerExists, setPlayerExists] = useState<boolean | null>(null);
-  const [allowCreate, setAllowCreate] = useState(false);
   const [config, setConfig] = useState<any>(null);
   const [withdrawAmount, setWithdrawAmount] = useState<number | ''>('');
   const [withdraws, setWithdraws] = useState<any[]>([]);
@@ -26,11 +24,42 @@ export const ProfilePage: React.FC = () => {
   const confirmBtnRef = useRef<HTMLButtonElement | null>(null);
   const withdrawInputRef = useRef<HTMLInputElement | null>(null);
 
+  // PIN-related state
+  const [hasPin, setHasPin] = useState<boolean>(false);
+  const [showPinEntry, setShowPinEntry] = useState<boolean>(false);
+  const [pinError, setPinError] = useState<string | undefined>(undefined);
+  const [pinLoading, setPinLoading] = useState<boolean>(false);
+  const [pinLockoutUntil, setPinLockoutUntil] = useState<string | null>(null);
+  const [showForgotPin, setShowForgotPin] = useState<boolean>(false);
+  const [forgotPinStep, setForgotPinStep] = useState<'otp' | 'new_pin' | 'confirm_pin'>('otp');
+  const [newPin, setNewPin] = useState<string>('');
+  const [otpActionToken, setOtpActionToken] = useState<string | null>(null);
+  // Forgot PIN OTP flow state
+  const [otpRequested, setOtpRequested] = useState(false);
+  const [code, setCode] = useState('');
+
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+
+  // Initialize phone from URL params and auto-check if PIN is needed
+  useEffect(() => {
+    const phoneParam = searchParams.get('phone');
+    if (phoneParam && !token && !phoneRest) {
+      // Extract the part after 256 prefix
+      const rest = phoneParam.startsWith('256') ? phoneParam.slice(3) : phoneParam;
+      setPhoneRest(rest);
+      // Auto-check player status
+      checkPlayerAndPin(rest);
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     if (token) {
       fetchProfile(token);
+      // Auto-show withdraw form if URL param is set
+      if (searchParams.get('withdraw') === '1') {
+        setShowWithdrawForm(true);
+      }
     }
   }, [token]);
 
@@ -82,52 +111,6 @@ export const ProfilePage: React.FC = () => {
     }
   };
 
-  const requestOtp = async () => {
-    setMessage(null);
-    setLoading(true);
-    try {
-      const resp = await fetch('/api/v1/auth/request-otp', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: '256' + phoneRest.replace(/\D/g, '') })
-      });
-      const data = await resp.json();
-      if (!resp.ok) {
-        setMessage(data.error || 'Failed to request OTP');
-      } else {
-        setOtpRequested(true);
-        setMessage('OTP sent via SMS');
-      }
-    } catch (e) {
-      setMessage('Network error');
-    }
-    setLoading(false);
-  };
-
-  const verifyOtp = async () => {
-    setMessage(null);
-    setLoading(true);
-    try {
-      const resp = await fetch('/api/v1/auth/verify-otp', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: '256' + phoneRest.replace(/\D/g, ''), code })
-      });
-      const data = await resp.json();
-      if (!resp.ok) {
-        setMessage(data.error || 'Invalid code');
-      } else {
-        // store token
-        if (data.token) {
-          sessionStorage.setItem('auth_token', data.token);
-          setToken(data.token);
-          setMessage('Verified');
-        }
-      }
-    } catch (e) {
-      setMessage('Network error');
-    }
-    setLoading(false);
-  };
-
   const signOut = () => {
     sessionStorage.removeItem('auth_token');
     setToken(null);
@@ -136,24 +119,134 @@ export const ProfilePage: React.FC = () => {
     navigate('/');
   };
 
-  const checkPlayerExists = async (phoneToCheckRest: string) => {
+  const checkPlayerAndPin = async (phoneToCheckRest: string) => {
     setPlayerExists(null);
-    const fullPhone = '256' + phoneToCheckRest.replace(/\D/g, '')
+    setHasPin(false);
+    setShowPinEntry(false);
+    const fullPhone = '256' + phoneToCheckRest.replace(/\D/g, '');
     try {
-      const resp = await fetch(`/api/v1/player/${encodeURIComponent(fullPhone)}`);
-      if (resp.ok) {
-        const p = await resp.json();
+      const status = await checkPlayerStatus(fullPhone);
+      if (status.exists) {
         setPlayerExists(true);
-        // optionally prefill display name preview
-        if (p.display_name) setMessage(`Existing user: ${p.display_name}`);
-      } else if (resp.status === 404) {
-        setPlayerExists(false);
+        if (status.display_name) setMessage(`Welcome, ${status.display_name}`);
+        if (status.has_pin) {
+          setHasPin(true);
+          setShowPinEntry(true);
+        } else {
+          setMessage('PIN not set for this account. Please play a game first to set up PIN.');
+        }
       } else {
         setPlayerExists(false);
+        setMessage('No account found for this number. Please play a game first to create an account.');
       }
     } catch (e) {
       setPlayerExists(false);
     }
+  };
+
+  const handlePinSubmit = async (pin: string) => {
+    setPinError(undefined);
+    setPinLoading(true);
+    const fullPhone = '256' + phoneRest.replace(/\D/g, '');
+    try {
+      const result = await verifyPIN(fullPhone, pin, 'view_profile');
+      if (result.action_token) {
+        // Fetch profile using the action token
+        const resp = await fetch('/api/v1/me', { 
+          headers: { 'Authorization': `Bearer ${result.action_token}` } 
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          setProfile(data);
+          sessionStorage.setItem('auth_token', result.action_token);
+          setToken(result.action_token);
+          // Save phone to localStorage for returning user experience
+          localStorage.setItem('playmatatu_phone', fullPhone);
+          // Fetch stats
+          if (data && data.phone) {
+            const sresp = await fetch(`/api/v1/player/${encodeURIComponent(data.phone)}/stats`);
+            if (sresp.ok) {
+              const sdata = await sresp.json();
+              setStats(sdata);
+            }
+          }
+        } else {
+          setPinError('Failed to load profile');
+        }
+      }
+    } catch (e: any) {
+      if (e.lockout_until) {
+        setPinLockoutUntil(e.lockout_until);
+        setPinError(`Too many attempts. Try again after ${new Date(e.lockout_until).toLocaleTimeString()}`);
+      } else {
+        setPinError(e.message || 'Invalid PIN');
+      }
+    }
+    setPinLoading(false);
+  };
+
+  const handleForgotPin = () => {
+    setShowForgotPin(true);
+    setForgotPinStep('otp');
+    setOtpRequested(false);
+    setCode('');
+    setNewPin('');
+    setOtpActionToken(null);
+    setMessage(null);
+  };
+
+  const requestForgotPinOtp = async () => {
+    setMessage(null);
+    setLoading(true);
+    const fullPhone = '256' + phoneRest.replace(/\D/g, '');
+    try {
+      await requestOTP(fullPhone);
+      setOtpRequested(true);
+      setMessage('OTP sent via SMS');
+    } catch (e: any) {
+      setMessage(e.message || 'Failed to request OTP');
+    }
+    setLoading(false);
+  };
+
+  const verifyForgotPinOtp = async () => {
+    setMessage(null);
+    setLoading(true);
+    const fullPhone = '256' + phoneRest.replace(/\D/g, '');
+    try {
+      const result = await verifyOTPAction(fullPhone, code, 'reset_pin');
+      if (result.action_token) {
+        setOtpActionToken(result.action_token);
+        setForgotPinStep('new_pin');
+        setMessage(null);
+      }
+    } catch (e: any) {
+      setMessage(e.message || 'Invalid OTP');
+    }
+    setLoading(false);
+  };
+
+  const handleNewPinSubmit = (pin: string) => {
+    setNewPin(pin);
+    setForgotPinStep('confirm_pin');
+  };
+
+  const handleConfirmPinSubmit = async (pin: string) => {
+    if (pin !== newPin) {
+      setPinError('PINs do not match');
+      return;
+    }
+    setPinLoading(true);
+    const fullPhone = '256' + phoneRest.replace(/\D/g, '');
+    try {
+      await resetPIN(fullPhone, pin, otpActionToken!);
+      setShowForgotPin(false);
+      setMessage('PIN reset successfully. Please enter your new PIN.');
+      setPinError(undefined);
+    } catch (e: any) {
+      setPinError(e.message || 'Failed to reset PIN');
+    }
+    setPinLoading(false);
   };
 
   const feePct = config?.withdraw_provider_fee_percent ?? 0;
@@ -236,45 +329,110 @@ export const ProfilePage: React.FC = () => {
 
         {!token ? (
           <div className="space-y-4">
-            <div>
-              <label className="block text-sm text-gray-700 mb-2">Phone Number</label>
-              <div className="flex">
-                <span className="inline-flex items-center px-3 rounded-l-md border border-r-0 bg-gray-100 text-gray-700">256</span>
-                <input
-                  className="w-full px-3 py-2 border rounded-r-md"
-                  value={phoneRest}
-                  onChange={(e) => { setPhoneRest(e.target.value); setPlayerExists(null); setAllowCreate(false); }}
-                  onBlur={() => { if (phoneRest) checkPlayerExists(phoneRest); }}
-                  placeholder="7XXXXXXXX"
-                />
+            {/* Forgot PIN flow */}
+            {showForgotPin ? (
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold">Reset PIN</h3>
+                {forgotPinStep === 'otp' && (
+                  <>
+                    <div className="text-sm text-gray-600">We'll send a code to verify your identity</div>
+                    {!otpRequested ? (
+                      <button className="w-full bg-[#373536] text-white py-2 rounded flex items-center justify-center disabled:opacity-50" onClick={requestForgotPinOtp} disabled={loading}>
+                        {loading ? (<div className="animate-spin h-4 w-4 border-b-2 border-white rounded-full mr-2" />) : null}
+                        Send OTP
+                      </button>
+                    ) : (
+                      <div className="space-y-2">
+                        <div>
+                          <label className="block text-sm text-gray-700 mb-2">Enter 4-digit code</label>
+                          <input maxLength={4} className="w-full px-3 py-2 border rounded" value={code} onChange={(e) => setCode(e.target.value)} placeholder="1234" />
+                        </div>
+                        <button className="w-full bg-[#373536] text-white py-2 rounded flex items-center justify-center disabled:opacity-50" onClick={verifyForgotPinOtp} disabled={loading}>
+                          {loading ? (<div className="animate-spin h-4 w-4 border-b-2 border-white rounded-full mr-2" />) : null}
+                          Verify
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
+                {forgotPinStep === 'new_pin' && (
+                  <>
+                    <div className="text-sm text-gray-600">Enter your new 4-digit PIN</div>
+                    <PinInput
+                      title="New PIN"
+                      onSubmit={handleNewPinSubmit}
+                      loading={pinLoading}
+                      error={pinError}
+                    />
+                  </>
+                )}
+                {forgotPinStep === 'confirm_pin' && (
+                  <>
+                    <div className="text-sm text-gray-600">Confirm your new PIN</div>
+                    <PinInput
+                      title="Confirm PIN"
+                      onSubmit={handleConfirmPinSubmit}
+                      loading={pinLoading}
+                      error={pinError}
+                    />
+                  </>
+                )}
+                <button className="text-sm text-gray-500 underline" onClick={() => setShowForgotPin(false)}>Cancel</button>
+                {message && <div className="text-sm text-gray-600">{message}</div>}
               </div>
-            </div>
-
-            {playerExists === false && (
-              <div className="text-sm text-yellow-600">
-                No account found for this number. <button className="underline" onClick={() => setAllowCreate(true)}>Create account</button> to continue.
-              </div>
-            )}
-
-            {!otpRequested ? (
-              <button className="w-full bg-[#373536] text-white py-2 rounded flex items-center justify-center disabled:opacity-50" onClick={requestOtp} disabled={loading || (playerExists === false && !allowCreate)}>
-                {loading ? (<div className="animate-spin h-4 w-4 border-b-2 border-white rounded-full mr-2" />) : null}
-                Request OTP
-              </button>
-            ) : (
-              <div className="space-y-2">
-                <div>
-                  <label className="block text-sm text-gray-700 mb-2">Enter 4-digit code</label>
-                  <input maxLength={4} className="w-full px-3 py-2 border rounded" value={code} onChange={(e) => setCode(e.target.value)} placeholder="1234" />
+            ) : showPinEntry ? (
+              /* PIN entry for users with PIN set */
+              <div className="space-y-4">
+                <div className="text-center">
+                  <div className="text-lg font-semibold mb-2">Enter your PIN</div>
+                  <div className="text-sm text-gray-600">Phone: +256{phoneRest}</div>
                 </div>
-                <button className="w-full bg-[#373536] text-white py-2 rounded flex items-center justify-center disabled:opacity-50" onClick={verifyOtp} disabled={loading}>
-                  {loading ? (<div className="animate-spin h-4 w-4 border-b-2 border-white rounded-full mr-2" />) : null}
-                  Verify
-                </button>
+                <PinInput
+                  title=""
+                  onSubmit={handlePinSubmit}
+                  loading={pinLoading}
+                  error={pinError}
+                  lockedUntil={pinLockoutUntil || undefined}
+                  onForgot={handleForgotPin}
+                />
+                
               </div>
-            )}
+            ) : (
+              /* Standard phone input and OTP flow */
+              <>
+                <div>
+                  <label className="block text-sm text-gray-700 mb-2">Phone Number</label>
+                  <div className="flex">
+                    <span className="inline-flex items-center px-3 rounded-l-md border border-r-0 bg-gray-100 text-gray-700">256</span>
+                    <input
+                      className="w-full px-3 py-2 border rounded-r-md"
+                      value={phoneRest}
+                      onChange={(e) => { setPhoneRest(e.target.value); setPlayerExists(null); setHasPin(false); }}
+                      onBlur={() => { if (phoneRest) checkPlayerAndPin(phoneRest); }}
+                      placeholder="7XXXXXXXX"
+                    />
+                  </div>
+                </div>
 
-            {message && <div className="text-sm text-red-600">{message}</div>}
+                {playerExists === false && (
+                  <div className="text-sm text-yellow-600">
+                    No account found for this number. Please play a game first to create an account.
+                  </div>
+                )}
+
+                {playerExists && !hasPin && (
+                  <div className="text-sm text-yellow-600">
+                    PIN not set for this account. Please play a game first to set up PIN.
+                  </div>
+                )}
+
+                {playerExists === null && phoneRest && (
+                  <div className="text-sm text-gray-500">Checking account...</div>
+                )}
+
+                {message && <div className="text-sm text-gray-600">{message}</div>}
+              </>
+            )}
           </div>
         ) : (
           <div className="space-y-4">

@@ -75,6 +75,11 @@ type Config struct {
 	OTPRequestRateLimitSeconds int
 	OTPMaxVerifyAttempts       int
 
+	// PIN configuration
+	PINMaxAttempts     int
+	PINLockoutMinutes  int
+	PINTokenTTLSeconds int
+
 	// Idle detection and forfeit
 	IdleWarningSeconds     int
 	IdleForfeitSeconds     int
@@ -111,10 +116,9 @@ func Load() *Config {
 
 		// Game Settings
 		GameExpiryMinutes:         getEnvInt("GAME_EXPIRY_MINUTES", 3),
-		QueueExpiryMinutes:        getEnvInt("QUEUE_EXPIRY_MINUTES", 10),
+		QueueExpiryMinutes:        getEnvInt("QUEUE_EXPIRY_MINUTES", 3),
 		QueueProcessingVisibility: getEnvInt("QUEUE_PROCESSING_VISIBILITY_SECONDS", 30),
 		DisconnectGracePeriodSecs: getEnvInt("DISCONNECT_GRACE_PERIOD_SECONDS", 120),
-		NoShowFeePercentage:       getEnvInt("NO_SHOW_FEE_PERCENTAGE", 5),
 		CommissionPercentage:      getEnvInt("COMMISSION_PERCENTAGE", 10),
 		CommissionFlat:            getEnvInt("COMMISSION_FLAT", 1000),
 		MinStakeAmount:            getEnvInt("MIN_STAKE_AMOUNT", 1000),
@@ -164,6 +168,11 @@ func Load() *Config {
 		OTPRequestRateLimitSeconds: getEnvInt("OTP_RATE_LIMIT_SECONDS", 60),
 		OTPMaxVerifyAttempts:       getEnvInt("OTP_MAX_VERIFY_ATTEMPTS", 5),
 
+		// PIN settings
+		PINMaxAttempts:     getEnvInt("PIN_MAX_ATTEMPTS", 5),
+		PINLockoutMinutes:  getEnvInt("PIN_LOCKOUT_MINUTES", 15),
+		PINTokenTTLSeconds: getEnvInt("PIN_TOKEN_TTL_SECONDS", 300),
+
 		// Idle detection and forfeit
 		IdleWarningSeconds:     getEnvInt("IDLE_WARNING_SECONDS", 45),
 		IdleForfeitSeconds:     getEnvInt("IDLE_FORFEIT_SECONDS", 90),
@@ -177,8 +186,8 @@ func Load() *Config {
 		// Withdraw configuration
 		MockMode:          getEnv("MOCK_MODE", "true") == "true",
 		MinWithdrawAmount: getEnvInt("MIN_WITHDRAW_AMOUNT", 1000),
-		AdminToken: 	 getEnv("ADMIN_TOKEN", "change-me-in-production"),
-		AdminPhone: 	 getEnv("ADMIN_PHONE", "256700000000"),
+		AdminToken:        getEnv("ADMIN_TOKEN", "change-me-in-production"),
+		AdminPhone:        getEnv("ADMIN_PHONE", "256700000000"),
 	}
 }
 

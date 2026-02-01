@@ -243,7 +243,7 @@ func GetPlayerProfile(db *sqlx.DB) gin.HandlerFunc {
 			winningsBalance = acc.Balance
 		}
 
-		// Check for latest expired queue row
+		// Check for latest expired queue row (either status='expired' or queued but past expires_at)
 		var expired struct {
 			ID          int     `db:"id"`
 			StakeAmount float64 `db:"stake_amount"`
@@ -251,7 +251,12 @@ func GetPlayerProfile(db *sqlx.DB) gin.HandlerFunc {
 			IsPrivate   bool    `db:"is_private"`
 		}
 		hasExpired := false
-		if err := db.Get(&expired, `SELECT id, stake_amount, match_code, is_private FROM matchmaking_queue WHERE player_id=$1 AND status='expired' ORDER BY created_at DESC LIMIT 1`, p.ID); err == nil {
+		if err := db.Get(&expired, `
+			SELECT id, stake_amount, COALESCE(match_code, '') as match_code, is_private
+			FROM matchmaking_queue
+			WHERE player_id=$1
+			  AND (status='expired' OR (status='queued' AND expires_at < NOW()))
+			ORDER BY created_at DESC LIMIT 1`, p.ID); err == nil {
 			hasExpired = true
 		}
 
@@ -408,19 +413,40 @@ func RequeueStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handle
 			return
 		}
 
-		// standardized queue token
-		playerEphemeral := generateQueueToken()
+		// Find the expired queue row to update (prefer specific queue_id if provided)
+		var expiredQueue struct {
+			ID            int     `db:"id"`
+			QueueToken    string  `db:"queue_token"`
+			TransactionID *string `db:"transaction_id"`
+		}
+		if req.QueueID != nil {
+			if err := db.Get(&expiredQueue, `SELECT id, queue_token, transaction_id FROM matchmaking_queue WHERE id=$1 AND player_id=$2 AND status='expired'`, *req.QueueID, player.ID); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "expired queue not found"})
+				return
+			}
+		} else {
+			if err := db.Get(&expiredQueue, `SELECT id, queue_token, transaction_id FROM matchmaking_queue WHERE player_id=$1 AND status='expired' ORDER BY created_at DESC LIMIT 1`, player.ID); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "no expired queue found"})
+				return
+			}
+		}
 
-		// Insert new matchmaking_queue row and try immediate match
-		var queueID int
+		// Generate new queue token for this requeue attempt
+		newQueueToken := generateQueueToken()
 		expiresAt := time.Now().Add(time.Duration(cfg.QueueExpiryMinutes) * time.Minute)
-		if err := db.QueryRowx(`INSERT INTO matchmaking_queue (player_id, phone_number, stake_amount, transaction_id, queue_token, status, created_at, expires_at) VALUES ($1,$2,$3,null,$4,'queued',NOW(),$5) RETURNING id`, player.ID, phone, float64(stakeAmount), playerEphemeral, expiresAt).Scan(&queueID); err != nil {
-			log.Printf("[DB] Failed to insert requeue matchmaking_queue for player %d: %v", player.ID, err)
+
+		// Update the existing expired queue row instead of inserting a new one
+		// This preserves the original transaction_id and other metadata
+		if _, err := db.Exec(`UPDATE matchmaking_queue SET status='queued', queue_token=$1, expires_at=$2 WHERE id=$3`,
+			newQueueToken, expiresAt, expiredQueue.ID); err != nil {
+			log.Printf("[DB] Failed to update matchmaking_queue for requeue player %d: %v", player.ID, err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to requeue player"})
 			return
 		}
 
+		log.Printf("[REQUEUE] Updated expired queue %d for player %d with new token %s", expiredQueue.ID, player.ID, newQueueToken)
+
 		// Matchmaker worker will pick up from DB and match players
-		c.JSON(http.StatusOK, gin.H{"status": "queued", "queue_id": queueID, "stake_amount": stakeAmount, "queue_token": playerEphemeral, "player_token": player.PlayerToken})
+		c.JSON(http.StatusOK, gin.H{"status": "queued", "queue_id": expiredQueue.ID, "stake_amount": stakeAmount, "queue_token": newQueueToken, "player_token": player.PlayerToken})
 	}
 }
