@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMatchmaking } from '../hooks/useMatchmaking';
 import { validatePhone, formatPhone } from '../utils/phoneUtils';
-import { getPlayerProfile, getConfig, requestOTP, verifyOTPAction, checkPlayerStatus, verifyPIN, resetPIN } from '../utils/apiClient';
+import { getPlayerProfile, getConfig, checkPlayerStatus, verifyPIN } from '../utils/apiClient';
 import PinInput from '../components/PinInput';
 
 function generateRandomName() {

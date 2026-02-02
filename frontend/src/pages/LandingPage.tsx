@@ -40,7 +40,6 @@ export const LandingPage: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [playerBalance, setPlayerBalance] = useState<number>(0);
   const [useWinnings, setUseWinnings] = useState<boolean>(false);
-  const [actionToken, setActionToken] = useState<string | null>(null);
 
   // Check localStorage for remembered phone on mount
   React.useEffect(() => {
@@ -294,17 +293,7 @@ export const LandingPage: React.FC = () => {
     }
   };
 
-  // Handle switching to a different phone (for returning users)
-  const handleSwitchPhone = () => {
-    setShowPinEntry(false);
-    setPlayerHasPin(false);
-    setIsAuthenticated(false);
-    setPlayerBalance(0);
-    setPhoneRest('');
-    setDisplayNameInput('');
-    setExpiredQueue(null);
-    localStorage.removeItem('matatu_phone');
-  };
+  
 
   // Handle useWinnings toggle change - simplified for PIN-authenticated users
   const handleUseWinningsChange = async (enabled: boolean) => {

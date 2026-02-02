@@ -6,7 +6,7 @@ import { DiscardPile } from './DiscardPile';
 import { DeckStack } from './DeckStack';
 import { TurnIndicator } from './TurnIndicator';
 import { SuitSelector } from './SuitSelector';
-import { SuitReveal } from './SuitReveal';
+// import { SuitReveal } from './SuitReveal';
 import { cardToCode, SUIT_COLORS, SUIT_SYMBOLS } from '../utils/cardUtils';
 import { OutgoingWSMessage } from '../types/websocket.types';
 import { useSound } from '../hooks/useSound';

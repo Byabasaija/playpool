@@ -1,7 +1,8 @@
 import { StakeRequest, StakeResponse, QueueStatusResponse } from '../types/api.types';
 import { formatPhone } from './phoneUtils';
 
-const API_BASE = '/api/v1';
+//@ts-ignore
+const API_BASE = import.meta.env.VITE_BACKEND_URL + '/api/v1';
 
 export async function initiateStake(phone: string, stake: number, displayName?: string, opts?: { create_private?: boolean; match_code?: string; invite_phone?: string; source?: string; action_token?: string }): Promise<StakeResponse> {
   const body:any = {
