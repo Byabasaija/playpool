@@ -413,11 +413,16 @@ export const LandingPage: React.FC = () => {
   // Redirect when game is found
   React.useEffect(() => {
     if (stage === 'found' && gameLink) {
-      // Extract token from game link and navigate
-      const tokenMatch = gameLink.match(/\/g\/([^/?]+)/);
-      if (tokenMatch) {
-        // navigate(`/g/${tokenMatch[1]}`);
-        navigate(gameLink)
+      // Check if it's an absolute URL
+      if (gameLink.startsWith('http')) {
+        const url = new URL(gameLink);
+        navigate(url.pathname + url.search);
+      } else {
+        // Extract token from relative game link and navigate
+        const tokenMatch = gameLink.match(/\/g\/([^/?]+)/);
+        if (tokenMatch) {
+          navigate(`/g/${tokenMatch[1]}`);
+        }
       }
     }
   }, [stage, gameLink, navigate]);

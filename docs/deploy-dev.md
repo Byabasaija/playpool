@@ -67,6 +67,30 @@ ln -nfs /home/pascal/projects/matatu/releases/<previous> /home/pascal/projects/m
 sudo supervisorctl restart playmatatu-dev
 ```
 
+# Build frontend
+cd frontend && npm ci && npm run build && cd ..
+
+# Set your version
+RELEASE="v0.1.1-dev"
+
+# Create directory structure on server
+ssh pascal@18.236.225.135 "mkdir -p /home/pascal/projects/matatu/releases/$RELEASE/{bin,frontend/dist,migrations,scripts}"
+
+# Upload frontend (your original goal)
+rsync -avz --delete --progress frontend/dist/ pascal@18.236.225.135:/home/pascal/projects/matatu/releases/$RELEASE/frontend/dist/
+
+# Upload migrations and scripts
+rsync -avz --progress migrations/ pascal@18.236.225.135:/home/pascal/projects/matatu/releases/$RELEASE/migrations/
+rsync -avz --progress scripts/ pascal@18.236.225.135:/home/pascal/projects/matatu/releases/$RELEASE/scripts/
+
+# Activate the release
+ssh pascal@18.236.225.135 "ln -nfs /home/pascal/projects/matatu/releases/$RELEASE /home/pascal/projects/matatu/current-dev"
+
+# Run migrations
+ssh pascal@18.236.225.135 "cd /home/pascal/projects/matatu/current-dev && ./scripts/migrate.sh"
+
+# Restart service to pick up frontend changes
+ssh pascal@18.236.225.135 "sudo supervisorctl restart playmatatu-dev"
 ---
 
 

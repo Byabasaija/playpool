@@ -81,8 +81,14 @@ export const RematchPage: React.FC = () => {
   // Redirect when game is found
   React.useEffect(() => {
     if (stage === 'found' && gameLink) {
-      const token = gameLink.split('/g/')[1]?.split('?')[0];
-      if (token) navigate(`/g/${token}${gameLink.includes('?') ? gameLink.substring(gameLink.indexOf('?')) : ''}`);
+      // Check if it's an absolute URL
+      if (gameLink.startsWith('http')) {
+        const url = new URL(gameLink);
+        navigate(url.pathname + url.search);
+      } else {
+        const token = gameLink.split('/g/')[1]?.split('?')[0];
+        if (token) navigate(`/g/${token}${gameLink.includes('?') ? gameLink.substring(gameLink.indexOf('?')) : ''}`);
+      }
     }
   }, [stage, gameLink, navigate]);
 

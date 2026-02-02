@@ -11,6 +11,7 @@ import (
 	"github.com/playmatatu/backend/internal/config"
 	"github.com/playmatatu/backend/internal/database"
 	"github.com/playmatatu/backend/internal/game"
+	"github.com/playmatatu/backend/internal/middleware"
 	"github.com/playmatatu/backend/internal/migrations"
 	"github.com/playmatatu/backend/internal/payment"
 	"github.com/playmatatu/backend/internal/redis"
@@ -93,6 +94,10 @@ func main() {
 	}
 
 	router := gin.Default()
+
+	// Apply CORS middleware before routes
+	router.Use(middleware.CORSMiddleware(cfg))
+	router.Use(middleware.WebSocketCORSCheck(cfg))
 
 	// Initialize API handlers
 	api.SetupRoutes(router, db, rdb, cfg)

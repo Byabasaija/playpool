@@ -21,7 +21,13 @@ export const JoinPage: React.FC = () => {
   // Redirect when game is found (for join flow)
   useEffect(() => {
     if (stage === 'found' && gameLink) {
-      navigate(gameLink);
+      // Check if it's an absolute URL
+      if (gameLink.startsWith('http')) {
+        const url = new URL(gameLink);
+        navigate(url.pathname + url.search);
+      } else {
+        navigate(gameLink);
+      }
     }
   }, [stage, gameLink, navigate]);
 
