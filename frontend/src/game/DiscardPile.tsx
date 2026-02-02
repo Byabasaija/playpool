@@ -27,9 +27,9 @@ function seededRand(seed: number) {
 }
 
 const DiscardPileInner: React.FC<DiscardPileProps> = ({ cards }) => {
-  // If there are no cards in the discard pile, render nothing
+  // If there are no cards in the discard pile, render invisible placeholder to maintain layout balance
   if (!cards || cards.length === 0) {
-    return null;
+    return <div className="relative w-24 h-36 invisible" />;
   }
 
   // Compute deterministic transforms so they don't change on each parent re-render

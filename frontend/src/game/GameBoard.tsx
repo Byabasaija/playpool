@@ -6,7 +6,8 @@ import { DiscardPile } from './DiscardPile';
 import { DeckStack } from './DeckStack';
 import { TurnIndicator } from './TurnIndicator';
 import { SuitSelector } from './SuitSelector';
-import { cardToCode } from '../utils/cardUtils';
+import { SuitReveal } from './SuitReveal';
+import { cardToCode, SUIT_COLORS, SUIT_SYMBOLS } from '../utils/cardUtils';
 import { OutgoingWSMessage } from '../types/websocket.types';
 import { useSound } from '../hooks/useSound';
 import { canPlayCard } from '../utils/cardUtils';
@@ -28,6 +29,7 @@ interface GameBoardProps {
   opponentDisplayName?: string | null;
   myConnected?: boolean;
   opponentConnected?: boolean;
+  revealedSuit?: CardType['suit'] | null;
 }
 
 export const GameBoard: React.FC<GameBoardProps> = ({
@@ -46,7 +48,8 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   myDisplayName,
   opponentDisplayName,
   myConnected,
-  opponentConnected
+  opponentConnected,
+  revealedSuit
 }) => {
   console.log('[UI] DiscardPile type in GameBoard:', typeof DiscardPile, DiscardPile);
   const [showSuitSelector, setShowSuitSelector] = useState(false);
@@ -140,7 +143,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
       </div>
 
       {/* Game Center Area */}
-      <div className="flex-1 flex items-center justify-center gap-12">
+      <div className="flex-1 flex items-center justify-center gap-12 relative">
         {/* Deck */}
         <DeckStack
           deckCount={deckCount}
@@ -158,6 +161,17 @@ export const GameBoard: React.FC<GameBoardProps> = ({
 
         {/* Discard Pile */}
         <DiscardPile cards={discardPileCards} />
+        
+        {/* Suit Reveal - positioned in center of game area */}
+        {revealedSuit && (
+          <div className="absolute inset-0 flex items-center justify-center z-50 pointer-events-none">
+            <div className="bg-white/95 rounded-xl px-6 py-4 shadow-2xl flex items-center gap-3 pointer-events-auto border-2 border-gray-200">
+              <div className="text-4xl" style={{ color: SUIT_COLORS[revealedSuit] }}>
+                {SUIT_SYMBOLS[revealedSuit]}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Player Hand (Bottom) */}
@@ -184,7 +198,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
             }}
             className="text-sm bg-red-600 hover:bg-red-700 text-white py-1 px-3 rounded-md shadow-sm"
           >
-            Concede
+            CONCEDE
           </button>
         </div>
       </div>

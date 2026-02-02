@@ -4,7 +4,6 @@ import { useWebSocket } from '../hooks/useWebsockets';
 import { GameBoard } from '../game/GameBoard';
 import { WSMessage, OutgoingWSMessage } from '../types/websocket.types';
 import { useSound } from '../hooks/useSound';
-import { SuitReveal } from '../game/SuitReveal';
 import { Card as CardType } from '../types/game.types';
 import { checkPlayerStatus } from '../utils/apiClient';
 import SetPinModal from '../components/SetPinModal';
@@ -498,9 +497,9 @@ export const GamePage: React.FC = () => {
         opponentDisplayName={gameState.opponentDisplayName}
         myConnected={gameState.myConnected}
         opponentConnected={gameState.opponentConnected}
+        revealedSuit={revealedSuit}
       />
 
-      {revealedSuit && <SuitReveal suit={revealedSuit} />}
       {notice && (
         <div className="fixed top-6 right-6 bg-black bg-opacity-60 text-white px-4 py-2 rounded">
           {notice}

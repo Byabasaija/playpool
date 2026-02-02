@@ -18,9 +18,9 @@ export const DeckStack: React.FC<DeckStackProps> = ({
 }) => {
   return (
     <div className="relative" style={{ width: '140px', height: '120px' }}>
-      {/* Chop Card (underneath) */}
+      {/* Chop Card (underneath, extended to the right for better visibility) */}
       {chopCard && (
-        <div className="absolute left-0 top-1/2 transform -translate-y-1/2 -rotate-90 z-0">
+        <div className="absolute left-6 top-1/2 transform -translate-y-1/2 -rotate-90 z-0">
           <img
             src={getCardImageUrl(chopCard)}
             alt={`${chopCard.rank} of ${chopCard.suit} (Chop Card)`}
