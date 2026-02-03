@@ -6,6 +6,12 @@
     <link rel="stylesheet" href="/index.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     
+    <!-- Performance optimizations: DNS and connection setup -->
+    <link rel="dns-prefetch" href="https://api.playmatatu.com" />
+    <link rel="preconnect" href="https://api.playmatatu.com" crossorigin />
+    <link rel="dns-prefetch" href="https://deckofcardsapi.com" />
+    <link rel="preconnect" href="https://deckofcardsapi.com" crossorigin />
+    
     <!-- Preload critical images for faster loading and prevent CLS -->
     <link rel="preload" as="image" href="/logo.webp" type="image/webp" fetchpriority="high" />
     <link rel="preload" as="image" href="/background.webp" type="image/webp" />

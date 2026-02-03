@@ -1,6 +1,28 @@
 import { useState, useCallback } from 'react';
 import { initiateStake, pollMatchStatus, pollMatchStatusByPhone } from '../utils/apiClient';
 
+// Prefetch common cards to speed up game loading
+function prefetchCommonCards() {
+  // Prefetch most common starting cards (numbers 2-10 in all suits)
+  const ranks = ['2', '3', '4', '5', '6', '7', '8', '9', '10'];
+  const suits = ['H', 'D', 'C', 'S'];
+  
+  const imagesToPrefetch: string[] = [];
+  ranks.forEach(rank => {
+    suits.forEach(suit => {
+      imagesToPrefetch.push(`https://deckofcardsapi.com/static/img/${rank}${suit}.png`);
+    });
+  });
+
+  // Start prefetching in parallel
+  imagesToPrefetch.forEach(url => {
+    const img = new Image();
+    img.src = url;
+  });
+  
+  console.log('[PREFETCH] Started loading', imagesToPrefetch.length, 'common cards');
+}
+
 export type MatchmakingStage = 'form' | 'payment' | 'payment_pending' | 'matching' | 'found' | 'error' | 'expired' | 'declined' | 'private_created';
 
 export function useMatchmaking() {
@@ -38,8 +60,9 @@ export function useMatchmaking() {
     if (displayName) setDisplayName(displayName);
 
     try {
-      const maxAttempts = 60; // 3 minutes (60 * 3 seconds)
+      const maxAttempts = 60; // 3 minutes max
       let attempts = 0;
+      let pollInterval = 1000; // Start at 1 second for faster match detection
 
       const poll = async (): Promise<void> => {
         const result = await pollMatchStatus(queueToken);
@@ -47,6 +70,9 @@ export function useMatchmaking() {
         if (result.my_display_name) setDisplayName(result.my_display_name);
 
         if (result.status === 'matched' && result.game_link) {
+          // Match found! Prefetch cards immediately
+          prefetchCommonCards();
+          
           // Persist player token from the returned game_link
           try {
             const u = new URL(result.game_link);
@@ -92,7 +118,11 @@ export function useMatchmaking() {
           return;
         }
 
-        setTimeout(poll, 3000);
+        // Adaptive backoff
+        if (result.status === 'queued') {
+          pollInterval = Math.min(pollInterval * 1.15, 3000);
+        }
+        setTimeout(poll, pollInterval);
       };
 
       await poll();
@@ -155,6 +185,9 @@ export function useMatchmaking() {
 
             // If matched immediately (unlikely but possible)
             if (result.status === 'matched' && result.game_link) {
+              // Start prefetching cards
+              prefetchCommonCards();
+              
               try {
                 const u = new URL(result.game_link);
                 const pt = u.searchParams.get('pt');
@@ -216,6 +249,9 @@ export function useMatchmaking() {
 
       // Check if immediately matched
       if (stakeResult.status === 'matched' && stakeResult.game_link) {
+        // Start prefetching cards immediately
+        prefetchCommonCards();
+        
         // Persist the player token from the game_link (pt query param) for reconnect fallback
         try {
           const u = new URL(stakeResult.game_link);
@@ -237,9 +273,10 @@ export function useMatchmaking() {
       // Show matching stage
       setStage('matching');
 
-      // Poll for match (3 minutes max)
-      const maxAttempts = 60; // 3 minutes (60 * 3 seconds)
+      // Adaptive polling: Start aggressive, back off if no match
+      const maxAttempts = 60; // 3 minutes max
       let attempts = 0;
+      let pollInterval = 1000; // Start at 1 second for faster match detection
 
       const poll = async (): Promise<void> => {
         const token = stakeResult.queue_token || stakeResult.player_id;
@@ -249,6 +286,9 @@ export function useMatchmaking() {
         if (result.my_display_name) setDisplayName(result.my_display_name);
 
         if (result.status === 'matched' && result.game_link) {
+          // Match found! Start prefetching cards immediately
+          prefetchCommonCards();
+          
           // Persist player token from the returned game_link
           try {
             const u = new URL(result.game_link);
@@ -294,7 +334,11 @@ export function useMatchmaking() {
           return;
         }
 
-        setTimeout(poll, 3000);
+        // Adaptive backoff
+        if (result.status === 'queued') {
+          pollInterval = Math.min(pollInterval * 1.15, 3000);
+        }
+        setTimeout(poll, pollInterval);
       };
 
       await poll();
