@@ -6,13 +6,12 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
-	"math"
 	"math/big"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -294,19 +293,28 @@ func AuthMiddleware(cfg *config.Config, rdb *redis.Client) gin.HandlerFunc {
 		ctx := context.Background()
 		payload, err := rdb.Get(ctx, fmt.Sprintf("action_token:%s", tokenHashStr)).Result()
 		if err == nil {
-			// Parse player_id from action token payload
-			if strings.Contains(payload, `"player_id":`) {
-				// Extract player_id from JSON payload
-				parts := strings.Split(payload, `"player_id":`)
-				if len(parts) > 1 {
-					idPart := strings.Split(parts[1], ",")[0]
-					if playerID, err := strconv.Atoi(strings.TrimSpace(idPart)); err == nil {
-						c.Set("player_id", playerID)
-						c.Next()
-						return
-					}
-				}
+			// Parse action token payload as JSON
+			var tokenData struct {
+				Phone      string `json:"phone"`
+				Action     string `json:"action"`
+				PlayerID   int    `json:"player_id"`
+				CreatedAt  string `json:"created_at"`
+				AuthMethod string `json:"auth_method"`
 			}
+
+			if err := json.Unmarshal([]byte(payload), &tokenData); err != nil {
+				log.Printf("AuthMiddleware: failed to parse action token payload: %v", err)
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+				return
+			}
+
+			if tokenData.PlayerID > 0 {
+				c.Set("player_id", tokenData.PlayerID)
+				c.Next()
+				return
+			}
+		} else if err != redis.Nil {
+			log.Printf("AuthMiddleware: Redis error checking action token: %v", err)
 		}
 
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
@@ -410,10 +418,7 @@ func RequestWithdraw(db *sqlx.DB, cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
-		// Compute provider fee (visual) but do not apply it to player_winnings (they already paid commission earlier)
-		feePct := cfg.WithdrawProviderFeePercent
-		fee := math.Round(req.Amount*float64(feePct)) / 100.0
-		net := req.Amount - fee
+		// Provider will handle their own fees, we transfer the full requested amount
 
 		// Reserve funds: debit player_winnings -> settlement inside tx and create withdraw_request
 		tx, err := db.Beginx()
@@ -439,7 +444,7 @@ func RequestWithdraw(db *sqlx.DB, cfg *config.Config) gin.HandlerFunc {
 
 		// Insert withdraw_request
 		var reqID int
-		if err := tx.QueryRowx(`INSERT INTO withdraw_requests (player_id, amount, fee, net_amount, method, destination, status, created_at) VALUES ($1,$2,$3,$4,$5,$6,'PENDING',NOW()) RETURNING id`, pid, req.Amount, fee, net, req.Method, req.Destination).Scan(&reqID); err != nil {
+		if err := tx.QueryRowx(`INSERT INTO withdraw_requests (player_id, amount, fee, net_amount, method, destination, status, created_at) VALUES ($1,$2,$3,$4,$5,$6,'PENDING',NOW()) RETURNING id`, pid, req.Amount, 0, req.Amount, req.Method, req.Destination).Scan(&reqID); err != nil {
 			tx.Rollback()
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create withdraw request"})
 			return
@@ -452,18 +457,18 @@ func RequestWithdraw(db *sqlx.DB, cfg *config.Config) gin.HandlerFunc {
 
 		// If MOCK_MODE, process immediately (synchronously) with simulated transfers
 		if cfg.MockMode {
-			go func(reqID int, amount, fee, net float64) {
-				processWithdrawMock(db, cfg, reqID, pid, amount, fee, net)
-			}(reqID, req.Amount, fee, net)
+			go func(reqID int, amount float64) {
+				processWithdrawMock(db, cfg, reqID, pid, amount)
+			}(reqID, req.Amount)
 		}
 
-		c.JSON(http.StatusOK, gin.H{"request_id": reqID, "amount": req.Amount, "fee": fee, "net": net})
+		c.JSON(http.StatusOK, gin.H{"request_id": reqID, "amount": req.Amount})
 	}
 }
 
-// processWithdrawMock simulates a payout: settlement -> money leaves system (fee to provider, net to user)
-func processWithdrawMock(db *sqlx.DB, cfg *config.Config, reqID, pid int, amount, fee, net float64) {
-	log.Printf("[WITHDRAW MOCK] Processing withdraw=%d amount=%.2f fee=%.2f net=%.2f", reqID, amount, fee, net)
+// processWithdrawMock simulates a payout: settlement -> money leaves system (full amount to provider)
+func processWithdrawMock(db *sqlx.DB, cfg *config.Config, reqID, pid int, amount float64) {
+	log.Printf("[WITHDRAW MOCK] Processing withdraw=%d amount=%.2f", reqID, amount)
 	// allow sim failure via env var
 	if os.Getenv("WITHDRAW_MOCK_FAIL") == "true" {
 		log.Printf("[WITHDRAW MOCK] Simulated failure for request %d", reqID)
@@ -542,8 +547,8 @@ func processWithdrawMock(db *sqlx.DB, cfg *config.Config, reqID, pid int, amount
 		return
 	}
 
-	// Record player transaction (net amount)
-	if _, err := tx.Exec(`INSERT INTO transactions (player_id, transaction_type, amount, status, created_at) VALUES ($1,'WITHDRAW',$2,'COMPLETED',NOW())`, pid, net); err != nil {
+	// Record player transaction (full amount - provider will handle their own fees)
+	if _, err := tx.Exec(`INSERT INTO transactions (player_id, transaction_type, amount, status, created_at) VALUES ($1,'WITHDRAW',$2,'COMPLETED',NOW())`, pid, amount); err != nil {
 		tx.Rollback()
 		log.Printf("[WITHDRAW MOCK] failed to insert transaction: %v", err)
 		return

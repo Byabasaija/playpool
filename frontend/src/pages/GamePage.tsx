@@ -9,6 +9,19 @@ import { checkPlayerStatus } from '../utils/apiClient';
 import SetPinModal from '../components/SetPinModal';
 
 export const GamePage: React.FC = () => {
+  // Background image preloading
+  const [backgroundLoaded, setBackgroundLoaded] = useState(false);
+  // Token resolution state
+  const [tokensReady, setTokensReady] = useState(false);
+  const [resolvedGameToken, setResolvedGameToken] = useState('');
+  const [resolvedPlayerToken, setResolvedPlayerToken] = useState('');
+  
+  useEffect(() => {
+    const img = new Image();
+    img.src = '/background.jpg';
+    img.onload = () => setBackgroundLoaded(true);
+    img.onerror = () => setBackgroundLoaded(true); // Fallback in case of error
+  }, []);
   const urlParams = new URLSearchParams(window.location.search)
 
   const playerToken = urlParams.get('pt')
@@ -70,6 +83,10 @@ export const GamePage: React.FC = () => {
     }
 
     if (gt && tokenToUse) {
+      // Set resolved tokens and mark as ready
+      setResolvedGameToken(gt);
+      setResolvedPlayerToken(tokenToUse);
+      setTokensReady(true);
       setTokens(gt, tokenToUse);
     }
   }, [playerToken, setTokens, gt]);
@@ -78,12 +95,9 @@ export const GamePage: React.FC = () => {
     console.log('WebSocket connected');
 
     // If game hasn't started yet, try a REST snapshot to recover any missed initial game_state
-    if (!gameStarted && gt) {
-      const tokenToUse = playerToken || (typeof window !== 'undefined' ? (sessionStorage.getItem('playerToken_' + gt) || '') : '');
-      if (!tokenToUse) return;
-
+    if (!gameStarted && resolvedGameToken && resolvedPlayerToken) {
       try {
-        const resp = await fetch(`/api/v1/game/${gt}?pt=${tokenToUse}`);
+        const resp = await fetch(`/api/v1/game/${resolvedGameToken}?pt=${resolvedPlayerToken}`);
         if (!resp.ok) return;
         const data = await resp.json();
         if (data && Object.keys(data).length > 0) {
@@ -96,7 +110,7 @@ export const GamePage: React.FC = () => {
         console.error('Snapshot fetch on WS open failed:', e);
       }
     }
-  }, [gameStarted, gt, playerToken, updateFromWSMessage]);
+  }, [gameStarted, resolvedGameToken, resolvedPlayerToken, updateFromWSMessage]);
 
   const handleWSMessage = useCallback((message: WSMessage) => {
     console.log('Received message:', message);
@@ -248,8 +262,8 @@ export const GamePage: React.FC = () => {
   }, [updateFromWSMessage, addCardsToHand, updateOpponentCardCount, setCanPass]);
 
   const { connected, send: sendWSMessage } = useWebSocket({
-    gameToken: gt,
-    playerToken: playerToken || '',
+    gameToken: tokensReady ? resolvedGameToken : '',
+    playerToken: tokensReady ? resolvedPlayerToken : '',
     onMessage: handleWSMessage,
     onOpen: handleOpen,
     onClose: useCallback(() => console.log('WebSocket disconnected'), []),
@@ -479,7 +493,15 @@ export const GamePage: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen" style={{ backgroundImage: "url('/background.jpg')", backgroundSize: 'cover', backgroundPosition: 'center' }}>
+    <div 
+      className="min-h-screen w-full overflow-hidden" 
+      style={{ 
+        backgroundImage: backgroundLoaded ? "url('/background.jpg')" : 'none',
+        backgroundSize: 'cover', 
+        backgroundPosition: 'center',
+        backgroundColor: backgroundLoaded ? 'transparent' : '#2a2a2a' // Fallback dark color instead of white
+      }}
+    >
       <GameBoard
         myHand={gameState.myHand}
         opponentCardCount={gameState.opponentCardCount}
@@ -506,14 +528,24 @@ export const GamePage: React.FC = () => {
         </div>
       )}
 
-      {/* Idle warning banner (non-blocking, minimal) */}
+      {/* Idle warning badge (non-blocking, top center) */}
       {idleRemaining !== null && (
-        <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-yellow-100 text-black px-4 py-2 rounded">
-          {idlePlayer && idlePlayer === (gameState as any).playerId ? (
-            <span>You are inactive — will forfeit in {idleRemaining}s</span>
-          ) : (
-            <span>{(gameState as any).opponentDisplayName || 'Opponent'} inactive — will forfeit in {idleRemaining}s</span>
-          )}
+        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-40">
+          <div className={`
+            px-3 py-2 rounded-lg shadow-lg text-center font-semibold text-xs sm:text-sm
+            ${idleRemaining <= 10 ? 'bg-red-500 text-white animate-pulse' : 
+              idleRemaining <= 20 ? 'bg-orange-400 text-white' : 
+              'bg-yellow-300 text-black'}
+            transition-all duration-300
+          `}>
+            <div className="flex items-center gap-1">
+              <span>⚠️</span>
+              <span>
+                {idlePlayer && idlePlayer === (gameState as any).playerId ? 'Inactive' : `${(gameState as any).opponentDisplayName || 'Opponent'} inactive`}
+              </span>
+              <span className="font-bold">{idleRemaining}s</span>
+            </div>
+          </div>
         </div>
       )}
     </div>

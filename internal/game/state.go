@@ -862,8 +862,16 @@ func (g *GameState) SetPlayerConnected(playerID string, connected bool) {
 
 	if g.Player1.ID == playerID {
 		g.Player1.Connected = connected
+		// Clear disconnect time when reconnecting
+		if connected {
+			g.Player1.DisconnectedAt = nil
+		}
 	} else if g.Player2.ID == playerID {
 		g.Player2.Connected = connected
+		// Clear disconnect time when reconnecting
+		if connected {
+			g.Player2.DisconnectedAt = nil
+		}
 	}
 }
 
@@ -918,6 +926,19 @@ func (g *GameState) ClearPlayerDisconnectTime(playerID string) {
 	} else if g.Player2.ID == playerID {
 		g.Player2.DisconnectedAt = nil
 	}
+}
+
+// GetOpponentID returns the opponent's player ID for the given player
+func (g *GameState) GetOpponentID(playerID string) string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	if g.Player1.ID == playerID {
+		return g.Player2.ID
+	} else if g.Player2.ID == playerID {
+		return g.Player1.ID
+	}
+	return ""
 }
 
 // ForfeitByDisconnect forfeits the game due to disconnect grace period expiry

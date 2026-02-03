@@ -112,3 +112,6 @@ coverage.html
 # Documentation generation
 docs/_build/
 site/
+
+# Go server binary
+server

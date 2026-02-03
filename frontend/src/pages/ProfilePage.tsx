@@ -1,13 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { getConfig, checkPlayerStatus, verifyPIN, requestOTP, verifyOTPAction, resetPIN } from '../utils/apiClient';
-import { GetWithdrawsResponse } from '../types/api.types';
 import PinInput from '../components/PinInput';
 
 export const ProfilePage: React.FC = () => {
   const [phoneRest, setPhoneRest] = useState('');
   const [message, setMessage] = useState<string | null>(null);
-  const [token, setToken] = useState<string | null>(() => sessionStorage.getItem('auth_token'));
   const [profile, setProfile] = useState<any>(null);
   const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(false);
@@ -15,7 +13,6 @@ export const ProfilePage: React.FC = () => {
   const [config, setConfig] = useState<any>(null);
   const [withdrawAmount, setWithdrawAmount] = useState<number | ''>('');
   const [withdraws, setWithdraws] = useState<any[]>([]);
-  const [loadingWithdraws, setLoadingWithdraws] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [showWithdrawForm, setShowWithdrawForm] = useState(false);
   const [showAllWithdraws, setShowAllWithdraws] = useState(false);
@@ -26,13 +23,17 @@ export const ProfilePage: React.FC = () => {
 
   // PIN-related state
   const [hasPin, setHasPin] = useState<boolean>(false);
-  const [showPinEntry, setShowPinEntry] = useState<boolean>(false);
+  const [showPinEntry, setShowPinEntry] = useState<boolean>(true);
   const [pinError, setPinError] = useState<string | undefined>(undefined);
   const [pinLoading, setPinLoading] = useState<boolean>(false);
   const [pinLockoutUntil, setPinLockoutUntil] = useState<string | null>(null);
   const [showForgotPin, setShowForgotPin] = useState<boolean>(false);
   const [forgotPinStep, setForgotPinStep] = useState<'otp' | 'new_pin' | 'confirm_pin'>('otp');
   const [newPin, setNewPin] = useState<string>('');
+  
+  // Session-only token (not persisted)
+  const [token, setToken] = useState<string | null>(null);
+  const [loadingWithdraws, setLoadingWithdraws] = useState(false);
   const [otpActionToken, setOtpActionToken] = useState<string | null>(null);
   // Forgot PIN OTP flow state
   const [otpRequested, setOtpRequested] = useState(false);
@@ -74,22 +75,6 @@ export const ProfilePage: React.FC = () => {
     })();
   }, []);
 
-  useEffect(() => {
-    if (token) {
-      (async () => {
-        setLoadingWithdraws(true);
-        try {
-          const resp = await fetch('/api/v1/me/withdraws', { headers: { Authorization: `Bearer ${token}` } });
-          if (resp.ok) {
-            const d = await resp.json() as GetWithdrawsResponse;
-            setWithdraws(d.withdraws || []);
-          }
-        } catch (e) {}
-        setLoadingWithdraws(false);
-      })();
-    }
-  }, [token]);
-
   const fetchProfile = async (t: string) => {
     try {
       const resp = await fetch('/api/v1/me', { headers: { 'Authorization': `Bearer ${t}` } });
@@ -112,8 +97,7 @@ export const ProfilePage: React.FC = () => {
   };
 
   const signOut = () => {
-    sessionStorage.removeItem('auth_token');
-    setToken(null);
+    // Clear all local data and return to landing page
     setProfile(null);
     setStats(null);
     navigate('/');
@@ -144,6 +128,51 @@ export const ProfilePage: React.FC = () => {
     }
   };
 
+  // Fetch all profile data using token immediately, then discard token
+  const fetchAllProfileData = async (token: string) => {
+    try {
+      // Fetch profile data
+      const resp = await fetch('/api/v1/me', { 
+        headers: { 'Authorization': `Bearer ${token}` } 
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        setProfile(data);
+        
+        // Fetch stats using public endpoint (no auth required)
+        if (data && data.phone) {
+          const sresp = await fetch(`/api/v1/player/${encodeURIComponent(data.phone)}/stats`);
+          if (sresp.ok) {
+            const sdata = await sresp.json();
+            setStats(sdata);
+          }
+        }
+        
+        // Fetch withdraws with the same token
+        try {
+          setLoadingWithdraws(true);
+          const wresp = await fetch('/api/v1/me/withdraws', { 
+            headers: { Authorization: `Bearer ${token}` } 
+          });
+          if (wresp.ok) {
+            const wdata = await wresp.json();
+            setWithdraws(wdata.withdraws || []);
+          }
+        } catch (e) {
+          // Withdraws fetch failed, but profile succeeded
+        } finally {
+          setLoadingWithdraws(false);
+        }
+        
+        // Token is now used and discarded - no storage
+      } else {
+        setPinError('Failed to load profile');
+      }
+    } catch (error) {
+      setPinError('Failed to load profile data');
+    }
+  };
+
   const handlePinSubmit = async (pin: string) => {
     setPinError(undefined);
     setPinLoading(true);
@@ -151,28 +180,12 @@ export const ProfilePage: React.FC = () => {
     try {
       const result = await verifyPIN(fullPhone, pin, 'view_profile');
       if (result.action_token) {
-        // Fetch profile using the action token
-        const resp = await fetch('/api/v1/me', { 
-          headers: { 'Authorization': `Bearer ${result.action_token}` } 
-        });
-        if (resp.ok) {
-          const data = await resp.json();
-          setProfile(data);
-          sessionStorage.setItem('auth_token', result.action_token);
-          setToken(result.action_token);
-          // Save phone to localStorage for returning user experience
-          localStorage.setItem('playmatatu_phone', fullPhone);
-          // Fetch stats
-          if (data && data.phone) {
-            const sresp = await fetch(`/api/v1/player/${encodeURIComponent(data.phone)}/stats`);
-            if (sresp.ok) {
-              const sdata = await sresp.json();
-              setStats(sdata);
-            }
-          }
-        } else {
-          setPinError('Failed to load profile');
-        }
+        // Use token immediately for all profile-related requests, then store for session only
+        setToken(result.action_token);
+        await fetchAllProfileData(result.action_token);
+        // Save phone to localStorage for returning user convenience
+        localStorage.setItem('playmatatu_phone', fullPhone);
+        setShowPinEntry(false);
       }
     } catch (e: any) {
       if (e.lockout_until) {
@@ -292,11 +305,36 @@ export const ProfilePage: React.FC = () => {
   };
 
   const confirmWithdraw = async () => {
-    if (!token || !withdrawAmount) return;
+    if (!withdrawAmount) return;
     setConfirmLoading(true);
     try {
+      // Require fresh PIN verification for withdrawal
+      const pin = prompt('Enter your PIN to authorize withdrawal:');
+      if (!pin) {
+        setMessage('PIN required for withdrawal');
+        setConfirmLoading(false);
+        return;
+      }
+      
+      const phone = localStorage.getItem('playmatatu_phone');
+      if (!phone) {
+        setMessage('Phone not available');
+        setConfirmLoading(false);
+        return;
+      }
+      
+      // Get fresh token for withdrawal
+      const result = await verifyPIN(phone, pin, 'view_profile');
+      if (!result.action_token) {
+        setMessage('PIN verification failed');
+        setConfirmLoading(false);
+        return;
+      }
+      
+      // Use token immediately for withdrawal
       const resp = await fetch('/api/v1/me/withdraw', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${result.action_token}` },
         body: JSON.stringify({ amount: Number(withdrawAmount), method: 'MOMO', destination: '' })
       });
       const data = await resp.json();
@@ -306,15 +344,12 @@ export const ProfilePage: React.FC = () => {
         setMessage('Withdraw requested');
         setShowConfirmModal(false);
         setWithdrawAmount('');
-        // refresh withdraws list
-        const wresp = await fetch('/api/v1/me/withdraws', { headers: { Authorization: `Bearer ${token}` } });
-        if (wresp.ok) {
-          const d = await wresp.json() as GetWithdrawsResponse;
-          setWithdraws(d.withdraws || []);
-        }
+        // Refresh profile data requires new PIN entry
+        setProfile(null);
+        setShowPinEntry(true);
       }
-    } catch (e) {
-      setMessage('Network error');
+    } catch (e: any) {
+      setMessage(e.message || 'Network error');
     }
     setConfirmLoading(false);
   };
@@ -327,7 +362,7 @@ export const ProfilePage: React.FC = () => {
           <h2 className="text-2xl font-bold">Profile</h2>
         </div>
 
-        {!token ? (
+        {showPinEntry ? (
           <div className="space-y-4">
             {/* Forgot PIN flow */}
             {showForgotPin ? (

@@ -87,8 +87,12 @@ export const JoinPage: React.FC = () => {
     
     try {
       setFormError(null);
-      const result = await verifyPIN(invitePhone, pin, 'rematch');
+      // Use appropriate action based on whether we're staking winnings
+      const action = useWinnings ? 'stake_winnings' : 'rematch';
+      const result = await verifyPIN(invitePhone, pin, action);
       if (result.action_token) {
+        // Store the action token for later use
+        sessionStorage.setItem('join_action_token', result.action_token);
         setIsAuthenticated(true);
         // Refresh player profile for latest balance
         const profile = await getPlayerProfile(invitePhone);
@@ -110,6 +114,13 @@ export const JoinPage: React.FC = () => {
         const opts: any = { match_code: matchCode };
         if (useWinnings) {
           opts.source = 'winnings';
+          // Include the action token for winnings authentication
+          const actionToken = sessionStorage.getItem('join_action_token');
+          if (actionToken) {
+            opts.action_token = actionToken;
+            // Clean up the token after use
+            sessionStorage.removeItem('join_action_token');
+          }
         }
         await startGame(invitePhone, stake, playerProfile.display_name, opts);
       } else {

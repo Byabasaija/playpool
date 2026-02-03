@@ -295,9 +295,31 @@ export const LandingPage: React.FC = () => {
 
   
 
-  // Handle useWinnings toggle change - simplified for PIN-authenticated users
+  // Handle useWinnings toggle change - require additional PIN verification for winnings
   const handleUseWinningsChange = async (enabled: boolean) => {
-    setUseWinnings(enabled);
+    if (enabled && isAuthenticated) {
+      // Need to reverify PIN with stake_winnings action
+      const full = '256' + phoneRest.replace(/\D/g, '');
+      try {
+        // Temporarily prompt for PIN again to get stake_winnings token
+        const pin = prompt('Enter your PIN to authorize winnings usage:');
+        if (pin) {
+          const result = await verifyPIN(full, pin, 'stake_winnings');
+          if (result.action_token) {
+            sessionStorage.setItem('landing_action_token', result.action_token);
+            setUseWinnings(true);
+          }
+        }
+      } catch (err: any) {
+        alert('PIN verification failed: ' + (err.message || 'Invalid PIN'));
+        setUseWinnings(false);
+      }
+    } else {
+      setUseWinnings(enabled);
+      if (!enabled) {
+        sessionStorage.removeItem('landing_action_token');
+      }
+    }
   };
 
   // const handleRequestOTP = async () => {
@@ -401,10 +423,15 @@ export const LandingPage: React.FC = () => {
     if (matchCodeInput) opts.match_code = matchCodeInput.trim().toUpperCase();
 
     // Include action token if using winnings
-    // if (useWinnings && actionToken) {
-    //   opts.source = 'winnings';
-    //   opts.action_token = actionToken;
-    // }
+    if (useWinnings) {
+      opts.source = 'winnings';
+      const actionToken = sessionStorage.getItem('landing_action_token');
+      if (actionToken) {
+        opts.action_token = actionToken;
+        // Clean up the token after use
+        sessionStorage.removeItem('landing_action_token');
+      }
+    }
 
     await startGame(full, stake, displayNameInput || generateRandomName(), opts);
   };
@@ -695,7 +722,7 @@ export const LandingPage: React.FC = () => {
                   const full = '256' + phoneRest.replace(/\D/g, '');
                   const inviteFull = isPrivate && invitePhoneRest ? '256' + invitePhoneRest.replace(/\D/g, '') : undefined;
                   
-                  const opts: { create_private?: boolean; invite_phone?: string; source?: string } = {
+                  const opts: { create_private?: boolean; invite_phone?: string; source?: string; action_token?: string } = {
                     create_private: isPrivate,
                     invite_phone: inviteFull
                   };
@@ -703,6 +730,12 @@ export const LandingPage: React.FC = () => {
                   // Add winnings source if using balance
                   if (useWinnings) {
                     opts.source = 'winnings';
+                    const actionToken = sessionStorage.getItem('landing_action_token');
+                    if (actionToken) {
+                      opts.action_token = actionToken;
+                      // Clean up the token after use
+                      sessionStorage.removeItem('landing_action_token');
+                    }
                   }
 
                   startGame(full, stake, displayNameInput || undefined, opts);

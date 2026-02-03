@@ -124,8 +124,14 @@ export const RematchPage: React.FC = () => {
     setPinLoading(true);
     setPinError(undefined);
     try {
-      // Simply verify PIN for authentication, no need for action token
-      await verifyPIN(playerPhone, pin, 'rematch');
+      // Use appropriate action based on whether we're staking winnings
+      const action = useWinnings ? 'stake_winnings' : 'rematch';
+      const result = await verifyPIN(playerPhone, pin, action);
+      
+      // Store the action token for later use in game creation
+      if (result.action_token) {
+        sessionStorage.setItem('rematch_action_token', result.action_token);
+      }
       
       // Load player profile after PIN verification
       await loadPlayerProfile(playerPhone);
@@ -183,6 +189,13 @@ export const RematchPage: React.FC = () => {
 
     if (useWinnings) {
       opts.source = 'winnings';
+      // Include the action token for winnings authentication
+      const actionToken = sessionStorage.getItem('rematch_action_token');
+      if (actionToken) {
+        opts.action_token = actionToken;
+        // Clean up the token after use
+        sessionStorage.removeItem('rematch_action_token');
+      }
     }
 
     await startGame(playerPhone, initialStake, displayNameInput || generateRandomName(), opts);

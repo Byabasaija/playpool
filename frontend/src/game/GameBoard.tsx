@@ -132,18 +132,18 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   );
 
   return (
-    <div className="relative w-full h-[600px] flex flex-col justify-center items-center">
+    <div className="relative w-full min-h-screen flex flex-col justify-between items-center py-2 px-2 sm:py-4 sm:px-4 md:justify-center md:h-[600px] overflow-hidden">
       {/* Opponent Hand (Top) */}
       <div className="flex-none">
-        <div className="flex items-center justify-center py-2">
+        <div className="flex items-center justify-center py-1 sm:py-2">
           {statusDot(opponentConnected)}
-          <div className="font-semibold text-white">{opponentDisplayName || 'Opponent'}</div>
+          <div className="font-semibold text-white text-sm sm:text-base">{opponentDisplayName || 'Opponent'}</div>
         </div>
         <OpponentHand cardCount={opponentCardCount} />
       </div>
 
       {/* Game Center Area */}
-      <div className="flex-1 flex items-center justify-center gap-12 relative">
+      <div className="flex-1 flex items-center justify-center gap-3 sm:gap-6 md:gap-12 relative min-h-[120px] sm:min-h-[150px]">
         {/* Deck */}
         <DeckStack
           deckCount={deckCount}
@@ -175,10 +175,10 @@ export const GameBoard: React.FC<GameBoardProps> = ({
       </div>
 
       {/* Player Hand (Bottom) */}
-      <div className="flex-none mb-4">
-        <div className="flex items-center justify-center py-2 mb-2">
+      <div className="flex-none mb-2 sm:mb-4">
+        <div className="flex items-center justify-center py-1 sm:py-2 mb-1 sm:mb-2">
           {statusDot(myConnected)}
-          <div className="font-semibold text-white">{myDisplayName || 'You'}</div>
+          <div className="font-semibold text-white text-sm sm:text-base">{myDisplayName || 'You'}</div>
         </div>
         <PlayerHand
           cards={myHand}
@@ -190,13 +190,13 @@ export const GameBoard: React.FC<GameBoardProps> = ({
         />
 
         {/* Concede button (small, placed near player hand) */}
-        <div className="flex items-center justify-center mt-3">
+        <div className="flex items-center justify-center mt-2">
           <button
             onClick={() => {
               if (!confirm('Are you sure you want to concede? This will immediately end the match and award the win to your opponent.')) return;
               sendMessage({ type: 'concede', data: {} });
             }}
-            className="text-sm bg-red-600 hover:bg-red-700 text-white py-1 px-3 rounded-md shadow-sm"
+            className="text-xs sm:text-sm bg-red-600 hover:bg-red-700 text-white py-1 px-2 sm:px-3 rounded-md shadow-sm"
           >
             CONCEDE
           </button>
