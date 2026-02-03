@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { getConfig, checkPlayerStatus, verifyPIN, requestOTP, verifyOTPAction, resetPIN } from '../utils/apiClient';
+import { getConfig, checkPlayerStatus, verifyPIN, requestOTP, verifyOTPAction, resetPIN, getProfile, getPlayerStats, getWithdraws, requestWithdraw } from '../utils/apiClient';
 import PinInput from '../components/PinInput';
 
 export const ProfilePage: React.FC = () => {
@@ -77,22 +77,21 @@ export const ProfilePage: React.FC = () => {
 
   const fetchProfile = async (t: string) => {
     try {
-      const resp = await fetch('/api/v1/me', { headers: { 'Authorization': `Bearer ${t}` } });
-      if (!resp.ok) throw new Error('Failed to fetch profile');
-      const data = await resp.json();
+      const data = await getProfile(t);
       setProfile(data);
 
       // fetch stats by phone if available
       if (data && data.phone) {
-        const sresp = await fetch(`/api/v1/player/${encodeURIComponent(data.phone)}/stats`);
-        if (sresp.ok) {
-          const sdata = await sresp.json();
+        try {
+          const sdata = await getPlayerStats(data.phone);
           setStats(sdata);
+        } catch (e) {
+          // Stats fetch is non-critical
         }
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      setMessage('Failed to load profile');
+      setMessage(e.message || 'Failed to load profile');
     }
   };
 
@@ -132,44 +131,33 @@ export const ProfilePage: React.FC = () => {
   const fetchAllProfileData = async (token: string) => {
     try {
       // Fetch profile data
-      const resp = await fetch('/api/v1/me', { 
-        headers: { 'Authorization': `Bearer ${token}` } 
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        setProfile(data);
-        
-        // Fetch stats using public endpoint (no auth required)
-        if (data && data.phone) {
-          const sresp = await fetch(`/api/v1/player/${encodeURIComponent(data.phone)}/stats`);
-          if (sresp.ok) {
-            const sdata = await sresp.json();
-            setStats(sdata);
-          }
-        }
-        
-        // Fetch withdraws with the same token
+      const data = await getProfile(token);
+      setProfile(data);
+      
+      // Fetch stats using public endpoint (no auth required)
+      if (data && data.phone) {
         try {
-          setLoadingWithdraws(true);
-          const wresp = await fetch('/api/v1/me/withdraws', { 
-            headers: { Authorization: `Bearer ${token}` } 
-          });
-          if (wresp.ok) {
-            const wdata = await wresp.json();
-            setWithdraws(wdata.withdraws || []);
-          }
+          const sdata = await getPlayerStats(data.phone);
+          setStats(sdata);
         } catch (e) {
-          // Withdraws fetch failed, but profile succeeded
-        } finally {
-          setLoadingWithdraws(false);
+          // Stats fetch is non-critical
         }
-        
-        // Token is now used and discarded - no storage
-      } else {
-        setPinError('Failed to load profile');
       }
-    } catch (error) {
-      setPinError('Failed to load profile data');
+      
+      // Fetch withdraws with the same token
+      try {
+        setLoadingWithdraws(true);
+        const wdata = await getWithdraws(token);
+        setWithdraws(wdata.withdraws || []);
+      } catch (e) {
+        // Withdraws fetch failed, but profile succeeded
+      } finally {
+        setLoadingWithdraws(false);
+      }
+      
+      // Token is now used and discarded - no storage
+    } catch (error: any) {
+      setPinError(error.message || 'Failed to load profile data');
     }
   };
 
@@ -332,21 +320,16 @@ export const ProfilePage: React.FC = () => {
       }
       
       // Use token immediately for withdrawal
-      const resp = await fetch('/api/v1/me/withdraw', {
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${result.action_token}` },
-        body: JSON.stringify({ amount: Number(withdrawAmount), method: 'MOMO', destination: '' })
-      });
-      const data = await resp.json();
-      if (!resp.ok) {
-        setMessage(data.error || 'Failed to request withdraw');
-      } else {
+      try {
+        await requestWithdraw(result.action_token, Number(withdrawAmount), 'MOMO', '');
         setMessage('Withdraw requested');
         setShowConfirmModal(false);
         setWithdrawAmount('');
         // Refresh profile data requires new PIN entry
         setProfile(null);
         setShowPinEntry(true);
+      } catch (err: any) {
+        setMessage(err.message || 'Failed to request withdraw');
       }
     } catch (e: any) {
       setMessage(e.message || 'Network error');
@@ -358,7 +341,7 @@ export const ProfilePage: React.FC = () => {
     <div className="min-h-screen flex items-center justify-center">
       <div className="max-w-md mx-auto rounded-2xl p-8">
         <div className="text-center mb-6">
-          <img src="/logo.png" alt="PlayMatatu Logo" width={160} className="mx-auto mb-4" />
+          <img src="/logo.webp" alt="PlayMatatu Logo" width={160} className="mx-auto mb-4" />
           <h2 className="text-2xl font-bold">Profile</h2>
         </div>
 

@@ -576,7 +576,7 @@ export const LandingPage: React.FC = () => {
             <div className="max-w-md mx-auto rounded-2xl p-8">
               <div className="text-center mb-6">
                 <div className="mb-3">
-                  <img src="/logo.png" alt="PlayMatatu Logo" width={200} className="mx-auto"/>
+                  <img src="/logo.webp" alt="PlayMatatu Logo" width={200} className="mx-auto"/>
                 </div>
                 <h2 className="text-xl font-bold text-[#373536] mb-1">Welcome back{displayNameInput ? `, ${displayNameInput}` : ''}!</h2>
                 <p className="text-gray-600 text-sm">256{phoneRest}</p>
@@ -603,7 +603,7 @@ export const LandingPage: React.FC = () => {
             return (
               <div className="max-w-md mx-auto rounded-2xl p-8">
                 <div className="text-center mb-4">
-                  <img src="/logo.png" alt="PlayMatatu Logo" width={200} className="mx-auto"/>
+                  <img src="/logo.webp" alt="PlayMatatu Logo" width={200} className="mx-auto"/>
                 </div>
                 
                 <div className="text-center mb-4">
@@ -656,7 +656,7 @@ export const LandingPage: React.FC = () => {
           return (
             <div className="max-w-md mx-auto rounded-2xl p-8">
               <div className="text-center mb-4">
-                <img src="/logo.png" alt="PlayMatatu Logo" width={200} className="mx-auto"/>
+                <img src="/logo.webp" alt="PlayMatatu Logo" width={200} className="mx-auto"/>
               </div>
               
               <div className="text-center mb-6">
@@ -822,7 +822,7 @@ export const LandingPage: React.FC = () => {
             <div className="max-w-md mx-auto rounded-2xl p-8">
               <div className="text-center mb-4 mb-md-5">
                 <div className="mb-3">
-                  <img src="/logo.png" alt="PlayMatatu Logo" width={200}/>
+                  <img src="/logo.webp" alt="PlayMatatu Logo" width={200}/>
                 </div>
               </div>
 
@@ -876,7 +876,7 @@ export const LandingPage: React.FC = () => {
           <div className="max-w-md mx-auto rounded-2xl p-8">
             <div className="text-center mb-4 mb-md-5">
                      <div className="mb-3">
-                        <img src="/logo.png" alt="PlayMatatu Logo" width={200}/>
+                        <img src="/logo.webp" alt="PlayMatatu Logo" width={200}/>
                     </div>
 
                 </div>

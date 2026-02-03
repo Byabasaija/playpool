@@ -224,10 +224,26 @@ export async function verifyPIN(phone: string, pin: string, action: string): Pro
   attempts_remaining?: number;
   locked_until?: string;
 }> {
+  // Validate parameters before making the request
+  if (!phone || !phone.trim()) {
+    throw new Error('Phone number is required');
+  }
+  if (!pin || !pin.trim()) {
+    throw new Error('PIN is required');
+  }
+  if (!action || !action.trim()) {
+    throw new Error('Action is required');
+  }
+
+  const formattedPhone = formatPhone(phone);
+  if (!formattedPhone) {
+    throw new Error('Invalid phone number format');
+  }
+
   const response = await fetch(`${API_BASE}/auth/verify-pin`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phone: formatPhone(phone), pin, action })
+    body: JSON.stringify({ phone: formattedPhone, pin: pin.trim(), action: action.trim() })
   });
 
   const data = await response.json();
@@ -281,4 +297,60 @@ export async function declineMatchInvite(phone: string, matchCode: string): Prom
   }
 
   return { success: true };
+}
+
+// Profile endpoints
+export async function getProfile(token: string): Promise<any> {
+  const response = await fetch(`${API_BASE}/me`, {
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    if (response.status >= 500) throw new Error('Server error, please try again later');
+    throw new Error(data.error || 'Failed to fetch profile');
+  }
+  return data;
+}
+
+export async function getPlayerStats(phone: string): Promise<any> {
+  const response = await fetch(`${API_BASE}/player/${encodeURIComponent(phone)}/stats`);
+  
+  const data = await response.json();
+  if (!response.ok) {
+    if (response.status >= 500) throw new Error('Server error, please try again later');
+    throw new Error(data.error || 'Failed to fetch player stats');
+  }
+  return data;
+}
+
+export async function getWithdraws(token: string): Promise<any> {
+  const response = await fetch(`${API_BASE}/me/withdraws`, {
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    if (response.status >= 500) throw new Error('Server error, please try again later');
+    throw new Error(data.error || 'Failed to fetch withdraws');
+  }
+  return data;
+}
+
+export async function requestWithdraw(token: string, amount: number, method: string = 'MOMO', destination: string = ''): Promise<any> {
+  const response = await fetch(`${API_BASE}/me/withdraw`, {
+    method: 'POST',
+    headers: { 
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify({ amount, method, destination })
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    if (response.status >= 500) throw new Error('Server error, please try again later');
+    throw new Error(data.error || 'Failed to request withdraw');
+  }
+  return data;
 }

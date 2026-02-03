@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useGameState } from '../hooks/useGameState';
 import { useWebSocket } from '../hooks/useWebsockets';
 import { GameBoard } from '../game/GameBoard';
@@ -9,6 +10,7 @@ import { Card as CardType } from '../types/game.types';
 
 
 export const GamePage: React.FC = () => {
+  const navigate = useNavigate();
   // Background image preloading
   const [backgroundLoaded, setBackgroundLoaded] = useState(false);
   // Token resolution state
@@ -18,7 +20,7 @@ export const GamePage: React.FC = () => {
   
   useEffect(() => {
     const img = new Image();
-    img.src = '/background.jpg';
+    img.src = '/background.webp';
     img.onload = () => setBackgroundLoaded(true);
     img.onerror = () => setBackgroundLoaded(true); // Fallback in case of error
   }, []);
@@ -414,7 +416,7 @@ export const GamePage: React.FC = () => {
 
           <div className="flex gap-3 mt-6 justify-center">
             <button
-              onClick={() => window.location.href = '/'}
+              onClick={() => navigate('/')}
               className="bg-[#373536] text-white py-2 px-4 rounded-md text-sm font-semibold hover:bg-[#2c2b2a] transition-colors"
             >
               New Game
@@ -425,7 +427,7 @@ export const GamePage: React.FC = () => {
                   const opponent = gameState.opponentPhone;
                   const stake = gameState.stakeAmount || 1000;
                   if (opponent) {
-                    window.location.href = `/rematch?opponent=${encodeURIComponent(opponent)}&stake=${stake}`;
+                    navigate(`/rematch?opponent=${encodeURIComponent(opponent)}&stake=${stake}`);
                   } else {
                     console.log('Cannot rematch: opponent phone not available', { gameState });
                     alert('Unable to rematch: opponent information not available');
@@ -445,7 +447,7 @@ export const GamePage: React.FC = () => {
     <div 
       className="min-h-screen w-full overflow-hidden" 
       style={{ 
-        backgroundImage: backgroundLoaded ? "url('/background.jpg')" : 'none',
+        backgroundImage: backgroundLoaded ? "url('/background.webp')" : 'none',
         backgroundSize: 'cover', 
         backgroundPosition: 'center',
         backgroundColor: backgroundLoaded ? 'transparent' : '#2a2a2a' // Fallback dark color instead of white

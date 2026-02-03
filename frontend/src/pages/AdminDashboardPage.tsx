@@ -134,7 +134,7 @@ export const AdminDashboardPage: React.FC = () => {
       <div className="bg-white border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center space-x-4">
-            <img src="/logo.png" alt="PlayMatatu" width={120} />
+            <img src="/logo.webp" alt="PlayMatatu" width={120} />
             <h1 className="text-xl font-bold text-gray-900">Admin Dashboard</h1>
           </div>
           <div className="flex items-center space-x-4">

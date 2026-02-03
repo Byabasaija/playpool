@@ -94,7 +94,7 @@ export const RematchPage: React.FC = () => {
 
   // Try to get stored phone from localStorage first
   React.useEffect(() => {
-    const storedPhone = localStorage.getItem('playmatatu_phone');
+    const storedPhone = localStorage.getItem('playmatatu_phone') || localStorage.getItem('matatu_phone');
     if (storedPhone && !isAuthenticated && !playerPhone) {
       setPlayerPhone(storedPhone);
       // Auto-prompt for PIN since we're at rematch stage, user must have an account
@@ -312,7 +312,7 @@ export const RematchPage: React.FC = () => {
   return (
     <div className="max-w-md mx-auto rounded-2xl p-8">
       <div className="text-center mb-4">
-        <img src="/logo.png" alt="PlayMatatu Logo" width={160} className="mx-auto mb-4" />
+        <img src="/logo.webp" alt="PlayMatatu Logo" width={160} className="mx-auto mb-4" />
       </div>
       <h1 className="text-2xl font-bold text-gray-900 mb-6 text-center">Rematch</h1>
 
