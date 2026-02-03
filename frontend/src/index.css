@@ -1,5 +1,12 @@
 @import "tailwindcss";
 
+/* Prevent CLS from font loading */
+@layer base {
+  html {
+    font-display: swap;
+  }
+}
+
 /* PlayMatatu - Clean Responsive Styles using Bootstrap */
 /* Color Palette */
 :root {

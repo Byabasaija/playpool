@@ -6,8 +6,10 @@
     <link rel="stylesheet" href="/index.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     
-    <!-- Preload critical images for faster loading -->
-    <link rel="preload" as="image" href="/logo.webp" type="image/webp" />
+    <!-- Preload critical images for faster loading and prevent CLS -->
+    <link rel="preload" as="image" href="/logo.webp" type="image/webp" fetchpriority="high" />
+    <link rel="preload" as="image" href="/background.webp" type="image/webp" />
+    <link rel="preload" as="image" href="/card_back_orange.webp" type="image/webp" />
     
     <title>PlayMatatu - Real Money Card Game</title>
   </head>

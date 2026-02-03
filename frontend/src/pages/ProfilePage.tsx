@@ -341,7 +341,7 @@ export const ProfilePage: React.FC = () => {
     <div className="min-h-screen flex items-center justify-center">
       <div className="max-w-md mx-auto rounded-2xl p-8">
         <div className="text-center mb-6">
-          <img src="/logo.webp" alt="PlayMatatu Logo" width={160} className="mx-auto mb-4" />
+          <img src="/logo.webp" alt="PlayMatatu Logo" width={160} height={113} className="mx-auto mb-4" />
           <h2 className="text-2xl font-bold">Profile</h2>
         </div>
 

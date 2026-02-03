@@ -312,7 +312,7 @@ export const RematchPage: React.FC = () => {
   return (
     <div className="max-w-md mx-auto rounded-2xl p-8">
       <div className="text-center mb-4">
-        <img src="/logo.webp" alt="PlayMatatu Logo" width={160} className="mx-auto mb-4" />
+        <img src="/logo.webp" alt="PlayMatatu Logo" width={160} height={113} className="mx-auto mb-4" />
       </div>
       <h1 className="text-2xl font-bold text-gray-900 mb-6 text-center">Rematch</h1>
 

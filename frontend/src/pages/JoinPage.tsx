@@ -151,7 +151,7 @@ export const JoinPage: React.FC = () => {
     return (
       <div className="max-w-md mx-auto rounded-2xl p-8">
         <div className="text-center mb-6">
-          <img src="/logo.webp" alt="PlayMatatu Logo" width={180} className="mx-auto" />
+          <img src="/logo.webp" alt="PlayMatatu Logo" width={180} height={127} className="mx-auto" />
         </div>
         
         <h2 className="text-2xl font-bold text-gray-900 mb-6 text-center">Join Match</h2>
@@ -207,7 +207,7 @@ export const JoinPage: React.FC = () => {
     return (
       <div className="max-w-md mx-auto rounded-2xl p-8">
         <div className="text-center mb-6">
-          <img src="/logo.webp" alt="PlayMatatu Logo" width={180} className="mx-auto" />
+          <img src="/logo.webp" alt="PlayMatatu Logo" width={180} height={127} className="mx-auto" />
         </div>
         
         <h2 className="text-2xl font-bold text-gray-900 mb-6 text-center">Join Match</h2>
@@ -282,7 +282,7 @@ export const JoinPage: React.FC = () => {
   return (
     <div className="max-w-md mx-auto rounded-2xl p-8">
       <div className="text-center mb-4">
-        <img src="/logo.webp" alt="PlayMatatu Logo" width={180} className="mx-auto" />
+        <img src="/logo.webp" alt="PlayMatatu Logo" width={180} height={127} className="mx-auto" />
       </div>
       <h2 className="text-2xl font-bold mb-4">Join PlayMatatu Match</h2>
       
