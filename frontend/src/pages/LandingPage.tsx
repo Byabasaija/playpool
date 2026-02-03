@@ -4,6 +4,7 @@ import { useMatchmaking } from '../hooks/useMatchmaking';
 import { validatePhone, formatPhone } from '../utils/phoneUtils';
 import { getPlayerProfile, requeuePlayer, getConfig, requestOTP, checkPlayerStatus, verifyPIN } from '../utils/apiClient';
 import PinInput from '../components/PinInput';
+import SetPinModal from '../components/SetPinModal';
 
 export const LandingPage: React.FC = () => {
   const [phoneRest, setPhoneRest] = useState('');
@@ -40,6 +41,10 @@ export const LandingPage: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [playerBalance, setPlayerBalance] = useState<number>(0);
   const [useWinnings, setUseWinnings] = useState<boolean>(false);
+  
+  // PIN setup flow state
+  const [showPinSetup, setShowPinSetup] = useState(false);
+  const [pendingGameData, setPendingGameData] = useState<any>(null);
 
   // Check localStorage for remembered phone on mount
   React.useEffect(() => {
@@ -252,7 +257,20 @@ export const LandingPage: React.FC = () => {
     setPinAttemptsRemaining(undefined);
 
     try {
+      // Verify PIN for profile access
       await verifyPIN(full, pin, 'view_profile');
+      
+      // Also get winnings token in case user wants to use winnings later
+      try {
+        const winningsResult = await verifyPIN(full, pin, 'stake_winnings');
+        if (winningsResult.action_token) {
+          sessionStorage.setItem('landing_action_token', winningsResult.action_token);
+        }
+      } catch (err) {
+        // Non-fatal if winnings token fails - user can still view profile
+        console.warn('Failed to get winnings token:', err);
+      }
+      
       // PIN verified successfully - save phone to localStorage
       localStorage.setItem('matatu_phone', full);
       
@@ -295,31 +313,19 @@ export const LandingPage: React.FC = () => {
 
   
 
-  // Handle useWinnings toggle change - require additional PIN verification for winnings
-  const handleUseWinningsChange = async (enabled: boolean) => {
-    if (enabled && isAuthenticated) {
-      // Need to reverify PIN with stake_winnings action
-      const full = '256' + phoneRest.replace(/\D/g, '');
-      try {
-        // Temporarily prompt for PIN again to get stake_winnings token
-        const pin = prompt('Enter your PIN to authorize winnings usage:');
-        if (pin) {
-          const result = await verifyPIN(full, pin, 'stake_winnings');
-          if (result.action_token) {
-            sessionStorage.setItem('landing_action_token', result.action_token);
-            setUseWinnings(true);
-          }
-        }
-      } catch (err: any) {
-        alert('PIN verification failed: ' + (err.message || 'Invalid PIN'));
-        setUseWinnings(false);
-      }
-    } else {
-      setUseWinnings(enabled);
-      if (!enabled) {
-        sessionStorage.removeItem('landing_action_token');
+  // Handle useWinnings toggle change
+  const handleUseWinningsChange = (enabled: boolean) => {
+    if (enabled) {
+      // Check if we have the required action token
+      const actionToken = sessionStorage.getItem('landing_action_token');
+      if (!actionToken) {
+        alert('Winnings authorization expired. Please re-enter your PIN to refresh your session.');
+        setShowPinEntry(true);
+        setIsAuthenticated(false);
+        return;
       }
     }
+    setUseWinnings(enabled);
   };
 
   // const handleRequestOTP = async () => {
@@ -420,9 +426,24 @@ export const LandingPage: React.FC = () => {
     }
     setPhoneError('');
 
-    if (matchCodeInput) opts.match_code = matchCodeInput.trim().toUpperCase();
+    // Check if user needs to set up PIN before starting game
+    try {
+      const playerStatus = await checkPlayerStatus(full);
+      if (!playerStatus.has_pin) {
+        // User either doesn't exist or exists but has no PIN - show PIN setup
+        const gameData = { full, stake, displayNameInput, opts };
+        setPendingGameData(gameData);
+        setShowPinSetup(true);
+        return;
+      }
+    } catch (err) {
+      console.warn('Failed to check player status:', err);
+      // Continue with game start - PIN setup will be optional
+    }
 
-    // Include action token if using winnings
+    // Prepare game options
+
+    // Use winnings if selected (requires action token)
     if (useWinnings) {
       opts.source = 'winnings';
       const actionToken = sessionStorage.getItem('landing_action_token');
@@ -430,10 +451,41 @@ export const LandingPage: React.FC = () => {
         opts.action_token = actionToken;
         // Clean up the token after use
         sessionStorage.removeItem('landing_action_token');
+      } else {
+        // This shouldn't happen due to toggle validation, but handle gracefully
+        throw new Error('Winnings authorization expired. Please refresh and try again.');
       }
     }
 
     await startGame(full, stake, displayNameInput || generateRandomName(), opts);
+  };
+
+  // Handle PIN setup completion - proceed with game start
+  const handlePinSetupComplete = async () => {
+    setShowPinSetup(false);
+    if (pendingGameData) {
+      const { full, stake, displayNameInput, opts } = pendingGameData;
+      
+      // Add match code if specified
+      if (matchCodeInput) opts.match_code = matchCodeInput.trim().toUpperCase();
+
+      // Use winnings if selected (requires action token)
+      if (useWinnings) {
+        opts.source = 'winnings';
+        const actionToken = sessionStorage.getItem('landing_action_token');
+        if (actionToken) {
+          opts.action_token = actionToken;
+          // Clean up the token after use
+          sessionStorage.removeItem('landing_action_token');
+        } else {
+          // This shouldn't happen due to toggle validation, but handle gracefully
+          throw new Error('Winnings authorization expired. Please refresh and try again.');
+        }
+      }
+
+      await startGame(full, stake, displayNameInput || generateRandomName(), opts);
+      setPendingGameData(null);
+    }
   };
 
 
@@ -677,7 +729,7 @@ export const LandingPage: React.FC = () => {
 
                 {commission !== null && (
                   <p className="mt-1 text-sm text-gray-500">
-                    Commission: {commission} UGX — Total: {stake + commission} UGX
+                   Entry fee: {commission} UGX — Total: {stake + commission} UGX
                   </p>
                 )}
               </div>
@@ -1233,6 +1285,18 @@ export const LandingPage: React.FC = () => {
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
       {renderContent()}
+      
+      {/* PIN Setup Modal */}
+      {showPinSetup && pendingGameData && (
+        <SetPinModal
+          phone={pendingGameData.full}
+          onComplete={handlePinSetupComplete}
+          onCancel={() => {
+            setShowPinSetup(false);
+            setPendingGameData(null);
+          }}
+        />
+      )}
     </div>
   );
 };

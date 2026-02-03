@@ -132,9 +132,9 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   );
 
   return (
-    <div className="relative w-full min-h-screen flex flex-col justify-between items-center py-2 px-2 sm:py-4 sm:px-4 md:justify-center md:h-[600px] overflow-hidden">
+    <div className="relative w-full min-h-screen flex flex-col items-center py-2 px-2 sm:py-4 sm:px-4 md:justify-center md:h-[600px] overflow-hidden">
       {/* Opponent Hand (Top) */}
-      <div className="flex-none">
+      <div className="flex-none mb-24 sm:mb-32">
         <div className="flex items-center justify-center py-1 sm:py-2">
           {statusDot(opponentConnected)}
           <div className="font-semibold text-white text-sm sm:text-base">{opponentDisplayName || 'Opponent'}</div>
@@ -142,8 +142,8 @@ export const GameBoard: React.FC<GameBoardProps> = ({
         <OpponentHand cardCount={opponentCardCount} />
       </div>
 
-      {/* Game Center Area */}
-      <div className="flex-1 flex items-center justify-center gap-3 sm:gap-6 md:gap-12 relative min-h-[120px] sm:min-h-[150px]">
+      {/* Game Center Area - reduced gap to player hand on mobile */}
+      <div className="flex items-center justify-center gap-3 sm:gap-6 md:gap-12 relative min-h-[120px] sm:min-h-[150px] mt-4 sm:mt-6 mb-3 sm:mb-4 md:flex-1">
         {/* Deck */}
         <DeckStack
           deckCount={deckCount}
@@ -174,8 +174,8 @@ export const GameBoard: React.FC<GameBoardProps> = ({
         )}
       </div>
 
-      {/* Player Hand (Bottom) */}
-      <div className="flex-none mb-2 sm:mb-4">
+      {/* Player Hand (Bottom) - reduced gap to center */}
+      <div className="flex-none">
         <div className="flex items-center justify-center py-1 sm:py-2 mb-1 sm:mb-2">
           {statusDot(myConnected)}
           <div className="font-semibold text-white text-sm sm:text-base">{myDisplayName || 'You'}</div>
@@ -201,6 +201,11 @@ export const GameBoard: React.FC<GameBoardProps> = ({
             CONCEDE
           </button>
         </div>
+      </div>
+
+      {/* Bottom advertising space (reserved for future use) */}
+      <div className="flex-1 min-h-[60px] sm:min-h-[80px] md:hidden">
+        {/* Empty space reserved for advertising - no content for now */}
       </div>
 
       {/* Suit Selector Modal */}

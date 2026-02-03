@@ -165,15 +165,13 @@ func (h *Hub) Run() {
 					currentState["type"] = "game_state"
 					h.SendToPlayer(client.playerID, currentState)
 
-					// If this is a reconnect during active game, also update opponent's view
-					// to reflect the new connection status immediately
-					if isReconnect {
-						opponentID := g.GetOpponentID(client.playerID)
-						if opponentID != "" {
-							opponentState := g.GetGameStateForPlayer(opponentID)
-							opponentState["type"] = "game_state"
-							h.SendToPlayer(opponentID, opponentState)
-						}
+					// Always update opponent's view to reflect the new connection status immediately
+					// This handles both reconnects and first-time connections to in-progress games
+					opponentID := g.GetOpponentID(client.playerID)
+					if opponentID != "" {
+						opponentState := g.GetGameStateForPlayer(opponentID)
+						opponentState["type"] = "game_state"
+						h.SendToPlayer(opponentID, opponentState)
 					}
 				}
 

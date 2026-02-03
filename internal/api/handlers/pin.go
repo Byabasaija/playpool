@@ -87,22 +87,7 @@ func SetPIN(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerFunc 
 			return
 		}
 
-		// Verify by checking for a recently completed game (within 30 minutes)
-		// This allows first-time PIN setup immediately after playing
-		var recentGameCount int
-		err := db.Get(&recentGameCount, `
-			SELECT COUNT(*) FROM game_sessions gs
-			JOIN players p ON gs.player1_id = p.id OR gs.player2_id = p.id
-			WHERE p.phone_number = $1
-			  AND gs.status = 'COMPLETED'
-			  AND gs.completed_at > NOW() - INTERVAL '30 minutes'
-		`, phone)
-		if err != nil || recentGameCount == 0 {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "PIN setup requires a recently completed game"})
-			return
-		}
-
-		log.Printf("[SetPIN] Allowing PIN setup for %s via recent game verification", phone)
+		log.Printf("[SetPIN] Allowing PIN setup for %s (onboarding flow)", phone)
 
 		// Hash PIN with bcrypt
 		pinHash, err := bcrypt.GenerateFromPassword([]byte(pin), bcrypt.DefaultCost)
@@ -112,21 +97,23 @@ func SetPIN(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerFunc 
 			return
 		}
 
-		// Update player's PIN
-		result, err := db.Exec(`
-			UPDATE players 
-			SET pin_hash = $1, pin_failed_attempts = 0, pin_locked_until = NULL 
-			WHERE phone_number = $2
-		`, string(pinHash), phone)
+		// Ensure player exists (create if new)
+		player, err := GetOrCreatePlayerByPhone(db, phone)
 		if err != nil {
-			log.Printf("SetPIN DB error: %v", err)
+			log.Printf("SetPIN GetOrCreatePlayerByPhone error: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 			return
 		}
 
-		rowsAffected, _ := result.RowsAffected()
-		if rowsAffected == 0 {
-			c.JSON(http.StatusNotFound, gin.H{"error": "player not found"})
+		// Update player's PIN
+		_, err = db.Exec(`
+			UPDATE players 
+			SET pin_hash = $1, pin_failed_attempts = 0, pin_locked_until = NULL 
+			WHERE id = $2
+		`, string(pinHash), player.ID)
+		if err != nil {
+			log.Printf("SetPIN DB error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 			return
 		}
 

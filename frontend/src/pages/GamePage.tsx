@@ -5,8 +5,8 @@ import { GameBoard } from '../game/GameBoard';
 import { WSMessage, OutgoingWSMessage } from '../types/websocket.types';
 import { useSound } from '../hooks/useSound';
 import { Card as CardType } from '../types/game.types';
-import { checkPlayerStatus } from '../utils/apiClient';
-import SetPinModal from '../components/SetPinModal';
+
+
 
 export const GamePage: React.FC = () => {
   // Background image preloading
@@ -295,30 +295,6 @@ export const GamePage: React.FC = () => {
   const [idlePlayer, setIdlePlayer] = useState<string | null>(null);
   const [idleRemaining, setIdleRemaining] = useState<number | null>(null);
 
-  // PIN setup modal state
-  const [showSetPinModal, setShowSetPinModal] = useState(false);
-  const [playerNeedsPin, setPlayerNeedsPin] = useState(false);
-  const pinCheckDoneRef = useRef(false);
-
-  // Check if player needs to set PIN when game ends
-  useEffect(() => {
-    if (gameOver && !pinCheckDoneRef.current) {
-      pinCheckDoneRef.current = true;
-      // Get phone from gameState or URL params
-      const phone = gameState.myPhone;
-      if (phone) {
-        checkPlayerStatus(phone).then((status) => {
-          if (status.exists && !status.has_pin) {
-            setPlayerNeedsPin(true);
-            // Don't auto-show modal - let user see game result first
-          }
-        }).catch(() => {
-          // Ignore errors
-        });
-      }
-    }
-  }, [gameOver, gameState.myPhone]);
-
   // Refs to ensure WS handlers see the latest playerId and idlePlayer without recreating callbacks
   const playerIdRef = useRef<string | null>(null);
   const idlePlayerRef = useRef<string | null>(null);
@@ -436,38 +412,12 @@ export const GamePage: React.FC = () => {
             )}
           </div>
 
-          {/* Show PIN setup prompt if player needs to set PIN */}
-          {playerNeedsPin ? (
-            <div className="mt-6">
-              {showSetPinModal && gameState.myPhone ? (
-                <SetPinModal
-                  phone={gameState.myPhone}
-                  onComplete={() => {
-                    setShowSetPinModal(false);
-                    setPlayerNeedsPin(false);
-                    localStorage.setItem('matatu_phone', gameState.myPhone!);
-                  }}
-                  onCancel={() => setShowSetPinModal(false)}
-                />
-              ) : (
-                <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                  <p className="text-sm text-gray-600 mb-3">Set up a PIN to access your profile and play again</p>
-                  <button
-                    onClick={() => setShowSetPinModal(true)}
-                    className="w-full bg-[#373536] text-white py-2 px-4 rounded-md text-sm font-semibold hover:bg-[#2c2b2a] transition-colors"
-                  >
-                    Set PIN
-                  </button>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="flex gap-3 mt-6 justify-center">
-              <button
-                onClick={() => window.location.href = '/'}
-                className="bg-[#373536] text-white py-2 px-4 rounded-md text-sm font-semibold hover:bg-[#2c2b2a] transition-colors"
-              >
-                New Game
+          <div className="flex gap-3 mt-6 justify-center">
+            <button
+              onClick={() => window.location.href = '/'}
+              className="bg-[#373536] text-white py-2 px-4 rounded-md text-sm font-semibold hover:bg-[#2c2b2a] transition-colors"
+            >
+              New Game
               </button>
 
               <button
@@ -486,7 +436,6 @@ export const GamePage: React.FC = () => {
                 Rematch
               </button>
             </div>
-          )}
         </div>
       </div>
     );
