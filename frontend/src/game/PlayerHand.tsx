@@ -1,4 +1,5 @@
 import React from 'react';
+import { AnimatePresence } from 'framer-motion';
 import { Card as CardType } from '../types/game.types';
 import { Card } from './Card';
 import { canPlayCard } from '../utils/cardUtils';
@@ -34,24 +35,31 @@ export const PlayerHand: React.FC<PlayerHandProps> = ({
         {/* First row */}
         <div className="flex justify-center items-end gap-1 sm:gap-2">
           <div className="flex items-end relative min-w-fit">
-            {firstRow.map((card, index) => {
-              const playable = myTurn && canPlayCard(card, topCard, currentSuit, drawStack);
-              
-              return (
-                <div
-                  key={`${card.rank}-${card.suit}-${index}`}
-                  className={`${index > 0 ? '-ml-4 sm:-ml-3' : ''}`}
-                  style={{ zIndex: index }}
-                >
-                  <Card
-                    card={card}
-                    onClick={() => onCardClick(card)}
-                    disabled={myTurn ? !playable : false}
-                    className={`${myTurn && playable ? 'hover:-translate-y-2 sm:hover:-translate-y-3 cursor-pointer' : 'cursor-default'}`}
-                  />
-                </div>
-              );
-            })}
+            <AnimatePresence mode="popLayout">
+              {firstRow.map((card, index) => {
+                const playable = myTurn && canPlayCard(card, topCard, currentSuit, drawStack);
+                const cardId = `${card.rank}-${card.suit}`;
+                
+                return (
+                  <div
+                    key={cardId}
+                    className={`${index > 0 ? '-ml-4 sm:-ml-3' : ''}`}
+                    style={{ zIndex: index }}
+                  >
+                    <Card
+                      card={card}
+                      layoutId={cardId}
+                      initial={{ opacity: 0, scale: 0.8, y: -100 }}
+                      animate={{ opacity: 1, scale: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.8 }}
+                      onClick={() => onCardClick(card)}
+                      disabled={myTurn ? !playable : false}
+                      className={`${myTurn && playable ? 'cursor-pointer' : 'cursor-default'}`}
+                    />
+                  </div>
+                );
+              })}
+            </AnimatePresence>
           </div>
         </div>
         
@@ -59,24 +67,31 @@ export const PlayerHand: React.FC<PlayerHandProps> = ({
         {secondRow.length > 0 && (
           <div className="flex justify-center items-end gap-1 sm:gap-2">
             <div className="flex items-end relative min-w-fit">
-              {secondRow.map((card, index) => {
-                const playable = myTurn && canPlayCard(card, topCard, currentSuit, drawStack);
-                
-                return (
-                  <div
-                    key={`${card.rank}-${card.suit}-${cardsPerRow + index}`}
-                    className={`${index > 0 ? '-ml-4 sm:-ml-3' : ''}`}
-                    style={{ zIndex: index }}
-                  >
-                    <Card
-                      card={card}
-                      onClick={() => onCardClick(card)}
-                      disabled={myTurn ? !playable : false}
-                      className={`${myTurn && playable ? 'hover:-translate-y-2 sm:hover:-translate-y-3 cursor-pointer' : 'cursor-default'}`}
-                    />
-                  </div>
-                );
-              })}
+              <AnimatePresence mode="popLayout">
+                {secondRow.map((card, index) => {
+                  const playable = myTurn && canPlayCard(card, topCard, currentSuit, drawStack);
+                  const cardId = `${card.rank}-${card.suit}`;
+                  
+                  return (
+                    <div
+                      key={cardId}
+                      className={`${index > 0 ? '-ml-4 sm:-ml-3' : ''}`}
+                      style={{ zIndex: index }}
+                    >
+                      <Card
+                        card={card}
+                        layoutId={cardId}
+                        initial={{ opacity: 0, scale: 0.8, y: -100 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.8 }}
+                        onClick={() => onCardClick(card)}
+                        disabled={myTurn ? !playable : false}
+                        className={`${myTurn && playable ? 'cursor-pointer' : 'cursor-default'}`}
+                      />
+                    </div>
+                  );
+                })}
+              </AnimatePresence>
             </div>
           </div>
         )}
@@ -88,24 +103,31 @@ export const PlayerHand: React.FC<PlayerHandProps> = ({
   return (
     <div className="flex justify-center items-end gap-1 sm:gap-2 p-2 sm:p-4 overflow-x-auto">
       <div className="flex items-end relative min-w-fit">
-        {cards.map((card, index) => {
-          const playable = myTurn && canPlayCard(card, topCard, currentSuit, drawStack);
+        <AnimatePresence mode="popLayout">
+          {cards.map((card, index) => {
+            const playable = myTurn && canPlayCard(card, topCard, currentSuit, drawStack);
+            const cardId = `${card.rank}-${card.suit}`;
 
-          return (
-            <div
-              key={`${card.rank}-${card.suit}-${index}`}
-              className={`${index > 0 ? '-ml-5 sm:-ml-4 md:-ml-3' : ''}`}
-              style={{ zIndex: index }}
-            >
-              <Card
-                card={card}
-                onClick={() => onCardClick(card)}
-                disabled={myTurn ? !playable : false}
-                className={`${myTurn && playable ? 'hover:-translate-y-3 sm:hover:-translate-y-6 cursor-pointer' : 'cursor-default'}`}
-              />
-            </div>
-          );
-        })}
+            return (
+              <div
+                key={cardId}
+                className={`${index > 0 ? '-ml-5 sm:-ml-4 md:-ml-3' : ''}`}
+                style={{ zIndex: index }}
+              >
+                <Card
+                  card={card}
+                  layoutId={cardId}
+                  initial={{ opacity: 0, scale: 0.8, y: -100 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.8 }}
+                  onClick={() => onCardClick(card)}
+                  disabled={myTurn ? !playable : false}
+                  className={`${myTurn && playable ? 'cursor-pointer' : 'cursor-default'}`}
+                />
+              </div>
+            );
+          })}
+        </AnimatePresence>
       </div>
     </div>
   );

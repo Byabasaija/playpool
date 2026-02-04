@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react';
+import { AnimatePresence } from 'framer-motion';
 import { Card as CardType } from '../types/game.types';
 import { Card } from './Card';
 
@@ -60,21 +61,41 @@ const DiscardPileInner: React.FC<DiscardPileProps> = ({ cards }) => {
 
   return (
     <div className="relative w-24 h-36">
-      {cards.map((card, index) => {
-        const { finalRotation, finalX, finalY } = transforms[index];
-        return (
-          <div
-            key={`${card.rank}-${card.suit}-${index}`}
-            className="absolute top-0 left-0"
-            style={{
-              transform: `translate(${finalX}px, ${finalY}px) rotate(${finalRotation}deg)`,
-              zIndex: index
-            }}
-          >
-            <Card card={card} />
-          </div>
-        );
-      })}
+      <AnimatePresence mode="sync">
+        {cards.map((card, index) => {
+          const { finalRotation, finalX, finalY } = transforms[index];
+          const cardId = `discard-${card.rank}-${card.suit}`;
+          const isTopCard = index === cards.length - 1;
+          
+          return (
+            <div
+              key={cardId}
+              className="absolute top-0 left-0"
+              style={{
+                transform: `translate(${finalX}px, ${finalY}px) rotate(${finalRotation}deg)`,
+                zIndex: index
+              }}
+            >
+              <Card 
+                card={card}
+                layoutId={`${card.rank}-${card.suit}`}
+                initial={isTopCard ? { opacity: 0, scale: 0.5, rotate: -90 } : false}
+                animate={isTopCard ? { 
+                  opacity: 1, 
+                  scale: 1, 
+                  rotate: 0,
+                  transition: { 
+                    type: 'spring', 
+                    stiffness: 200, 
+                    damping: 20,
+                    opacity: { duration: 0.2 }
+                  }
+                } : false}
+              />
+            </div>
+          );
+        })}
+      </AnimatePresence>
     </div>
   );
 };

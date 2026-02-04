@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback } from 'react';
-import type { ReactNode } from 'react';
+import type { ReactNode, ReactElement } from 'react';
 
 // Sound Manager Context
 interface SoundContextType {
@@ -14,7 +14,7 @@ const SoundContext = createContext<SoundContextType>({
 
 export const useSoundContext = () => useContext(SoundContext);
 
-export function SoundProvider({ children }: { children: ReactNode }): JSX.Element {
+export function SoundProvider({ children }: { children: ReactNode }): ReactElement {
   const [isMuted, setIsMuted] = useState(false);
   
   const toggleMute = useCallback(() => {

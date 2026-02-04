@@ -1,4 +1,5 @@
 import React from 'react';
+import { AnimatePresence } from 'framer-motion';
 import { Card } from './Card';
 
 interface OpponentHandProps {
@@ -23,24 +24,31 @@ export const OpponentHand: React.FC<OpponentHandProps> = ({ cardCount }) => {
   return (
     <div className="flex justify-center items-start py-2 sm:py-4">
       <div className="relative" style={{ width: stackWidth }}>
-        {Array.from({ length: cardCount }).map((_, index) => {
-          const offset = index * cardOffset;
-          const rotation = (index - cardCount / 2) * 1.5; // gentle fan
+        <AnimatePresence mode="popLayout">
+          {Array.from({ length: cardCount }).map((_, index) => {
+            const offset = index * cardOffset;
+            const rotation = (index - cardCount / 2) * 1.5; // gentle fan
 
-          return (
-            <div
-              key={index}
-              className="absolute top-0"
-              style={{
-                left: `${offset}px`,
-                transform: `rotate(${rotation}deg)` ,
-                zIndex: index
-              }}
-            >
-              <Card faceDown />
-            </div>
-          );
-        })}
+            return (
+              <div
+                key={`opp-card-${index}`}
+                className="absolute top-0"
+                style={{
+                  left: `${offset}px`,
+                  transform: `rotate(${rotation}deg)` ,
+                  zIndex: index
+                }}
+              >
+                <Card 
+                  faceDown
+                  initial={{ opacity: 0, y: -100, scale: 0.8 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.5, transition: { duration: 0.2 } }}
+                />
+              </div>
+            );
+          })}
+        </AnimatePresence>
       </div>
     </div>
   );

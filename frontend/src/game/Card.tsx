@@ -1,4 +1,5 @@
 import React from 'react';
+import { motion, HTMLMotionProps } from 'framer-motion';
 import { Card as CardType } from '../types/game.types';
 import { SUIT_SYMBOLS } from '../utils/cardUtils';
 
@@ -9,6 +10,11 @@ interface CardProps {
   className?: string;
   style?: React.CSSProperties;
   disabled?: boolean;
+  layoutId?: string;  // For layout animations
+  initial?: HTMLMotionProps<"div">['initial'];
+  animate?: HTMLMotionProps<"div">['animate'];
+  exit?: HTMLMotionProps<"div">['exit'];
+  transition?: HTMLMotionProps<"div">['transition'];
 }
 
 export const Card: React.FC<CardProps> = ({
@@ -17,27 +23,43 @@ export const Card: React.FC<CardProps> = ({
   onClick,
   className = '',
   style,
-  disabled = false
+  disabled = false,
+  layoutId,
+  initial,
+  animate,
+  exit,
+  transition
 }) => {
   const isRed = card && (card.suit === 'hearts' || card.suit === 'diamonds');
 
   if (faceDown || !card) {
     return (
-      <div
+      <motion.div
+        layoutId={layoutId}
+        initial={initial}
+        animate={animate}
+        exit={exit}
+        transition={transition || { type: 'spring', stiffness: 300, damping: 30 }}
         className={`relative w-16 h-24 sm:w-20 sm:h-30 md:w-24 md:h-36 rounded-lg shadow-lg border-2 border-gray-200 overflow-hidden ${className}`}
         style={{ backgroundImage: "url('/card_back_orange.webp')", backgroundSize: 'cover', backgroundPosition: 'center', ...style }}
         role="img"
         aria-label="Card back"
       >
-      </div>
+      </motion.div>
     );
   }
 
   return (
-    <div
+    <motion.div
+      layoutId={layoutId}
+      initial={initial}
+      animate={animate}
+      exit={exit}
+      transition={transition || { type: 'spring', stiffness: 300, damping: 30 }}
+      whileHover={!disabled ? { scale: 1.05, y: -8 } : undefined}
       className={`relative w-16 h-24 sm:w-20 sm:h-30 md:w-24 md:h-36 bg-white rounded-lg shadow-lg ${
-        disabled ? 'cursor-not-allowed pointer-events-none' : 'cursor-pointer hover:scale-105'
-      } transition-transform ${className}`}
+        disabled ? 'cursor-not-allowed pointer-events-none' : 'cursor-pointer'
+      } ${className}`}
       onClick={!disabled ? onClick : undefined}
       style={style}
       role={disabled ? undefined : 'button'}
@@ -60,6 +82,6 @@ export const Card: React.FC<CardProps> = ({
         <div className="text-right">{card.rank}</div>
         <div className="text-right">{SUIT_SYMBOLS[card.suit]}</div>
       </div>
-    </div>
+    </motion.div>
   );
 };
