@@ -1,27 +1,35 @@
-import { useRef, useCallback } from 'react';
+import { useRef, useCallback, useEffect } from 'react';
+import { useSoundContext } from '../components/SoundProvider';
 
 export function useSound(src: string) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const { isMuted } = useSoundContext();
 
-  const init = () => {
-    if (!audioRef.current) {
-      const a = new Audio(src);
-      a.preload = 'auto';
-      audioRef.current = a;
-    }
-  };
+  // Initialize audio element when src changes
+  useEffect(() => {
+    const audio = new Audio(src);
+    audio.preload = 'auto';
+    audio.volume = 0.7; // Slightly lower volume for better UX
+    audioRef.current = audio;
+    
+    return () => {
+      // Cleanup audio element
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+    };
+  }, [src]);
 
   const play = useCallback(() => {
+    if (isMuted || !audioRef.current) return; // Don't play if muted or not initialized
     try {
-      init();
-      if (!audioRef.current) return;
       audioRef.current.currentTime = 0;
-      // play may return a promise; ignore rejections caused by blockers
       void audioRef.current.play();
     } catch (e) {
       // ignore
     }
-  }, [src]);
+  }, [isMuted]);
 
   return play;
 }

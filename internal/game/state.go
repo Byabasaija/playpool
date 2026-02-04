@@ -368,8 +368,11 @@ func (g *GameState) PlayCard(playerID string, card Card, declaredSuit Suit) (*Pl
 		return nil, errors.New("you don't have that card")
 	}
 
-	// If there's a draw stack, player must play a 2 or draw
-	if g.DrawStack > 0 && card.Rank != Two {
+	// Check if this is the last card Ace exception (before draw stack check)
+	isLastAce := (card.Rank == Ace && player.CardCount() == 1)
+
+	// If there's a draw stack, player must play a 2 or draw (unless it's their last Ace)
+	if g.DrawStack > 0 && card.Rank != Two && !isLastAce {
 		log.Printf("[GAME] PlayCard aborted - draw stack active and card is not a Two. drawStack=%d", g.DrawStack)
 		return nil, errors.New("must play a 2 or draw cards")
 	}
@@ -384,8 +387,7 @@ func (g *GameState) PlayCard(playerID string, card Card, declaredSuit Suit) (*Pl
 	}
 
 	// Special-case: if this is an Ace and it's the player's LAST card, allow it to be played
-	// (but still enforce draw-stack rule above)
-	isLastAce := (card.Rank == Ace && player.CardCount() == 1)
+	// (already checked above, just validate suit matching unless it's the last Ace)
 	if !isLastAce {
 		if !card.CanPlayOn(topCard, g.CurrentSuit) {
 			log.Printf("[GAME] PlayCard aborted - card cannot be played on topCard=%v currentSuit=%v", topCard, g.CurrentSuit)

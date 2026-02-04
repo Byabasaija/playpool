@@ -592,6 +592,21 @@ export const LandingPage: React.FC = () => {
                 attemptsRemaining={pinAttemptsRemaining}
                 lockedUntil={pinLockedUntil}
               />
+              
+              <button
+                onClick={() => {
+                  localStorage.removeItem('playmatatu_phone');
+                  localStorage.removeItem('matatu_phone');
+                  sessionStorage.clear();
+                  setPhoneRest('');
+                  setShowPinEntry(false);
+                  setPlayerHasPin(false);
+                  setIsAuthenticated(false);
+                }}
+                className="w-full mt-4 py-2 px-4 text-sm text-gray-500 hover:text-gray-700 underline"
+              >
+                Use different phone
+              </button>
             </div>
           );
         }
@@ -648,6 +663,20 @@ export const LandingPage: React.FC = () => {
                     Withdraw
                   </button>
                 </div>
+                
+                <button
+                  onClick={() => {
+                    localStorage.clear();
+                    sessionStorage.clear();
+                    setPhoneRest('');
+                    setShowPinEntry(false);
+                    setPlayerHasPin(false);
+                    setIsAuthenticated(false);
+                  }}
+                  className="w-full mt-3 py-2 px-4 text-sm text-gray-500 hover:text-gray-700 underline"
+                >
+                  Logout
+                </button>
               </div>
             );
           }
@@ -812,6 +841,20 @@ export const LandingPage: React.FC = () => {
                   Withdraw
                 </button>
               </div>
+              
+              <button
+                onClick={() => {
+                  localStorage.clear();
+                  sessionStorage.clear();
+                  setPhoneRest('');
+                  setShowPinEntry(false);
+                  setPlayerHasPin(false);
+                  setIsAuthenticated(false);
+                }}
+                className="w-full mt-3 py-2 px-4 text-sm text-gray-500 hover:text-gray-700 underline"
+              >
+                Logout
+              </button>
             </div>
           );
         }

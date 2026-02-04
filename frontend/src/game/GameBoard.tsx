@@ -55,7 +55,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   const [showSuitSelector, setShowSuitSelector] = useState(false);
   const [pendingAce, setPendingAce] = useState<CardType | null>(null);
 
-  const wrongSound = useSound('/wrong.mp3');
+  const wrongSound = useSound('/wrongplay.mp3');
 
   const handleCardClick = (card: CardType) => {
     // Provide immediate feedback when clicking invalid actions

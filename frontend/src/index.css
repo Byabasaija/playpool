@@ -69,6 +69,31 @@ select {
     font-size: 16px;
 }
 
+/* Celebration floating emojis animation */
+@keyframes float-up {
+  0% {
+    transform: translateY(100vh) rotate(0deg);
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-100vh) rotate(360deg);
+    opacity: 0;
+  }
+}
+
+.float-emoji {
+  position: absolute;
+  animation: float-up 4s ease-in infinite;
+  font-size: 1.25rem;
+  pointer-events: none;
+}
+
 
 
 

@@ -124,13 +124,18 @@ export const RematchPage: React.FC = () => {
     setPinLoading(true);
     setPinError(undefined);
     try {
-      // Use appropriate action based on whether we're staking winnings
-      const action = useWinnings ? 'stake_winnings' : 'rematch';
-      const result = await verifyPIN(playerPhone, pin, action);
+      // Verify PIN for profile access
+      await verifyPIN(playerPhone, pin, 'rematch');
       
-      // Store the action token for later use in game creation
-      if (result.action_token) {
-        sessionStorage.setItem('rematch_action_token', result.action_token);
+      // Also get winnings token in case user wants to use winnings later
+      try {
+        const winningsResult = await verifyPIN(playerPhone, pin, 'stake_winnings');
+        if (winningsResult.action_token) {
+          sessionStorage.setItem('rematch_action_token', winningsResult.action_token);
+        }
+      } catch (err) {
+        // Non-fatal if winnings token fails - user can still rematch
+        console.warn('Failed to get winnings token:', err);
       }
       
       // Load player profile after PIN verification

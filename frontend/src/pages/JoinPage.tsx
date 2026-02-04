@@ -87,19 +87,24 @@ export const JoinPage: React.FC = () => {
     
     try {
       setFormError(null);
-      // Use appropriate action based on whether we're staking winnings
-      const action = useWinnings ? 'stake_winnings' : 'rematch';
-      const result = await verifyPIN(invitePhone, pin, action);
-      if (result.action_token) {
-        // Store the action token for later use
-        sessionStorage.setItem('join_action_token', result.action_token);
-        setIsAuthenticated(true);
-        // Refresh player profile for latest balance
-        const profile = await getPlayerProfile(invitePhone);
-        setPlayerProfile(profile);
-      } else {
-        setFormError('PIN verification failed');
+      // Verify PIN for profile access
+      await verifyPIN(invitePhone, pin, 'view_profile');
+      
+      // Also get winnings token in case user wants to use winnings later
+      try {
+        const winningsResult = await verifyPIN(invitePhone, pin, 'stake_winnings');
+        if (winningsResult.action_token) {
+          sessionStorage.setItem('join_action_token', winningsResult.action_token);
+        }
+      } catch (err) {
+        // Non-fatal if winnings token fails - user can still join
+        console.warn('Failed to get winnings token:', err);
       }
+      
+      setIsAuthenticated(true);
+      // Refresh player profile for latest balance
+      const profile = await getPlayerProfile(invitePhone);
+      setPlayerProfile(profile);
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Failed to verify PIN');
     }

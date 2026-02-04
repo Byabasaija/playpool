@@ -5,8 +5,11 @@ import { useWebSocket } from '../hooks/useWebsockets';
 import { GameBoard } from '../game/GameBoard';
 import { WSMessage, OutgoingWSMessage } from '../types/websocket.types';
 import { useSound } from '../hooks/useSound';
+import { useSoundContext } from '../components/SoundProvider';
 import { Card as CardType } from '../types/game.types';
 
+//@ts-ignore
+const API_BASE = import.meta.env.VITE_BACKEND_URL + '/api/v1';
 
 
 export const GamePage: React.FC = () => {
@@ -35,6 +38,24 @@ export const GamePage: React.FC = () => {
   const revealTimerRef = useRef<number | null>(null);
 
   const { gameState, gameOver, updateFromWSMessage, setCanPass, addCardsToHand, updateOpponentCardCount, setTokens } = useGameState();
+  
+  // Sound effects
+  const { isMuted, toggleMute } = useSoundContext();
+  const playCardSound = useSound('/playcard.mp3');
+  const drawCardSound = useSound('/drawcard.mp3');
+  const passSound = useSound('/woosh.mp3');
+  const startGameSound = useSound('/startgame.mp3');
+  const endGameSound = useSound('/endgame.mp3');
+  const notificationSound = useSound('/bell-notification.mp3');
+  
+  // Play end game sound when game ends
+  const gameOverPlayedRef = useRef(false);
+  useEffect(() => {
+    if (gameOver && !gameOverPlayedRef.current) {
+      endGameSound();
+      gameOverPlayedRef.current = true;
+    }
+  }, [gameOver, endGameSound]);
   
   const [notice, setNotice] = useState<string | null>(null);
   const disconnectedTimerRef = useRef<number | null>(null);
@@ -66,8 +87,6 @@ export const GamePage: React.FC = () => {
       }
     };
   }, [gameState.opponentConnected]);
-  
-  const playClick = useSound('/play.mp3');
 
   // Extract tokens from URL parameters
   useEffect(() => {
@@ -109,6 +128,7 @@ export const GamePage: React.FC = () => {
 
       case 'game_starting':
         setGameStarted(true);
+        startGameSound();
         break;
 
       case 'game_state':
@@ -122,6 +142,13 @@ export const GamePage: React.FC = () => {
 
       case 'card_played':
         updateFromWSMessage(message);
+        
+        // Play sound for opponent's card play (softer volume)
+        const actingPlayer = (message as any).player as string | undefined;
+        if (actingPlayer && actingPlayer !== gameState.playerId) {
+          playCardSound();
+        }
+        
         // Show the chosen suit briefly if this was an Ace play
         const playedCardStr = (message as any).card as string | undefined;
         const declaredSuit = (message as any).current_suit as CardType['suit'] | undefined;
@@ -141,7 +168,6 @@ export const GamePage: React.FC = () => {
 
         // If the acting player is THIS client, clear the idle banner
         try {
-          const actingPlayer = (message as any).player as string | undefined;
           console.log('[IDLE] card_played actingPlayer', actingPlayer, 'idlePlayerRef', idlePlayerRef.current, 'playerIdRef', playerIdRef.current);
           if (actingPlayer && playerIdRef.current && actingPlayer === playerIdRef.current) {
             setIdleForfeitAt(null);
@@ -175,6 +201,8 @@ export const GamePage: React.FC = () => {
 
       case 'opponent_drew':
         updateOpponentCardCount(message.count || 1);
+        // Play draw sound for opponent
+        drawCardSound();
         break;
 
       case 'turn_passed':
@@ -195,6 +223,7 @@ export const GamePage: React.FC = () => {
 
       case 'player_idle_warning':
         // payload: { player, forfeit_at }
+        notificationSound(); // Play alert sound for idle warning
         try {
           const fa = (message as any).forfeit_at || (message as any).forfeitAt;
           const remaining = (message as any).remaining_seconds || (message as any).remainingSeconds;
@@ -231,7 +260,7 @@ export const GamePage: React.FC = () => {
         try {
           (async () => {
             if (!gt || !playerToken) return;
-            const resp = await fetch(`/api/v1/game/${gt}?pt=${playerToken}`);
+            const resp = await fetch(`${API_BASE}/game/${gt}?pt=${playerToken}`);
             if (!resp.ok) return;
             const data = await resp.json();
             updateFromWSMessage({ type: 'game_state', ...(data as any) } as any);
@@ -259,23 +288,25 @@ export const GamePage: React.FC = () => {
   });
 
   const handleSendMessage = useCallback((message: OutgoingWSMessage) => {
-    playClick();
-    sendWSMessage(message);
     if (message.type === 'play_card') {
+      playCardSound();
       drawPendingRef.current = false;
       setCanPass(false);
+    } else if (message.type === 'draw_card') {
+      drawCardSound();
     }
-  }, [sendWSMessage, playClick, setCanPass]);
+    sendWSMessage(message);
+  }, [sendWSMessage, playCardSound, drawCardSound, setCanPass]);
 
   const handlePassTurn = useCallback(() => {
-    playClick();
+    passSound();
     console.log('Sending pass_turn');
     sendWSMessage({
       type: 'pass_turn',
       data: {}
     });
     setCanPass(false);
-  }, [sendWSMessage, setCanPass, playClick]);
+  }, [sendWSMessage, setCanPass, passSound]);
 
   const drawPendingRef = useRef(false);
   const [idleForfeitAt, setIdleForfeitAt] = useState<number | null>(null);
@@ -316,7 +347,7 @@ export const GamePage: React.FC = () => {
 
     (async () => {
       try {
-        const resp = await fetch(`/api/v1/game/${gt}?pt=${playerToken}`);
+        const resp = await fetch(`${API_BASE}/game/${gt}?pt=${playerToken}`);
         if (!resp.ok) return;
         const data = await resp.json();
         if (cancelled) return;
@@ -366,63 +397,123 @@ export const GamePage: React.FC = () => {
   if (gameOver) {
     const youWon = gameOver.isWinner;
     const isDraw = (gameOver as any).isDraw === true;
+    const winType = (gameOver as any).winType || 'classic';
+    const playerPoints = (gameOver as any).playerPoints;
+    const opponentPoints = (gameOver as any).opponentPoints;
 
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="p-8 text-center max-w-md mx-auto">
+      <div className="min-h-screen flex items-center justify-center bg-white relative overflow-hidden">
+        <div className="p-8 text-center max-w-md mx-auto relative z-10">
+          {/* Animated emoji circle */}
           <div className="mb-6">
-            <div className={`h-20 w-20 rounded-full mx-auto flex items-center justify-center text-4xl ${
-              isDraw ? 'bg-gray-100 text-gray-700' : (youWon ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600')
+            <div className={`h-24 w-24 rounded-full mx-auto flex items-center justify-center text-5xl ${
+              isDraw ? 'bg-yellow-100' : 
+              (youWon ? 'bg-green-100 animate-bounce' : 'bg-red-100')
             }`}>
-              {isDraw ? '🤝' : (youWon ? '🎉' : '😔')}
+              {isDraw ? '🤝' : (youWon ? '🎉' : '😢')}
             </div>
           </div>
 
-          <h2 className="text-3xl font-bold text-gray-900 mb-4">
-            {isDraw ? 'It\'s a draw' : (youWon ? 'You Won!' : 'You Lost')}
+          {/* Title */}
+          <h2 className={`text-3xl font-bold mb-4 ${
+            isDraw ? 'text-yellow-600' : (youWon ? 'text-green-600' : 'text-red-600')
+          }`}>
+            {isDraw ? 'It\'s a Draw!' : (youWon ? 'You Won! 🏆' : 'You Lost')}
           </h2>
 
-          <div className="space-y-3 text-gray-700">
+          {/* Win type badge */}
+          <div className="mb-4">
+            <span className={`inline-block px-4 py-1 rounded-full text-sm font-semibold ${
+              winType === 'classic' ? 'bg-[#373536] text-white' : 'bg-orange-500 text-white'
+            }`}>
+              {winType === 'classic' ? '👑 Classic Win' : '✂️ Chop Win'}
+            </span>
+          </div>
+
+          {/* Points display for chop wins */}
+          {winType === 'chop' && playerPoints !== undefined && opponentPoints !== undefined && (
+            <div className="mb-6 bg-gray-50 rounded-lg p-4 border border-gray-200">
+              <div className="text-gray-600 text-sm mb-3 font-semibold">Final Score</div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className={`p-3 rounded-lg ${youWon ? 'bg-green-50 border-2 border-green-500' : 'bg-white border border-gray-200'}`}>
+                  <div className="text-gray-500 text-xs mb-1">You</div>
+                  <div className={`text-2xl font-bold ${youWon ? 'text-green-600' : 'text-gray-700'}`}>
+                    {playerPoints}
+                  </div>
+                  <div className="text-gray-400 text-xs">points</div>
+                </div>
+                <div className={`p-3 rounded-lg ${!youWon && !isDraw ? 'bg-red-50 border-2 border-red-500' : 'bg-white border border-gray-200'}`}>
+                  <div className="text-gray-500 text-xs mb-1">Opponent</div>
+                  <div className={`text-2xl font-bold ${!youWon && !isDraw ? 'text-red-600' : 'text-gray-700'}`}>
+                    {opponentPoints}
+                  </div>
+                  <div className="text-gray-400 text-xs">points</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Winnings/Message section */}
+          <div className="space-y-3 mb-6">
             {isDraw ? (
-              <p className="font-semibold">Stakes refunded to your account</p>
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                <p className="font-semibold text-yellow-800">Stakes refunded to your account</p>
+              </div>
             ) : youWon ? (
-              <div className="space-y-2">
-                <p className="text-2xl font-bold text-green-600">
-                  You won {((gameState.stakeAmount || 1000) * 2 * 0.85).toLocaleString()} UGX!
+              <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                <p className="text-2xl font-bold text-green-600 mb-1">
+                  +{((gameState.stakeAmount || 1000) * 2 * 0.85).toLocaleString()} UGX
                 </p>
                 <p className="text-sm text-gray-600">
-                  Money has been credited to your account (after 15% tax).
+                  Money credited to your account (after 15% tax)
                 </p>
               </div>
             ) : (
-              <p className="font-semibold">Better luck next time</p>
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                <p className="font-semibold text-red-800">Better luck next time! 💪</p>
+              </div>
             )}
           </div>
 
-          <div className="flex gap-3 mt-6 justify-center">
+          {/* Action buttons */}
+          <div className="flex gap-3 justify-center items-center">
             <button
               onClick={() => navigate('/')}
-              className="bg-[#373536] text-white py-2 px-4 rounded-md text-sm font-semibold hover:bg-[#2c2b2a] transition-colors"
+              className="flex-1 bg-[#373536] text-white py-2 px-4 rounded-lg text-sm font-semibold hover:bg-[#2c2b2a] transition-colors"
             >
-              New Game
-              </button>
+              NewGame
+            </button>
 
-              <button
-                onClick={() => {
-                  const opponent = gameState.opponentPhone;
-                  const stake = gameState.stakeAmount || 1000;
-                  if (opponent) {
-                    navigate(`/rematch?opponent=${encodeURIComponent(opponent)}&stake=${stake}`);
-                  } else {
-                    console.log('Cannot rematch: opponent phone not available', { gameState });
-                    alert('Unable to rematch: opponent information not available');
-                  }
-                }}
-                className="bg-[#111827] text-white py-2 px-4 rounded-md text-sm font-semibold hover:opacity-90 transition-colors"
-              >
-                Rematch
-              </button>
-            </div>
+            <button
+              onClick={() => {
+                const opponent = gameState.opponentPhone;
+                const stake = gameState.stakeAmount || 1000;
+                if (opponent) {
+                  navigate(`/rematch?opponent=${encodeURIComponent(opponent)}&stake=${stake}`);
+                } else {
+                  
+                  alert('Unable to rematch: opponent information not available');
+                }
+              }}
+              className="flex-1 bg-[#111827] text-white py-2 px-4 rounded-lg text-sm font-semibold hover:opacity-90 transition-colors"
+            >
+              Rematch
+            </button>
+          </div>
+          
+          <button
+            onClick={() => {
+              const phone = gameState.myPhone || localStorage.getItem('playmatatu_phone') || localStorage.getItem('matatu_phone');
+              if (phone) {
+                navigate(`/profile?phone=${encodeURIComponent(phone)}&withdraw=1`);
+              } else {
+                navigate('/profile?withdraw=1');
+              }
+            }}
+            className="w-full mt-3 py-2 px-4 text-sm text-gray-500 hover:text-gray-700 underline"
+          >
+            Withdraw
+          </button>
         </div>
       </div>
     );
@@ -430,7 +521,7 @@ export const GamePage: React.FC = () => {
 
   return (
     <div 
-      className="min-h-screen w-full overflow-hidden" 
+      className="min-h-screen w-full overflow-hidden relative" 
       style={{ 
         backgroundImage: backgroundLoaded ? "url('/background.webp')" : 'none',
         backgroundSize: 'cover', 
@@ -438,6 +529,24 @@ export const GamePage: React.FC = () => {
         backgroundColor: backgroundLoaded ? 'transparent' : '#2a2a2a' // Fallback dark color instead of white
       }}
     >
+      {/* Mute button in top right corner */}
+      <button
+        onClick={toggleMute}
+        className="absolute top-4 right-4 z-50 bg-black bg-opacity-50 hover:bg-opacity-70 text-white p-3 rounded-full transition-all"
+        aria-label={isMuted ? 'Unmute' : 'Mute'}
+      >
+        {isMuted ? (
+          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" clipRule="evenodd" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+          </svg>
+        ) : (
+          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+          </svg>
+        )}
+      </button>
+
       <GameBoard
         myHand={gameState.myHand}
         opponentCardCount={gameState.opponentCardCount}
