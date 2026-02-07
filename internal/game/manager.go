@@ -74,6 +74,10 @@ func InitializeManager(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) {
 	if err := Manager.RehydrateQueueFromDB(); err != nil {
 		log.Printf("[REHYDRATE] Error rehydrating queue from DB: %v", err)
 	}
+	// Recover in-progress games from Redis
+	if err := Manager.RecoverGamesFromRedis(); err != nil {
+		log.Printf("[RECOVERY] Error recovering games from Redis: %v", err)
+	}
 	// Start queue expiry checker
 	go Manager.StartQueueExpiryChecker()
 	go Manager.StartProcessingRecoveryChecker()
@@ -741,6 +745,65 @@ func (gm *GameManager) loadGameFromRedis(token string) (*GameState, error) {
 	}
 
 	return game, nil
+}
+
+// RecoverGamesFromRedis scans Redis for active game states and preloads them into memory.
+// This allows in-progress games to survive a server restart as long as Redis still has them.
+func (gm *GameManager) RecoverGamesFromRedis() error {
+	if gm.rdb == nil {
+		return nil
+	}
+
+	ctx := context.Background()
+	var cursor uint64
+	var recovered int
+
+	for {
+		keys, nextCursor, err := gm.rdb.Scan(ctx, cursor, "game:*:state", 100).Result()
+		if err != nil {
+			return err
+		}
+
+		for _, key := range keys {
+			// Extract token from key "game:{token}:state"
+			if len(key) <= len("game::state") {
+				continue
+			}
+			token := key[len("game:") : len(key)-len(":state")]
+
+			game, err := gm.loadGameFromRedis(token)
+			if err != nil {
+				log.Printf("[RECOVERY] Failed to load game %s: %v", token, err)
+				continue
+			}
+
+			// Only recover non-completed games
+			if game.Status == StatusCompleted {
+				continue
+			}
+
+			gm.mu.Lock()
+			if _, exists := gm.games[game.ID]; !exists {
+				gm.games[game.ID] = game
+				if game.Player1 != nil {
+					gm.playerToGame[game.Player1.ID] = game.ID
+				}
+				if game.Player2 != nil {
+					gm.playerToGame[game.Player2.ID] = game.ID
+				}
+				recovered++
+			}
+			gm.mu.Unlock()
+		}
+
+		cursor = nextCursor
+		if cursor == 0 {
+			break
+		}
+	}
+
+	log.Printf("[RECOVERY] Recovered %d in-progress games from Redis", recovered)
+	return nil
 }
 
 // parsePlayerFromData reconstructs a Player from JSON data

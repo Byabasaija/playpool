@@ -132,7 +132,16 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   );
 
   return (
-    <div className="relative w-full min-h-screen flex flex-col items-center py-2 px-2 sm:py-4 sm:px-4 md:justify-center md:h-[600px] overflow-hidden">
+    <div className="relative w-full min-h-screen flex flex-col items-center py-2 px-2 sm:py-4 sm:px-4 overflow-hidden">
+      {/* Persistent declared suit indicator (top-left) */}
+      {currentSuit && (
+        <div className="absolute top-3 left-3 z-40 bg-black/50 rounded-lg px-3 py-2 flex items-center gap-2 backdrop-blur-sm">
+          <div className="text-2xl" style={{ color: SUIT_COLORS[currentSuit] }}>
+            {SUIT_SYMBOLS[currentSuit]}
+          </div>
+        </div>
+      )}
+
       {/* Opponent Hand (Top) */}
       <div className="flex-none mb-24 sm:mb-32">
         <div className="flex items-center justify-center py-1 sm:py-2">
@@ -204,7 +213,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
       </div>
 
       {/* Bottom advertising space (reserved for future use) */}
-      <div className="flex-1 min-h-[60px] sm:min-h-[80px] md:hidden">
+      <div className="flex-1 min-h-[60px] sm:min-h-[80px]">
         {/* Empty space reserved for advertising - no content for now */}
       </div>
 

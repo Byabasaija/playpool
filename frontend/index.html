@@ -2,10 +2,14 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/pwa-icon-192.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="stylesheet" href="/index.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    
+    <meta name="theme-color" content="#373536" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
     <!-- Performance optimizations: DNS and connection setup -->
     <link rel="dns-prefetch" href="https://api.playmatatu.com" />
     <link rel="preconnect" href="https://api.playmatatu.com" crossorigin />
@@ -17,7 +21,8 @@
     <link rel="preload" as="image" href="/background.webp" type="image/webp" />
     <link rel="preload" as="image" href="/card_back_orange.webp" type="image/webp" />
     
-    <title>PlayMatatu - Real Money Card Game</title>
+    <title>PlayMatatu - Play, Win, Repeat</title>
+    <meta name="description" content="PlayMatatu is a fun and engaging ugandan classic card game where players compete to win real cash by playing their cards strategically. Join the excitement and play now!" />
   </head>
   <body>
     <div id="root"></div>

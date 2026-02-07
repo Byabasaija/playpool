@@ -11,8 +11,8 @@ export const SuitSelector: React.FC<SuitSelectorProps> = ({ onSelectSuit, onClos
   const suits: Card['suit'][] = ['hearts', 'diamonds', 'clubs', 'spades'];
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center z-50 pointer-events-none p-4">
-      <div className="flex items-center pointer-events-auto space-x-3 sm:space-x-4">
+    <div className="fixed inset-0 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="flex items-center space-x-3 sm:space-x-4" onClick={(e) => e.stopPropagation()}>
         {suits.map((suit) => (
           <button
             key={suit}

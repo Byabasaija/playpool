@@ -41,12 +41,13 @@ export const GamePage: React.FC = () => {
   
   // Sound effects
   const { isMuted, toggleMute } = useSoundContext();
-  const playCardSound = useSound('/playcard.mp3');
+  const playCardSound = useSound('/woosh.mp3');
   const drawCardSound = useSound('/drawcard.mp3');
-  const passSound = useSound('/woosh.mp3');
+  const passSound = useSound('/playcard.mp3');
   const startGameSound = useSound('/startgame.mp3');
   const endGameSound = useSound('/endgame.mp3');
   const notificationSound = useSound('/bell-notification.mp3');
+  const wrongSound = useSound('/wrongplay.mp3');
   
   // Play end game sound when game ends
   const gameOverPlayedRef = useRef(false);
@@ -219,6 +220,7 @@ export const GamePage: React.FC = () => {
 
       case 'error':
         console.error('Game error:', message.message);
+        wrongSound();
         break;
 
       case 'player_idle_warning':
@@ -348,13 +350,21 @@ export const GamePage: React.FC = () => {
     (async () => {
       try {
         const resp = await fetch(`${API_BASE}/game/${gt}?pt=${playerToken}`);
-        if (!resp.ok) return;
+        if (!resp.ok) {
+          // Game no longer exists on server — redirect home
+          if (resp.status === 404) navigate('/', { replace: true });
+          return;
+        }
         const data = await resp.json();
         if (cancelled) return;
         // If server returned player-specific state, apply it as a 'game_state' message
         if (data && Object.keys(data).length > 0) {
           updateFromWSMessage({ type: 'game_state', ...(data as any) } as any);
           if ((data as any).my_hand && (data as any).my_hand.length > 0) {
+            setGameStarted(true);
+          }
+          // Game already completed — make sure we skip "Waiting for Opponent"
+          if ((data as any).winner) {
             setGameStarted(true);
           }
         }
