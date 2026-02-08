@@ -343,37 +343,62 @@ func GetAdminTransactions(db *sqlx.DB) gin.HandlerFunc {
 
 		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 		offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
-		playerPhone := c.Query("player_phone")
+		txnType := c.DefaultQuery("type", "all")
+		txnStatus := c.DefaultQuery("status", "all")
+		dateFrom := c.DefaultQuery("date_from", "")
+		dateTo := c.DefaultQuery("date_to", "")
 
 		if limit > 200 {
 			limit = 200
 		}
 
-		query := `
-			SELECT t.id, t.player_id, t.transaction_type, t.amount, t.momo_transaction_id, t.status, t.created_at, t.completed_at
-			FROM transactions t
-		`
-		args := []interface{}{limit, offset}
-		whereClause := ""
-
-		if playerPhone != "" {
-			whereClause = " WHERE EXISTS (SELECT 1 FROM players p WHERE p.id = t.player_id AND p.phone_number = $3)"
-			args = append(args, playerPhone)
+		type txnRow struct {
+			ID              int     `db:"id" json:"id"`
+			PlayerID        int     `db:"player_id" json:"player_id"`
+			PlayerName      *string `db:"player_name" json:"player_name"`
+			PlayerPhone     *string `db:"player_phone" json:"player_phone"`
+			TransactionType string  `db:"transaction_type" json:"transaction_type"`
+			Amount          float64 `db:"amount" json:"amount"`
+			Status          string  `db:"status" json:"status"`
+			CreatedAt       string  `db:"created_at" json:"created_at"`
+			CompletedAt     *string `db:"completed_at" json:"completed_at"`
+			TotalCount      int     `db:"total_count" json:"-"`
 		}
 
-		query += whereClause + " ORDER BY t.created_at DESC LIMIT $1 OFFSET $2"
+		query := `
+			SELECT t.id, t.player_id,
+				p.display_name as player_name,
+				p.phone_number as player_phone,
+				t.transaction_type, t.amount, t.status,
+				to_char(t.created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as created_at,
+				to_char(t.completed_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as completed_at,
+				COUNT(*) OVER() as total_count
+			FROM transactions t
+			LEFT JOIN players p ON t.player_id = p.id
+			WHERE ($1 = 'all' OR t.transaction_type = $1)
+				AND ($2 = 'all' OR t.status = $2)
+				AND ($3 = '' OR t.created_at >= $3::timestamp)
+				AND ($4 = '' OR t.created_at < ($4::date + interval '1 day'))
+			ORDER BY t.created_at DESC
+			LIMIT $5 OFFSET $6
+		`
 
-		var transactions []models.Transaction
-		err := db.Select(&transactions, query, args...)
+		var rows []txnRow
+		err := db.Select(&rows, query, txnType, txnStatus, dateFrom, dateTo, limit, offset)
 		if err != nil {
 			log.Printf("[ADMIN] Failed to fetch transactions: %v", err)
-			admin.LogAdminAction(db, adminUsername, c.ClientIP(), "/api/v1/admin/transactions", "get_transactions", map[string]interface{}{"limit": limit, "offset": offset, "player_phone": playerPhone}, false)
+			admin.LogAdminAction(db, adminUsername, c.ClientIP(), "/api/v1/admin/transactions", "get_transactions", nil, false)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch transactions"})
 			return
 		}
 
-		admin.LogAdminAction(db, adminUsername, c.ClientIP(), "/api/v1/admin/transactions", "get_transactions", map[string]interface{}{"count": len(transactions), "limit": limit, "offset": offset}, true)
-		c.JSON(http.StatusOK, gin.H{"transactions": transactions, "limit": limit, "offset": offset})
+		total := 0
+		if len(rows) > 0 {
+			total = rows[0].TotalCount
+		}
+
+		admin.LogAdminAction(db, adminUsername, c.ClientIP(), "/api/v1/admin/transactions", "get_transactions", map[string]interface{}{"count": len(rows)}, true)
+		c.JSON(http.StatusOK, gin.H{"transactions": rows, "total": total, "limit": limit, "offset": offset})
 	}
 }
 

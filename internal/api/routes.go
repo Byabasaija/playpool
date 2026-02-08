@@ -112,6 +112,33 @@ func SetupRoutes(router *gin.Engine, db *sqlx.DB, rdb *redis.Client, cfg *config
 				protected.GET("/accounts", handlers.GetAdminAccounts(db))
 				protected.GET("/account_transactions", handlers.GetAdminAccountTransactions(db))
 				protected.GET("/transactions", handlers.GetAdminTransactions(db))
+
+				// Player management
+				protected.GET("/players", handlers.GetAdminPlayers(db))
+				protected.GET("/players/:id", handlers.GetAdminPlayerDetail(db))
+				protected.POST("/players/:id/block", handlers.AdminBlockPlayer(db))
+				protected.POST("/players/:id/unblock", handlers.AdminUnblockPlayer(db))
+				protected.POST("/players/:id/reset-pin", handlers.AdminResetPlayerPIN(db))
+				protected.GET("/players/:id/games", handlers.GetAdminPlayerGames(db))
+				protected.GET("/players/:id/transactions", handlers.GetAdminPlayerTransactions(db))
+
+				// Game management
+				protected.GET("/games", handlers.GetAdminGames(db))
+				protected.GET("/games/:id", handlers.GetAdminGameDetail(db))
+				protected.POST("/games/:id/cancel", handlers.AdminCancelGame(db))
+
+				// Financial operations
+				protected.GET("/withdrawals", handlers.GetAdminWithdrawals(db))
+				protected.POST("/withdrawals/:id/approve", handlers.AdminApproveWithdrawal(db))
+				protected.POST("/withdrawals/:id/reject", handlers.AdminRejectWithdrawal(db))
+				protected.GET("/revenue", handlers.GetAdminRevenue(db))
+
+				// Audit log
+				protected.GET("/audit-logs", handlers.GetAdminAuditLogs(db))
+
+				// Runtime config
+				protected.GET("/config", handlers.GetAdminRuntimeConfig(db))
+				protected.PUT("/config/:key", handlers.UpdateAdminRuntimeConfig(db, cfg))
 			}
 		}
 	}
