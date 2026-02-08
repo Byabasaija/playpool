@@ -12,17 +12,88 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// GetAdminAccount retrieves an admin account by phone
-func GetAdminAccount(db *sqlx.DB, phone string) (*models.AdminAccount, error) {
+// GetAdminAccountByUsername retrieves an admin account by username
+func GetAdminAccountByUsername(db *sqlx.DB, username string) (*models.AdminAccount, error) {
 	var admin models.AdminAccount
-	err := db.Get(&admin, `SELECT phone, display_name, token_hash, roles, allowed_ips, created_at, updated_at FROM admin_accounts WHERE phone=$1`, phone)
+	err := db.Get(&admin, `
+		SELECT phone, username, display_name, token_hash, password_hash, roles, allowed_ips, created_at, updated_at
+		FROM admin_accounts WHERE username=$1
+	`, username)
 	if err != nil {
 		return nil, err
 	}
 	return &admin, nil
 }
 
-// VerifyAdminToken checks if the provided token matches the stored hash
+// GetAdminAccount retrieves an admin account by phone (kept for backward compatibility)
+func GetAdminAccount(db *sqlx.DB, phone string) (*models.AdminAccount, error) {
+	var admin models.AdminAccount
+	err := db.Get(&admin, `
+		SELECT phone, username, display_name, token_hash, password_hash, roles, allowed_ips, created_at, updated_at
+		FROM admin_accounts WHERE phone=$1
+	`, phone)
+	if err != nil {
+		return nil, err
+	}
+	return &admin, nil
+}
+
+// ValidateAdminCredentials validates username + password combination
+func ValidateAdminCredentials(db *sqlx.DB, username, password string) (*models.AdminAccount, error) {
+	admin, err := GetAdminAccountByUsername(db, username)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("admin account not found")
+		}
+		return nil, fmt.Errorf("database error: %w", err)
+	}
+
+	if !admin.PasswordHash.Valid || admin.PasswordHash.String == "" {
+		return nil, fmt.Errorf("password not set for admin account")
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(admin.PasswordHash.String), []byte(password)); err != nil {
+		return nil, fmt.Errorf("invalid password")
+	}
+
+	return admin, nil
+}
+
+// EnsureSuperAdmin creates or updates the super admin account on startup
+func EnsureSuperAdmin(db *sqlx.DB, username, password, phone string) error {
+	if username == "" || password == "" {
+		return fmt.Errorf("ADMIN_USERNAME and ADMIN_PASSWORD must be set")
+	}
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("failed to hash password: %w", err)
+	}
+
+	// Use a dummy token_hash since the column is NOT NULL from the old schema
+	dummyTokenHash, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+
+	_, err = db.Exec(`
+		INSERT INTO admin_accounts (phone, username, display_name, token_hash, password_hash, roles, allowed_ips, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+		ON CONFLICT (phone) DO UPDATE SET
+			username = EXCLUDED.username,
+			display_name = EXCLUDED.display_name,
+			password_hash = EXCLUDED.password_hash,
+			token_hash = EXCLUDED.token_hash,
+			roles = EXCLUDED.roles,
+			updated_at = NOW()
+	`, phone, username, "Super Admin", string(dummyTokenHash), string(passwordHash), pq.Array([]string{"super_admin"}), pq.Array([]string{}))
+
+	if err != nil {
+		return fmt.Errorf("failed to upsert super admin: %w", err)
+	}
+
+	log.Printf("[ADMIN] Super admin ensured (username=%s, phone=%s)", username, phone)
+	return nil
+}
+
+// VerifyAdminToken checks if the provided token matches the stored hash (legacy, kept for compatibility)
 func VerifyAdminToken(hashedToken, plainToken string) bool {
 	err := bcrypt.CompareHashAndPassword([]byte(hashedToken), []byte(plainToken))
 	return err == nil
@@ -50,7 +121,7 @@ func CreateAdminAccount(db *sqlx.DB, phone, displayName, plainToken string, role
 }
 
 // LogAdminAction records an admin action in the audit log
-func LogAdminAction(db *sqlx.DB, adminPhone, ip, route, action string, details map[string]interface{}, success bool) error {
+func LogAdminAction(db *sqlx.DB, adminUsername, ip, route, action string, details map[string]interface{}, success bool) error {
 	detailsJSON, err := json.Marshal(details)
 	if err != nil {
 		log.Printf("Failed to marshal admin audit details: %v", err)
@@ -58,9 +129,9 @@ func LogAdminAction(db *sqlx.DB, adminPhone, ip, route, action string, details m
 	}
 
 	_, err = db.Exec(`
-		INSERT INTO admin_audit (admin_phone, ip, route, action, details, success, created_at)
+		INSERT INTO admin_audit (admin_username, ip, route, action, details, success, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, NOW())
-	`, adminPhone, ip, route, action, detailsJSON, success)
+	`, adminUsername, ip, route, action, detailsJSON, success)
 
 	if err != nil {
 		log.Printf("Failed to log admin action: %v", err)
@@ -73,7 +144,7 @@ func LogAdminAction(db *sqlx.DB, adminPhone, ip, route, action string, details m
 func GetAdminAuditLogs(db *sqlx.DB, limit, offset int) ([]models.AdminAudit, error) {
 	var logs []models.AdminAudit
 	query := `
-		SELECT id, admin_phone, ip, route, action, details, success, created_at
+		SELECT id, admin_phone, admin_username, ip, route, action, details, success, created_at
 		FROM admin_audit
 		ORDER BY created_at DESC
 		LIMIT $1 OFFSET $2
@@ -82,41 +153,33 @@ func GetAdminAuditLogs(db *sqlx.DB, limit, offset int) ([]models.AdminAudit, err
 	return logs, err
 }
 
-// GetAdminAuditLogsByPhone retrieves audit logs for a specific admin
-func GetAdminAuditLogsByPhone(db *sqlx.DB, phone string, limit, offset int) ([]models.AdminAudit, error) {
+// GetAdminAuditLogsByUsername retrieves audit logs for a specific admin
+func GetAdminAuditLogsByUsername(db *sqlx.DB, username string, limit, offset int) ([]models.AdminAudit, error) {
 	var logs []models.AdminAudit
 	query := `
-		SELECT id, admin_phone, ip, route, action, details, success, created_at
+		SELECT id, admin_phone, admin_username, ip, route, action, details, success, created_at
 		FROM admin_audit
-		WHERE admin_phone = $1
+		WHERE admin_username = $1
 		ORDER BY created_at DESC
 		LIMIT $2 OFFSET $3
 	`
-	err := db.Select(&logs, query, phone, limit, offset)
+	err := db.Select(&logs, query, username, limit, offset)
 	return logs, err
 }
 
-// ValidateAdminPhoneAndToken validates phone + token combination
+// ValidateAdminPhoneAndToken validates phone + token combination (legacy)
 func ValidateAdminPhoneAndToken(db *sqlx.DB, phone, token string) (*models.AdminAccount, error) {
-	log.Printf("[ADMIN] Validating phone: %s", phone)
-
 	admin, err := GetAdminAccount(db, phone)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			log.Printf("[ADMIN] No admin account found for phone: %s", phone)
 			return nil, fmt.Errorf("admin account not found")
 		}
-		log.Printf("[ADMIN] Database error: %v", err)
 		return nil, fmt.Errorf("database error: %w", err)
 	}
 
-	log.Printf("[ADMIN] Found admin account for: %s", phone)
-
 	if !VerifyAdminToken(admin.TokenHash, token) {
-		log.Printf("[ADMIN] Token verification failed for phone: %s", phone)
 		return nil, fmt.Errorf("invalid token")
 	}
 
-	log.Printf("[ADMIN] Token verified successfully for: %s", phone)
 	return admin, nil
 }

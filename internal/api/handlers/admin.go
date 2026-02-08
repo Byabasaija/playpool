@@ -22,27 +22,30 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// AdminRequestOTP handles admin OTP generation and SMS sending
-func AdminRequestOTP(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerFunc {
+const adminSessionTTL = 4 * time.Hour
+const adminOTPTTL = 5 * time.Minute
+const adminCookieName = "admin_session"
+
+// AdminLogin handles step 1: username/password validation, then sends OTP
+func AdminLogin(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Phone string `json:"phone" binding:"required"`
-			Token string `json:"token" binding:"required"`
+			Username string `json:"username" binding:"required"`
+			Password string `json:"password" binding:"required"`
 		}
 		if err := c.BindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
 			return
 		}
 
-		// Normalize phone
-		phone := strings.TrimSpace(req.Phone)
-		token := strings.TrimSpace(req.Token)
+		username := strings.TrimSpace(req.Username)
+		password := strings.TrimSpace(req.Password)
 
-		// Validate admin phone + token
-		adminAcc, err := admin.ValidateAdminPhoneAndToken(db, phone, token)
+		// Validate credentials
+		adminAcc, err := admin.ValidateAdminCredentials(db, username, password)
 		if err != nil {
-			log.Printf("[ADMIN] Failed to validate admin phone+token: %v", err)
-			admin.LogAdminAction(db, phone, c.ClientIP(), "/api/v1/admin/request-otp", "request_otp", map[string]interface{}{"phone": phone}, false)
+			log.Printf("[ADMIN] Login failed for username %s: %v", username, err)
+			admin.LogAdminAction(db, username, c.ClientIP(), "/api/v1/admin/login", "login", map[string]interface{}{"username": username}, false)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
 			return
 		}
@@ -51,74 +54,67 @@ func AdminRequestOTP(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Han
 		otpInt, _ := rand.Int(rand.Reader, big.NewInt(1000000))
 		otp := fmt.Sprintf("%06d", otpInt.Int64())
 
-		// Store OTP in Redis with 5 min expiry
+		// Store OTP in Redis
 		ctx := context.Background()
-		redisKey := fmt.Sprintf("admin_otp:%s", phone)
-		if err := rdb.Set(ctx, redisKey, otp, 5*time.Minute).Err(); err != nil {
+		redisKey := fmt.Sprintf("admin_otp:%s", username)
+		if err := rdb.Set(ctx, redisKey, otp, adminOTPTTL).Err(); err != nil {
 			log.Printf("[ADMIN] Failed to store OTP in Redis: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate OTP"})
 			return
 		}
 
-		// Send SMS
+		// Send SMS to admin's phone
 		message := fmt.Sprintf("Your PlayMatatu admin OTP is: %s. Valid for 5 minutes.", otp)
-		if _, err := sms.SendSMS(ctx, phone, message); err != nil {
-			log.Printf("[ADMIN] Failed to send OTP SMS: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send OTP"})
-			return
+		if _, err := sms.SendSMS(ctx, adminAcc.Phone, message); err != nil {
+			log.Printf("[ADMIN] Failed to send OTP SMS to %s: %v", adminAcc.Phone, err)
+			// In mock mode, log the OTP for development
+			if cfg.MockMode {
+				log.Printf("[ADMIN] [MOCK] OTP for %s: %s", username, otp)
+			}
 		}
 
-		admin.LogAdminAction(db, adminAcc.Phone, c.ClientIP(), "/api/v1/admin/request-otp", "request_otp", map[string]interface{}{"phone": phone}, true)
-		c.JSON(http.StatusOK, gin.H{"message": "OTP sent"})
+		admin.LogAdminAction(db, username, c.ClientIP(), "/api/v1/admin/login", "login_otp_sent", map[string]interface{}{"username": username}, true)
+		c.JSON(http.StatusOK, gin.H{"otp_required": true, "message": "OTP sent to registered phone"})
 	}
 }
 
-// AdminVerifyOTP handles admin OTP verification and session creation
+// AdminVerifyOTP handles step 2: OTP verification, creates session cookie
 func AdminVerifyOTP(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Phone string `json:"phone" binding:"required"`
-			OTP   string `json:"otp" binding:"required"`
+			Username string `json:"username" binding:"required"`
+			OTP      string `json:"otp" binding:"required"`
 		}
 		if err := c.BindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
 			return
 		}
 
-		phone := strings.TrimSpace(req.Phone)
+		username := strings.TrimSpace(req.Username)
 		otp := strings.TrimSpace(req.OTP)
 
 		// Get OTP from Redis
 		ctx := context.Background()
-		redisKey := fmt.Sprintf("admin_otp:%s", phone)
+		redisKey := fmt.Sprintf("admin_otp:%s", username)
 		storedOTP, err := rdb.Get(ctx, redisKey).Result()
 		if err != nil {
-			log.Printf("[ADMIN] OTP not found or expired: %v", err)
-			admin.LogAdminAction(db, phone, c.ClientIP(), "/api/v1/admin/verify-otp", "verify_otp", map[string]interface{}{"phone": phone}, false)
+			log.Printf("[ADMIN] OTP not found or expired for %s: %v", username, err)
+			admin.LogAdminAction(db, username, c.ClientIP(), "/api/v1/admin/verify-otp", "verify_otp", map[string]interface{}{"username": username}, false)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired OTP"})
 			return
 		}
 
-		// Verify OTP
 		if storedOTP != otp {
-			log.Printf("[ADMIN] Invalid OTP for phone %s", phone)
-			admin.LogAdminAction(db, phone, c.ClientIP(), "/api/v1/admin/verify-otp", "verify_otp", map[string]interface{}{"phone": phone}, false)
+			log.Printf("[ADMIN] Invalid OTP for %s", username)
+			admin.LogAdminAction(db, username, c.ClientIP(), "/api/v1/admin/verify-otp", "verify_otp", map[string]interface{}{"username": username}, false)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid OTP"})
 			return
 		}
 
-		// Delete OTP from Redis (single use)
+		// Delete OTP (single use)
 		rdb.Del(ctx, redisKey)
 
-		// Get admin account
-		adminAcc, err := admin.GetAdminAccount(db, phone)
-		if err != nil {
-			log.Printf("[ADMIN] Failed to get admin account: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create session"})
-			return
-		}
-
-		// Generate admin session token
+		// Generate session token
 		tokenBytes := make([]byte, 32)
 		if _, err := rand.Read(tokenBytes); err != nil {
 			log.Printf("[ADMIN] Failed to generate session token: %v", err)
@@ -127,41 +123,59 @@ func AdminVerifyOTP(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Hand
 		}
 		sessionToken := hex.EncodeToString(tokenBytes)
 
-		// Store session in Redis with 15 min TTL
+		// Store session in Redis
 		sessionKey := fmt.Sprintf("admin_session:%s", sessionToken)
 		sessionData := map[string]interface{}{
-			"phone":      adminAcc.Phone,
-			"expires_at": time.Now().Add(15 * time.Minute).Unix(),
+			"username":   username,
+			"expires_at": time.Now().Add(adminSessionTTL).Unix(),
 		}
 		sessionJSON, _ := json.Marshal(sessionData)
-		if err := rdb.Set(ctx, sessionKey, sessionJSON, 15*time.Minute).Err(); err != nil {
+		if err := rdb.Set(ctx, sessionKey, sessionJSON, adminSessionTTL).Err(); err != nil {
 			log.Printf("[ADMIN] Failed to store session: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create session"})
 			return
 		}
 
-		admin.LogAdminAction(db, adminAcc.Phone, c.ClientIP(), "/api/v1/admin/verify-otp", "verify_otp_success", map[string]interface{}{"phone": phone}, true)
-		c.JSON(http.StatusOK, gin.H{
-			"admin_session": sessionToken,
-			"ttl_seconds":   900, // 15 minutes
-		})
+		// Set HTTP-only cookie
+		secure := cfg.Environment == "production"
+		c.SetSameSite(http.SameSiteStrictMode)
+		c.SetCookie(adminCookieName, sessionToken, int(adminSessionTTL.Seconds()), "/api/v1/admin", "", secure, true)
+
+		admin.LogAdminAction(db, username, c.ClientIP(), "/api/v1/admin/verify-otp", "verify_otp_success", map[string]interface{}{"username": username}, true)
+		c.JSON(http.StatusOK, gin.H{"ok": true})
 	}
 }
 
-// AdminSessionMiddleware validates admin session token
-func AdminSessionMiddleware(rdb *redis.Client, db *sqlx.DB) gin.HandlerFunc {
+// AdminLogout clears admin session
+func AdminLogout(rdb *redis.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Get token from header
-		token := c.GetHeader("X-Admin-Session")
-		if token == "" {
-			token = c.GetHeader("Authorization")
-			if strings.HasPrefix(token, "Bearer ") {
-				token = strings.TrimPrefix(token, "Bearer ")
-			}
+		token, err := c.Cookie(adminCookieName)
+		if err == nil && token != "" {
+			ctx := context.Background()
+			sessionKey := fmt.Sprintf("admin_session:%s", token)
+			rdb.Del(ctx, sessionKey)
 		}
 
-		if token == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Missing admin session token"})
+		c.SetSameSite(http.SameSiteStrictMode)
+		c.SetCookie(adminCookieName, "", -1, "/api/v1/admin", "", false, true)
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	}
+}
+
+// AdminMe returns the current admin session info
+func AdminMe() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		username := c.GetString("admin_username")
+		c.JSON(http.StatusOK, gin.H{"username": username})
+	}
+}
+
+// AdminSessionMiddleware validates admin session from cookie
+func AdminSessionMiddleware(rdb *redis.Client, db *sqlx.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token, err := c.Cookie(adminCookieName)
+		if err != nil || token == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Not authenticated"})
 			c.Abort()
 			return
 		}
@@ -171,7 +185,6 @@ func AdminSessionMiddleware(rdb *redis.Client, db *sqlx.DB) gin.HandlerFunc {
 		sessionKey := fmt.Sprintf("admin_session:%s", token)
 		sessionJSON, err := rdb.Get(ctx, sessionKey).Result()
 		if err != nil {
-			log.Printf("[ADMIN] Invalid session: %v", err)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired session"})
 			c.Abort()
 			return
@@ -179,15 +192,13 @@ func AdminSessionMiddleware(rdb *redis.Client, db *sqlx.DB) gin.HandlerFunc {
 
 		var sessionData map[string]interface{}
 		if err := json.Unmarshal([]byte(sessionJSON), &sessionData); err != nil {
-			log.Printf("[ADMIN] Failed to parse session data: %v", err)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid session"})
 			c.Abort()
 			return
 		}
 
-		// Store admin phone in context
-		if phone, ok := sessionData["phone"].(string); ok {
-			c.Set("admin_phone", phone)
+		if username, ok := sessionData["username"].(string); ok {
+			c.Set("admin_username", username)
 		}
 
 		c.Next()
@@ -197,7 +208,7 @@ func AdminSessionMiddleware(rdb *redis.Client, db *sqlx.DB) gin.HandlerFunc {
 // GetAdminAccounts returns list of accounts and their balances
 func GetAdminAccounts(db *sqlx.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		adminPhone := c.GetString("admin_phone")
+		adminUsername := c.GetString("admin_username")
 
 		var accounts []models.Account
 		err := db.Select(&accounts, `
@@ -207,12 +218,11 @@ func GetAdminAccounts(db *sqlx.DB) gin.HandlerFunc {
 		`)
 		if err != nil {
 			log.Printf("[ADMIN] Failed to fetch accounts: %v", err)
-			admin.LogAdminAction(db, adminPhone, c.ClientIP(), "/api/v1/admin/accounts", "get_accounts", nil, false)
+			admin.LogAdminAction(db, adminUsername, c.ClientIP(), "/api/v1/admin/accounts", "get_accounts", nil, false)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch accounts"})
 			return
 		}
 
-		// Map to response-friendly types (avoid sql.Null* leaking to JSON)
 		type accountResp struct {
 			ID            int     `json:"id"`
 			AccountType   string  `json:"account_type"`
@@ -239,7 +249,7 @@ func GetAdminAccounts(db *sqlx.DB) gin.HandlerFunc {
 			})
 		}
 
-		admin.LogAdminAction(db, adminPhone, c.ClientIP(), "/api/v1/admin/accounts", "get_accounts", map[string]interface{}{"count": len(resp)}, true)
+		admin.LogAdminAction(db, adminUsername, c.ClientIP(), "/api/v1/admin/accounts", "get_accounts", map[string]interface{}{"count": len(resp)}, true)
 		c.JSON(http.StatusOK, gin.H{"accounts": resp})
 	}
 }
@@ -247,7 +257,7 @@ func GetAdminAccounts(db *sqlx.DB) gin.HandlerFunc {
 // GetAdminAccountTransactions returns paginated account transactions
 func GetAdminAccountTransactions(db *sqlx.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		adminPhone := c.GetString("admin_phone")
+		adminUsername := c.GetString("admin_username")
 
 		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 		offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
@@ -265,12 +275,11 @@ func GetAdminAccountTransactions(db *sqlx.DB) gin.HandlerFunc {
 		`, limit, offset)
 		if err != nil {
 			log.Printf("[ADMIN] Failed to fetch account transactions: %v", err)
-			admin.LogAdminAction(db, adminPhone, c.ClientIP(), "/api/v1/admin/account_transactions", "get_account_transactions", map[string]interface{}{"limit": limit, "offset": offset}, false)
+			admin.LogAdminAction(db, adminUsername, c.ClientIP(), "/api/v1/admin/account_transactions", "get_account_transactions", map[string]interface{}{"limit": limit, "offset": offset}, false)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch transactions"})
 			return
 		}
 
-		// Map to response-friendly types
 		type txnResp struct {
 			ID              int     `json:"id"`
 			DebitAccountID  *int    `json:"debit_account_id"`
@@ -322,7 +331,7 @@ func GetAdminAccountTransactions(db *sqlx.DB) gin.HandlerFunc {
 			})
 		}
 
-		admin.LogAdminAction(db, adminPhone, c.ClientIP(), "/api/v1/admin/account_transactions", "get_account_transactions", map[string]interface{}{"count": len(resp), "limit": limit, "offset": offset}, true)
+		admin.LogAdminAction(db, adminUsername, c.ClientIP(), "/api/v1/admin/account_transactions", "get_account_transactions", map[string]interface{}{"count": len(resp), "limit": limit, "offset": offset}, true)
 		c.JSON(http.StatusOK, gin.H{"transactions": resp, "limit": limit, "offset": offset})
 	}
 }
@@ -330,7 +339,7 @@ func GetAdminAccountTransactions(db *sqlx.DB) gin.HandlerFunc {
 // GetAdminTransactions returns paginated player transactions with filters
 func GetAdminTransactions(db *sqlx.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		adminPhone := c.GetString("admin_phone")
+		adminUsername := c.GetString("admin_username")
 
 		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 		offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
@@ -358,12 +367,12 @@ func GetAdminTransactions(db *sqlx.DB) gin.HandlerFunc {
 		err := db.Select(&transactions, query, args...)
 		if err != nil {
 			log.Printf("[ADMIN] Failed to fetch transactions: %v", err)
-			admin.LogAdminAction(db, adminPhone, c.ClientIP(), "/api/v1/admin/transactions", "get_transactions", map[string]interface{}{"limit": limit, "offset": offset, "player_phone": playerPhone}, false)
+			admin.LogAdminAction(db, adminUsername, c.ClientIP(), "/api/v1/admin/transactions", "get_transactions", map[string]interface{}{"limit": limit, "offset": offset, "player_phone": playerPhone}, false)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch transactions"})
 			return
 		}
 
-		admin.LogAdminAction(db, adminPhone, c.ClientIP(), "/api/v1/admin/transactions", "get_transactions", map[string]interface{}{"count": len(transactions), "limit": limit, "offset": offset}, true)
+		admin.LogAdminAction(db, adminUsername, c.ClientIP(), "/api/v1/admin/transactions", "get_transactions", map[string]interface{}{"count": len(transactions), "limit": limit, "offset": offset}, true)
 		c.JSON(http.StatusOK, gin.H{"transactions": transactions, "limit": limit, "offset": offset})
 	}
 }
@@ -371,7 +380,7 @@ func GetAdminTransactions(db *sqlx.DB) gin.HandlerFunc {
 // GetAdminStats returns platform-wide statistics
 func GetAdminStats(db *sqlx.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		adminPhone := c.GetString("admin_phone")
+		adminUsername := c.GetString("admin_username")
 
 		stats := gin.H{}
 
@@ -438,7 +447,7 @@ func GetAdminStats(db *sqlx.DB) gin.HandlerFunc {
 			stats["pending_withdrawals"] = pendingWithdrawals
 		}
 
-		admin.LogAdminAction(db, adminPhone, c.ClientIP(), "/api/v1/admin/stats", "get_stats", nil, true)
+		admin.LogAdminAction(db, adminUsername, c.ClientIP(), "/api/v1/admin/stats", "get_stats", nil, true)
 		c.JSON(http.StatusOK, stats)
 	}
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	"github.com/playmatatu/backend/internal/admin"
 	"github.com/playmatatu/backend/internal/api"
 	"github.com/playmatatu/backend/internal/config"
 	"github.com/playmatatu/backend/internal/database"
@@ -40,6 +41,13 @@ func main() {
 		log.Println("↗ Running DB migrations on startup...")
 		if err := migrations.RunMigrations(cfg.DatabaseURL); err != nil {
 			log.Fatalf("Failed to run migrations: %v", err)
+		}
+	}
+
+	// Ensure super admin account exists
+	if cfg.AdminUsername != "" && cfg.AdminPassword != "" {
+		if err := admin.EnsureSuperAdmin(db, cfg.AdminUsername, cfg.AdminPassword, cfg.AdminPhone); err != nil {
+			log.Printf("[ADMIN] Warning: failed to ensure super admin: %v", err)
 		}
 	}
 

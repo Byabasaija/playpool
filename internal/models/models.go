@@ -133,23 +133,36 @@ type AccountTransaction struct {
 
 // AdminAccount represents an admin operator account
 type AdminAccount struct {
-	Phone       string         `db:"phone" json:"phone"`
-	DisplayName sql.NullString `db:"display_name" json:"display_name,omitempty"`
-	TokenHash   string         `db:"token_hash" json:"-"`
-	Roles       pq.StringArray `db:"roles" json:"roles,omitempty"`
-	AllowedIPs  pq.StringArray `db:"allowed_ips" json:"allowed_ips,omitempty"`
-	CreatedAt   time.Time      `db:"created_at" json:"created_at"`
-	UpdatedAt   time.Time      `db:"updated_at" json:"updated_at"`
+	Phone        string         `db:"phone" json:"phone"`
+	Username     sql.NullString `db:"username" json:"username,omitempty"`
+	DisplayName  sql.NullString `db:"display_name" json:"display_name,omitempty"`
+	TokenHash    string         `db:"token_hash" json:"-"`
+	PasswordHash sql.NullString `db:"password_hash" json:"-"`
+	Roles        pq.StringArray `db:"roles" json:"roles,omitempty"`
+	AllowedIPs   pq.StringArray `db:"allowed_ips" json:"allowed_ips,omitempty"`
+	CreatedAt    time.Time      `db:"created_at" json:"created_at"`
+	UpdatedAt    time.Time      `db:"updated_at" json:"updated_at"`
 }
 
 // AdminAudit represents an audit log entry for admin actions
 type AdminAudit struct {
-	ID         int            `db:"id" json:"id"`
-	AdminPhone sql.NullString `db:"admin_phone" json:"admin_phone,omitempty"`
-	IP         sql.NullString `db:"ip" json:"ip,omitempty"`
-	Route      sql.NullString `db:"route" json:"route,omitempty"`
-	Action     sql.NullString `db:"action" json:"action,omitempty"`
-	Details    sql.NullString `db:"details" json:"details,omitempty"` // JSONB stored as string
-	Success    sql.NullBool   `db:"success" json:"success,omitempty"`
-	CreatedAt  time.Time      `db:"created_at" json:"created_at"`
+	ID            int            `db:"id" json:"id"`
+	AdminPhone    sql.NullString `db:"admin_phone" json:"admin_phone,omitempty"`
+	AdminUsername sql.NullString `db:"admin_username" json:"admin_username,omitempty"`
+	IP            sql.NullString `db:"ip" json:"ip,omitempty"`
+	Route         sql.NullString `db:"route" json:"route,omitempty"`
+	Action        sql.NullString `db:"action" json:"action,omitempty"`
+	Details       sql.NullString `db:"details" json:"details,omitempty"` // JSONB stored as string
+	Success       sql.NullBool   `db:"success" json:"success,omitempty"`
+	CreatedAt     time.Time      `db:"created_at" json:"created_at"`
+}
+
+// RuntimeConfig represents a runtime-configurable setting
+type RuntimeConfig struct {
+	Key         string         `db:"key" json:"key"`
+	Value       string         `db:"value" json:"value"`
+	ValueType   string         `db:"value_type" json:"value_type"`
+	Description sql.NullString `db:"description" json:"description,omitempty"`
+	UpdatedBy   sql.NullString `db:"updated_by" json:"updated_by,omitempty"`
+	UpdatedAt   time.Time      `db:"updated_at" json:"updated_at"`
 }

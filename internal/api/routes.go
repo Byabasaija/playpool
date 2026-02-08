@@ -96,17 +96,23 @@ func SetupRoutes(router *gin.Engine, db *sqlx.DB, rdb *redis.Client, cfg *config
 		v1.GET("/config", handlers.GetConfig(cfg))
 
 		// Admin endpoints
-		admin := v1.Group("/admin")
+		adminGroup := v1.Group("/admin")
 		{
-			// Admin auth endpoints (no middleware)
-			admin.POST("/request-otp", handlers.AdminRequestOTP(db, rdb, cfg))
-			admin.POST("/verify-otp", handlers.AdminVerifyOTP(db, rdb, cfg))
+			// Auth endpoints (no middleware)
+			adminGroup.POST("/login", handlers.AdminLogin(db, rdb, cfg))
+			adminGroup.POST("/verify-otp", handlers.AdminVerifyOTP(db, rdb, cfg))
+			adminGroup.POST("/logout", handlers.AdminLogout(rdb))
 
-			// Protected admin endpoints (require session)
-			admin.GET("/accounts", handlers.AdminSessionMiddleware(rdb, db), handlers.GetAdminAccounts(db))
-			admin.GET("/account_transactions", handlers.AdminSessionMiddleware(rdb, db), handlers.GetAdminAccountTransactions(db))
-			admin.GET("/transactions", handlers.AdminSessionMiddleware(rdb, db), handlers.GetAdminTransactions(db))
-			admin.GET("/stats", handlers.AdminSessionMiddleware(rdb, db), handlers.GetAdminStats(db))
+			// Protected admin endpoints (require session cookie)
+			protected := adminGroup.Group("")
+			protected.Use(handlers.AdminSessionMiddleware(rdb, db))
+			{
+				protected.GET("/me", handlers.AdminMe())
+				protected.GET("/stats", handlers.GetAdminStats(db))
+				protected.GET("/accounts", handlers.GetAdminAccounts(db))
+				protected.GET("/account_transactions", handlers.GetAdminAccountTransactions(db))
+				protected.GET("/transactions", handlers.GetAdminTransactions(db))
+			}
 		}
 	}
 }
