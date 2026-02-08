@@ -25,8 +25,7 @@ type Config struct {
 	GameExpiryMinutes         int
 	QueueExpiryMinutes        int
 	QueueProcessingVisibility int
-	DisconnectGracePeriodSecs int
-	NoShowFeePercentage       int
+NoShowFeePercentage       int
 	CommissionPercentage      int
 	CommissionFlat            int
 	MinStakeAmount            int
@@ -87,8 +86,6 @@ type Config struct {
 
 	// Matchmaker worker
 	MatchmakerPollSeconds int
-	// Withdraw provider fee percent (telecom fee applied at payout time)
-	WithdrawProviderFeePercent int
 	// Withdraw settings
 	MockMode          bool
 	MinWithdrawAmount int
@@ -119,8 +116,7 @@ func Load() *Config {
 		GameExpiryMinutes:         getEnvInt("GAME_EXPIRY_MINUTES", 3),
 		QueueExpiryMinutes:        getEnvInt("QUEUE_EXPIRY_MINUTES", 3),
 		QueueProcessingVisibility: getEnvInt("QUEUE_PROCESSING_VISIBILITY_SECONDS", 30),
-		DisconnectGracePeriodSecs: getEnvInt("DISCONNECT_GRACE_PERIOD_SECONDS", 120),
-		CommissionPercentage:      getEnvInt("COMMISSION_PERCENTAGE", 10),
+CommissionPercentage:      getEnvInt("COMMISSION_PERCENTAGE", 10),
 		CommissionFlat:            getEnvInt("COMMISSION_FLAT", 1000),
 		MinStakeAmount:            getEnvInt("MIN_STAKE_AMOUNT", 1000),
 		PayoutTaxPercent:          getEnvInt("PAYOUT_TAX_PERCENT", 15),
@@ -182,8 +178,6 @@ func Load() *Config {
 		// Matchmaker worker (how often to check for pairs to match)
 		MatchmakerPollSeconds: getEnvInt("MATCHMAKER_POLL_SECONDS", 2),
 
-		// Withdraw provider fee percent (e.g., telecom/MOMO fee applied at payout time)
-		WithdrawProviderFeePercent: getEnvInt("WITHDRAW_PROVIDER_FEE_PERCENT", 3),
 		// Withdraw configuration
 		MockMode:          getEnv("MOCK_MODE", "true") == "true",
 		MinWithdrawAmount: getEnvInt("MIN_WITHDRAW_AMOUNT", 1000),

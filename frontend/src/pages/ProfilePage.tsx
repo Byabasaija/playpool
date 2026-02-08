@@ -250,17 +250,8 @@ export const ProfilePage: React.FC = () => {
     setPinLoading(false);
   };
 
-  const feePct = config?.withdraw_provider_fee_percent ?? 0;
   const minWithdraw = config?.min_withdraw_amount ?? 0;
   const availableWinnings = profile?.player_winnings ?? profile?.total_winnings ?? 0;
-
-  const computeFee = (amount: number) => {
-    return Math.round(amount * feePct) / 100;
-  };
-
-  const computeNet = (amount: number) => {
-    return amount - computeFee(amount);
-  };
 
   const prefillWithdraw = () => {
     // Prefill withdraw input with full winnings and focus it; reveal embedded form
@@ -481,9 +472,6 @@ export const ProfilePage: React.FC = () => {
                   </button>
                 </div>
               </div>
-              {config?.withdraw_provider_fee_percent != null && (
-                <div className="text-xs text-gray-500">Withdrawals subject to provider fees (≈{config.withdraw_provider_fee_percent}%)</div>
-              )}
 
               {showWithdrawForm && (
                 <div className="mt-3">
@@ -493,16 +481,9 @@ export const ProfilePage: React.FC = () => {
                   <input ref={withdrawInputRef} id="withdraw-amount" type="number" className="w-full px-3 py-2 border rounded" value={withdrawAmount as any} onChange={(e) => setWithdrawAmount(e.target.value === '' ? '' : Number(e.target.value))} aria-describedby="withdraw-help" />
 
                   <div id="withdraw-help" className="text-xs text-gray-500 mt-2">
-                    {feePct ? `Provider fee: ≈${feePct}%` : null}
-                    {minWithdraw ? ` — min ${minWithdraw} UGX` : null}
+                    {minWithdraw ? `Min ${minWithdraw} UGX` : null}
                   </div>
 
-                  {withdrawAmount && Number(withdrawAmount) > 0 && (
-                    <div className="mt-2 p-2 bg-gray-50 rounded text-sm">
-                      <div>Fee: <span className="font-semibold">{computeFee(Number(withdrawAmount))} UGX</span></div>
-                      <div>Net you receive: <span className="font-semibold">{computeNet(Number(withdrawAmount))} UGX</span></div>
-                    </div>
-                  )}
 
                   {amountError && <div className="text-sm text-red-600">{amountError}</div>}
 
@@ -575,8 +556,6 @@ export const ProfilePage: React.FC = () => {
               <h2 id="withdraw-confirm-title" className="text-lg font-semibold">Confirm Withdraw</h2>
               <div className="mt-4 text-sm">
                 <div>Amount: <span className="font-semibold">{withdrawAmount} UGX</span></div>
-                <div>Fee: <span className="font-semibold">{computeFee(Number(withdrawAmount))} UGX</span></div>
-                <div>Net you will receive: <span className="font-semibold">{computeNet(Number(withdrawAmount))} UGX</span></div>
               </div>
               <div className="mt-6 flex gap-3">
                 <button ref={confirmBtnRef} className="flex-1 bg-[#373536] text-white py-2 rounded" onClick={confirmWithdraw} disabled={confirmLoading}>{confirmLoading ? 'Processing...' : 'Confirm'}</button>

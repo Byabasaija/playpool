@@ -90,11 +90,7 @@ func ApplyRuntimeConfigToConfig(db *sqlx.DB, cfg *config.Config) error {
 			if v, err := strconv.Atoi(c.Value); err == nil {
 				cfg.QueueExpiryMinutes = v
 			}
-		case "disconnect_grace_period_secs":
-			if v, err := strconv.Atoi(c.Value); err == nil {
-				cfg.DisconnectGracePeriodSecs = v
-			}
-		case "idle_warning_seconds":
+case "idle_warning_seconds":
 			if v, err := strconv.Atoi(c.Value); err == nil {
 				cfg.IdleWarningSeconds = v
 			}
@@ -105,10 +101,6 @@ func ApplyRuntimeConfigToConfig(db *sqlx.DB, cfg *config.Config) error {
 		case "min_withdraw_amount":
 			if v, err := strconv.Atoi(c.Value); err == nil {
 				cfg.MinWithdrawAmount = v
-			}
-		case "withdraw_provider_fee_percent":
-			if v, err := strconv.Atoi(c.Value); err == nil {
-				cfg.WithdrawProviderFeePercent = v
 			}
 		}
 	}

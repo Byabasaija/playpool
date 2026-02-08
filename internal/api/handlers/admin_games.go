@@ -235,8 +235,8 @@ func AdminCancelGame(db *sqlx.DB) gin.HandlerFunc {
 
 			// Record escrow ledger entry
 			_, err = tx.Exec(`
-				INSERT INTO escrow_ledger (session_id, player_id, amount, entry_type, description)
-				VALUES ($1, $2, $3, 'SESSION_CANCEL', $4)
+				INSERT INTO escrow_ledger (session_id, entry_type, player_id, amount, balance_after, description, created_at)
+				VALUES ($1, 'SESSION_CANCEL', $2, $3, 0, $4, NOW())
 			`, sessionID, *pid, stakeAmount, "Admin cancelled: "+req.Reason)
 			if err != nil {
 				log.Printf("[ADMIN] Failed to create escrow ledger entry: %v", err)

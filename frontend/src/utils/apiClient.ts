@@ -138,7 +138,7 @@ export async function getPlayerProfile(phone: string): Promise<{display_name?: s
   };
 }
 
-export async function getConfig(): Promise<{ commission_flat: number; payout_tax_percent: number; min_stake_amount: number; withdraw_provider_fee_percent?: number; min_withdraw_amount?: number }> {
+export async function getConfig(): Promise<{ commission_flat: number; payout_tax_percent: number; min_stake_amount: number; min_withdraw_amount?: number }> {
   const response = await fetch(`${API_BASE}/config`);
   const data = await response.json();
   if (!response.ok) {
@@ -148,7 +148,6 @@ export async function getConfig(): Promise<{ commission_flat: number; payout_tax
     commission_flat: data.commission_flat,
     payout_tax_percent: data.payout_tax_percent,
     min_stake_amount: data.min_stake_amount,
-    withdraw_provider_fee_percent: data.withdraw_provider_fee_percent,
     min_withdraw_amount: data.min_withdraw_amount,
   };
 }
