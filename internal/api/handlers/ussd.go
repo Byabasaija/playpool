@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-
 	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
 	"github.com/playmatatu/backend/internal/config"

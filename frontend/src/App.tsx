@@ -6,6 +6,8 @@ import { ProfilePage } from './pages/ProfilePage';
 import { TestPage } from './pages/TestPage';
 import { RematchPage } from './pages/RematchPage';
 import { RequeuePage } from './pages/RequeuePage';
+import { RulesPage } from './pages/RulesPage';
+import { TermsPage } from './pages/TermsPage';
 
 // Admin
 import { AdminLoginPage } from './admin/pages/AdminLoginPage';
@@ -32,6 +34,8 @@ function App() {
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/test" element={<TestPage />} />
         <Route path="/rematch" element={<RematchPage />} />
+        <Route path="/rules" element={<RulesPage />} />
+        <Route path="/terms" element={<TermsPage />} />
         <Route path="/g/:token" element={<GamePage />} />
 
         {/* Admin login (no layout) */}

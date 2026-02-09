@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useMatchmaking } from '../hooks/useMatchmaking';
 import { validatePhone, formatPhone } from '../utils/phoneUtils';
 import { getPlayerProfile, requeuePlayer, getConfig, requestOTP, checkPlayerStatus, verifyPIN } from '../utils/apiClient';
@@ -1340,6 +1340,11 @@ export const LandingPage: React.FC = () => {
           }}
         />
       )}
+
+      <div className="fixed bottom-3 left-0 right-0 flex justify-center gap-4 text-xs text-gray-400">
+        <Link to="/rules" className="hover:text-gray-600">Rules</Link>
+        <Link to="/terms" className="hover:text-gray-600">Terms</Link>
+      </div>
     </div>
   );
 };
