@@ -1,9 +1,9 @@
 package handlers
 
 import (
+	"log"
 	"net/http"
-	"strconv"
-	"strings"
+
 	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
 	"github.com/playmatatu/backend/internal/config"
@@ -16,81 +16,64 @@ type USSDResponse struct {
 	Action         string `json:"action"` // "request" (continue) or "end" (terminate)
 }
 
-// HandleUSSD processes USSD gateway requests
+// HandleUSSD processes USSD gateway requests with session-based state management
 func HandleUSSD(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// Extract USSD gateway parameters
 		sessionID := c.Query("sessionId")
 		msisdn := c.Query("msisdn")
 		inputString := c.Query("ussdRequestString")
-		// serviceCode := c.Query("ussdServiceCode")
+		serviceCode := c.Query("ussdServiceCode")
 
-		// Normalize phone number
-		phone := normalizePhone(msisdn)
-		if phone == "" {
+		// Log incoming request for debugging
+		log.Printf("[USSD] Incoming - SessionID: %s, MSISDN: %s, Input: %s, ServiceCode: %s",
+			sessionID, msisdn, inputString, serviceCode)
+
+		// Validate required parameters
+		if sessionID == "" || msisdn == "" {
+			log.Printf("[USSD] Missing required parameters")
 			c.JSON(http.StatusOK, USSDResponse{
-				ResponseString: "Invalid phone number.",
+				ResponseString: "Service temporarily unavailable.",
 				Action:         "end",
 			})
 			return
 		}
 
-		// Process USSD input (stateless approach)
-		response, action := processUSSD(sessionID, phone, inputString, cfg)
+		// Normalize phone number
+		phone := normalizePhone(msisdn)
+		if phone == "" {
+			log.Printf("[USSD] Invalid phone number: %s", msisdn)
+			c.JSON(http.StatusOK, USSDResponse{
+				ResponseString: "Invalid phone number format.",
+				Action:         "end",
+			})
+			return
+		}
 
+		log.Printf("[USSD] Normalized phone: %s -> %s", msisdn, phone)
+
+		// Create or load USSD session handler
+		handler, err := NewUSSDSessionHandler(sessionID, phone, db, rdb, cfg)
+		if err != nil {
+			log.Printf("[USSD] Failed to create session handler: %v", err)
+			c.JSON(http.StatusOK, USSDResponse{
+				ResponseString: "System error occurred. Please try again.",
+				Action:         "end",
+			})
+			return
+		}
+
+		// Process USSD request using session-based approach
+		response, action := handler.GetResponse(inputString)
+
+		// Log response
+		log.Printf("[USSD] Response - SessionID: %s, Action: %s, Text: %.50s...",
+			sessionID, action, response)
+
+		// Return response in expected format
 		c.JSON(http.StatusOK, USSDResponse{
 			ResponseString: response,
 			Action:         action,
 		})
-	}
-}
-
-// processUSSD handles USSD flow based on input string
-func processUSSD(sessionID, phone, inputString string, cfg *config.Config) (string, string) {
-	parts := strings.Split(inputString, "*")
-
-	// Remove empty parts
-	var cleanParts []string
-	for _, p := range parts {
-		if p != "" {
-			cleanParts = append(cleanParts, p)
-		}
-	}
-
-	switch len(cleanParts) {
-	case 0:
-		// Initial menu
-		return "Welcome to PlayMatatu\n1. Play\n2. Rules", "request"
-
-	case 1:
-		switch cleanParts[0] {
-		case "1":
-			// Play selected - ask for stake
-			return "Enter stake amount (UGX):\n(Minimum: 1000 UGX)", "request"
-		case "2":
-			// Rules
-			return "MATATU RULES:\n- Match card by suit/rank\n- 8: Change suit\n- 2: Next player draws 2\n- J/A: Skip opponent\n- K: Play on any card\n- First to finish wins!", "end"
-		default:
-			return "Invalid option.\n1. Play\n2. Rules", "request"
-		}
-
-	case 2:
-		// parts[0] = "1" (Play), parts[1] = stake amount
-		stake, err := strconv.Atoi(cleanParts[1])
-		if err != nil || stake < cfg.MinStakeAmount {
-			return "Invalid amount. Minimum stake is 1000 UGX.\n\nEnter stake amount:", "request"
-		}
-		return "Confirm payment of " + cleanParts[1] + " UGX to play Matatu?\n1. Yes\n2. No", "request"
-
-	case 3:
-		// parts[0] = "1", parts[1] = stake, parts[2] = confirm
-		if cleanParts[2] == "1" {
-			// TODO: Initiate Mobile Money collection
-			// go initiatePayment(phone, stake, sessionID)
-			return "Payment request sent to your phone.\nYou'll receive an SMS when matched with an opponent.", "end"
-		}
-		return "Cancelled. Dial " + cfg.USSDShortcode + " to play again.", "end"
-
-	default:
-		return "Invalid input. Dial " + cfg.USSDShortcode + " to start again.", "end"
 	}
 }

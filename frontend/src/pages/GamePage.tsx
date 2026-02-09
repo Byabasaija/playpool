@@ -36,6 +36,9 @@ export const GamePage: React.FC = () => {
   const [gameStarted, setGameStarted] = useState(false);
   const [revealedSuit, setRevealedSuit] = useState<CardType['suit'] | null>(null);
   const revealTimerRef = useRef<number | null>(null);
+  const [lastCardAlert, setLastCardAlert] = useState<string | null>(null);
+  const lastCardTimerRef = useRef<number | null>(null);
+  const prevOpponentCountRef = useRef<number>(0);
 
   const { gameState, gameOver, updateFromWSMessage, setCanPass, addCardsToHand, updateOpponentCardCount, setTokens } = useGameState();
   
@@ -49,6 +52,25 @@ export const GamePage: React.FC = () => {
   const notificationSound = useSound('/bell-notification.mp3');
   const wrongSound = useSound('/wrongplay.mp3');
   
+  // Announce when opponent is down to 1 card
+  useEffect(() => {
+    if (
+      gameState.opponentCardCount === 1 &&
+      prevOpponentCountRef.current > 1
+    ) {
+      if (lastCardTimerRef.current) {
+        window.clearTimeout(lastCardTimerRef.current);
+      }
+      setLastCardAlert(gameState.opponentDisplayName || 'Opponent');
+      notificationSound();
+      lastCardTimerRef.current = window.setTimeout(() => {
+        setLastCardAlert(null);
+        lastCardTimerRef.current = null;
+      }, 3000);
+    }
+    prevOpponentCountRef.current = gameState.opponentCardCount;
+  }, [gameState.opponentCardCount, gameState.opponentDisplayName, notificationSound]);
+
   // Play end game sound when game ends
   const gameOverPlayedRef = useRef(false);
   useEffect(() => {
@@ -210,6 +232,8 @@ export const GamePage: React.FC = () => {
         // Clear pass capability when a pass has been executed
         drawPendingRef.current = false;
         setCanPass(false);
+        // Play sound so opponent hears the pass
+        passSound();
         console.log('Received turn_passed:', message);
         break;
 
@@ -575,6 +599,7 @@ export const GamePage: React.FC = () => {
         myConnected={gameState.myConnected}
         opponentConnected={gameState.opponentConnected}
         revealedSuit={revealedSuit}
+        lastCardAlert={lastCardAlert}
       />
 
       {notice && (

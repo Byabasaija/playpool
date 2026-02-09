@@ -20,12 +20,13 @@ type Config struct {
 	// Server
 	Port        string
 	FrontendURL string
+	BaseURL     string
 
 	// Game Settings
 	GameExpiryMinutes         int
 	QueueExpiryMinutes        int
 	QueueProcessingVisibility int
-NoShowFeePercentage       int
+	NoShowFeePercentage       int
 	CommissionPercentage      int
 	CommissionFlat            int
 	MinStakeAmount            int
@@ -89,9 +90,9 @@ NoShowFeePercentage       int
 	// Withdraw settings
 	MockMode          bool
 	MinWithdrawAmount int
-	AdminUsername string
-	AdminPassword string
-	AdminPhone   string
+	AdminUsername     string
+	AdminPassword     string
+	AdminPhone        string
 }
 
 func Load() *Config {
@@ -111,21 +112,16 @@ func Load() *Config {
 		// Server
 		Port:        getEnv("APP_PORT", "8000"),
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
+		BaseURL:     getEnv("BASE_URL", "http://localhost:8000"),
 
 		// Game Settings
 		GameExpiryMinutes:         getEnvInt("GAME_EXPIRY_MINUTES", 3),
 		QueueExpiryMinutes:        getEnvInt("QUEUE_EXPIRY_MINUTES", 3),
 		QueueProcessingVisibility: getEnvInt("QUEUE_PROCESSING_VISIBILITY_SECONDS", 30),
-CommissionPercentage:      getEnvInt("COMMISSION_PERCENTAGE", 10),
+		CommissionPercentage:      getEnvInt("COMMISSION_PERCENTAGE", 10),
 		CommissionFlat:            getEnvInt("COMMISSION_FLAT", 1000),
 		MinStakeAmount:            getEnvInt("MIN_STAKE_AMOUNT", 1000),
 		PayoutTaxPercent:          getEnvInt("PAYOUT_TAX_PERCENT", 15),
-
-		// USSD Gateway
-		USSDShortcode:  getEnv("USSD_SHORTCODE", "*123*1#"),
-		USSDGatewayURL: getEnv("USSD_GATEWAY_URL", ""),
-		USSDAPIKey:     getEnv("USSD_API_KEY", ""),
-		USSDAPISecret:  getEnv("USSD_API_SECRET", ""),
 
 		// SMS
 		SMSSenderID:            getEnv("SMS_SENDER_ID", "PlayMatatu"),
@@ -181,9 +177,9 @@ CommissionPercentage:      getEnvInt("COMMISSION_PERCENTAGE", 10),
 		// Withdraw configuration
 		MockMode:          getEnv("MOCK_MODE", "true") == "true",
 		MinWithdrawAmount: getEnvInt("MIN_WITHDRAW_AMOUNT", 1000),
-		AdminUsername: getEnv("ADMIN_USERNAME", "admin"),
-		AdminPassword: getEnv("ADMIN_PASSWORD", "change-me-in-production"),
-		AdminPhone:   getEnv("ADMIN_PHONE", "256700000000"),
+		AdminUsername:     getEnv("ADMIN_USERNAME", "admin"),
+		AdminPassword:     getEnv("ADMIN_PASSWORD", "change-me-in-production"),
+		AdminPhone:        getEnv("ADMIN_PHONE", "256700000000"),
 	}
 }
 

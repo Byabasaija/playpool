@@ -182,14 +182,14 @@ func sendMatchSMS(cfg *config.Config, gameToken string, player1, player2 QueuedP
 	}
 
 	// Send to player 1
-	msg1 := fmt.Sprintf("PlayMatatu: Match found! You're playing against %s for %.0f UGX. Join now: %s",
+	msg1 := fmt.Sprintf("PlayMatatu: Match found! Playing against %s for %.0f UGX.\n\n%s",
 		p1Opponent, player1.StakeAmount, gameLink)
 	if _, err := sms.SendSMS(context.Background(), player1.PhoneNumber, msg1); err != nil {
 		log.Printf("[MATCHMAKER] Failed to send SMS to player %d: %v", player1.PlayerID, err)
 	}
 
 	// Send to player 2
-	msg2 := fmt.Sprintf("PlayMatatu: Match found! You're playing against %s for %.0f UGX. Join now: %s",
+	msg2 := fmt.Sprintf("PlayMatatu: Match found! Playing against %s for %.0f UGX.\n\n%s",
 		p2Opponent, player2.StakeAmount, gameLink)
 	if _, err := sms.SendSMS(context.Background(), player2.PhoneNumber, msg2); err != nil {
 		log.Printf("[MATCHMAKER] Failed to send SMS to player %d: %v", player2.PlayerID, err)

@@ -52,9 +52,9 @@ export function canPlayCard(
     return card.rank === '2';
   }
   
-  // Ace is wild suit - can be played on anything EXCEPT a 2
+  // Ace is wild suit - can be played on anything
   if (card.rank === 'A') {
-    return topCard.rank !== '2';
+    return true;
   }
   
   // Check suit or rank match

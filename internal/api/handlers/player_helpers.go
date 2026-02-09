@@ -389,7 +389,7 @@ func RequeueStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handle
 					smsInviteQueued = true
 					joinLink := fmt.Sprintf("%s/join?match_code=%s&stake=%d&invite_phone=%s", cfg.FrontendURL, code, stakeAmount, url.QueryEscape(invite))
 					go func(code string, invite string, stake int, link string) {
-						msg := fmt.Sprintf("Join my PlayMatatu private match! Code: %s. Stake: %d UGX. Join: %s", code, stake, link)
+						msg := fmt.Sprintf("Join my PlayMatatu match!\nCode: %s\nStake: %d UGX\n\n%s", code, stake, link)
 						if msgID, err := sms.SendSMS(context.Background(), invite, msg); err != nil {
 							log.Printf("[SMS] Failed to send invite to %s on requeue: %v", invite, err)
 						} else {

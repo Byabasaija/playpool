@@ -30,6 +30,7 @@ interface GameBoardProps {
   myConnected?: boolean;
   opponentConnected?: boolean;
   revealedSuit?: CardType['suit'] | null;
+  lastCardAlert?: string | null;
 }
 
 export const GameBoard: React.FC<GameBoardProps> = ({
@@ -49,7 +50,8 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   opponentDisplayName,
   myConnected,
   opponentConnected,
-  revealedSuit
+  revealedSuit,
+  lastCardAlert
 }) => {
   console.log('[UI] DiscardPile type in GameBoard:', typeof DiscardPile, DiscardPile);
   const [showSuitSelector, setShowSuitSelector] = useState(false);
@@ -177,6 +179,17 @@ export const GameBoard: React.FC<GameBoardProps> = ({
             <div className="bg-white/95 rounded-xl px-6 py-4 shadow-2xl flex items-center gap-3 pointer-events-auto border-2 border-gray-200">
               <div className="text-4xl" style={{ color: SUIT_COLORS[revealedSuit] }}>
                 {SUIT_SYMBOLS[revealedSuit]}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Last card alert */}
+        {lastCardAlert && (
+          <div className="absolute inset-0 flex items-center justify-center z-50 pointer-events-none">
+            <div className="bg-yellow-500/95 rounded-lg px-4 py-2 shadow-lg pointer-events-auto border border-yellow-400 animate-pulse">
+              <div className="text-black text-center text-xs font-semibold">
+                {lastCardAlert} — 1 card left!
               </div>
             </div>
           </div>
