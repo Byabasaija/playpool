@@ -163,15 +163,15 @@ export const GameBoard: React.FC<GameBoardProps> = ({
           disabled={!myTurn}
         />
 
+        {/* Discard Pile */}
+        <DiscardPile cards={discardPileCards} />
+
         {/* Turn Indicator */}
         <TurnIndicator
           myTurn={myTurn}
           canPass={canPass}
           onPass={onPassTurn}
         />
-
-        {/* Discard Pile */}
-        <DiscardPile cards={discardPileCards} />
         
         {/* Suit Reveal - positioned in center of game area */}
         {revealedSuit && (
