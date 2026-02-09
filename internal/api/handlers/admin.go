@@ -254,23 +254,53 @@ func GetAdminAccounts(db *sqlx.DB) gin.HandlerFunc {
 	}
 }
 
-// GetAdminAccountTransactions returns paginated account transactions
+// GetAdminAccountTransactions returns paginated account transactions with readable account names
 func GetAdminAccountTransactions(db *sqlx.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		adminUsername := c.GetString("admin_username")
 
-		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "25"))
 		offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 
 		if limit > 200 {
 			limit = 200
 		}
 
-		var transactions []models.AccountTransaction
-		err := db.Select(&transactions, `
-			SELECT id, debit_account_id, credit_account_id, amount, reference_type, reference_id, description, created_at
-			FROM account_transactions
-			ORDER BY created_at DESC
+		type txnRow struct {
+			ID               int     `db:"id" json:"id"`
+			DebitAccountName *string `db:"debit_account_name" json:"debit_account"`
+			CreditAccountName *string `db:"credit_account_name" json:"credit_account"`
+			Amount           float64 `db:"amount" json:"amount"`
+			ReferenceType    *string `db:"reference_type" json:"reference_type"`
+			ReferenceID      *int    `db:"reference_id" json:"reference_id"`
+			Description      *string `db:"description" json:"description"`
+			CreatedAt        string  `db:"created_at" json:"created_at"`
+			TotalCount       int     `db:"total_count" json:"-"`
+		}
+
+		var rows []txnRow
+		err := db.Select(&rows, `
+			SELECT at.id,
+				CASE
+					WHEN da.owner_player_id IS NOT NULL THEN da.account_type::text || ' (#' || da.owner_player_id::text || ' ' || COALESCE(dp.display_name, dp.phone_number, '') || ')'
+					ELSE da.account_type::text
+				END as debit_account_name,
+				CASE
+					WHEN ca.owner_player_id IS NOT NULL THEN ca.account_type::text || ' (#' || ca.owner_player_id::text || ' ' || COALESCE(cp.display_name, cp.phone_number, '') || ')'
+					ELSE ca.account_type::text
+				END as credit_account_name,
+				at.amount,
+				at.reference_type,
+				at.reference_id,
+				at.description,
+				to_char(at.created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as created_at,
+				COUNT(*) OVER() as total_count
+			FROM account_transactions at
+			LEFT JOIN accounts da ON at.debit_account_id = da.id
+			LEFT JOIN players dp ON da.owner_player_id = dp.id
+			LEFT JOIN accounts ca ON at.credit_account_id = ca.id
+			LEFT JOIN players cp ON ca.owner_player_id = cp.id
+			ORDER BY at.created_at DESC
 			LIMIT $1 OFFSET $2
 		`, limit, offset)
 		if err != nil {
@@ -280,59 +310,13 @@ func GetAdminAccountTransactions(db *sqlx.DB) gin.HandlerFunc {
 			return
 		}
 
-		type txnResp struct {
-			ID              int     `json:"id"`
-			DebitAccountID  *int    `json:"debit_account_id"`
-			CreditAccountID *int    `json:"credit_account_id"`
-			Amount          float64 `json:"amount"`
-			ReferenceType   *string `json:"reference_type"`
-			ReferenceID     *int    `json:"reference_id"`
-			Description     *string `json:"description"`
-			CreatedAt       string  `json:"created_at"`
+		total := 0
+		if len(rows) > 0 {
+			total = rows[0].TotalCount
 		}
 
-		var resp []txnResp
-		for _, t := range transactions {
-			var debit *int
-			var credit *int
-			var refID *int
-			var refType *string
-			var desc *string
-			if t.DebitAccountID.Valid {
-				v := int(t.DebitAccountID.Int64)
-				debit = &v
-			}
-			if t.CreditAccountID.Valid {
-				v := int(t.CreditAccountID.Int64)
-				credit = &v
-			}
-			if t.ReferenceID.Valid {
-				v := int(t.ReferenceID.Int64)
-				refID = &v
-			}
-			if t.ReferenceType.Valid {
-				v := t.ReferenceType.String
-				refType = &v
-			}
-			if t.Description.Valid {
-				v := t.Description.String
-				desc = &v
-			}
-
-			resp = append(resp, txnResp{
-				ID:              t.ID,
-				DebitAccountID:  debit,
-				CreditAccountID: credit,
-				Amount:          t.Amount,
-				ReferenceType:   refType,
-				ReferenceID:     refID,
-				Description:     desc,
-				CreatedAt:       t.CreatedAt.Format(time.RFC3339),
-			})
-		}
-
-		admin.LogAdminAction(db, adminUsername, c.ClientIP(), "/api/v1/admin/account_transactions", "get_account_transactions", map[string]interface{}{"count": len(resp), "limit": limit, "offset": offset}, true)
-		c.JSON(http.StatusOK, gin.H{"transactions": resp, "limit": limit, "offset": offset})
+		admin.LogAdminAction(db, adminUsername, c.ClientIP(), "/api/v1/admin/account_transactions", "get_account_transactions", map[string]interface{}{"count": len(rows), "limit": limit, "offset": offset}, true)
+		c.JSON(http.StatusOK, gin.H{"transactions": rows, "total": total, "limit": limit, "offset": offset})
 	}
 }
 
@@ -341,7 +325,7 @@ func GetAdminTransactions(db *sqlx.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		adminUsername := c.GetString("admin_username")
 
-		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "25"))
 		offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 		txnType := c.DefaultQuery("type", "all")
 		txnStatus := c.DefaultQuery("status", "all")

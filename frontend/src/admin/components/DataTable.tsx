@@ -7,6 +7,8 @@ export interface Column<T> {
   align?: 'left' | 'right' | 'center';
 }
 
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+
 interface DataTableProps<T> {
   columns: Column<T>[];
   data: T[];
@@ -14,6 +16,7 @@ interface DataTableProps<T> {
   page?: number;
   pageSize?: number;
   onPageChange?: (page: number) => void;
+  onPageSizeChange?: (pageSize: number) => void;
   onRowClick?: (row: T) => void;
   loading?: boolean;
   emptyMessage?: string;
@@ -24,8 +27,9 @@ export function DataTable<T extends Record<string, unknown>>({
   data,
   total,
   page = 0,
-  pageSize = 50,
+  pageSize = 25,
   onPageChange,
+  onPageSizeChange,
   onRowClick,
   loading,
   emptyMessage = 'No data found',
@@ -91,27 +95,44 @@ export function DataTable<T extends Record<string, unknown>>({
         </table>
       </div>
 
-      {total !== undefined && totalPages > 1 && onPageChange && (
+      {total !== undefined && onPageChange && (
         <div className="bg-gray-50 px-4 py-3 flex items-center justify-between border-t border-gray-200">
-          <span className="text-sm text-gray-600">
-            {total} total · Page {page + 1} of {totalPages}
-          </span>
-          <div className="flex gap-2">
-            <button
-              onClick={() => onPageChange(page - 1)}
-              disabled={page === 0}
-              className="px-3 py-1 text-sm bg-white border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Previous
-            </button>
-            <button
-              onClick={() => onPageChange(page + 1)}
-              disabled={page >= totalPages - 1}
-              className="px-3 py-1 text-sm bg-white border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Next
-            </button>
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-gray-600">
+              {total} total{totalPages > 1 ? ` · Page ${page + 1} of ${totalPages}` : ''}
+            </span>
+            {onPageSizeChange && (
+              <select
+                value={pageSize}
+                onChange={(e) => onPageSizeChange(Number(e.target.value))}
+                className="text-sm border border-gray-300 rounded px-2 py-1 bg-white"
+              >
+                {PAGE_SIZE_OPTIONS.map((size) => (
+                  <option key={size} value={size}>
+                    {size} / page
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
+          {totalPages > 1 && (
+            <div className="flex gap-2">
+              <button
+                onClick={() => onPageChange(page - 1)}
+                disabled={page === 0}
+                className="px-3 py-1 text-sm bg-white border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Previous
+              </button>
+              <button
+                onClick={() => onPageChange(page + 1)}
+                disabled={page >= totalPages - 1}
+                className="px-3 py-1 text-sm bg-white border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Next
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

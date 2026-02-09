@@ -24,7 +24,7 @@ export function AdminGames() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const pageSize = 50;
+  const [pageSize, setPageSize] = useState(25);
 
   const loadGames = useCallback(async () => {
     setLoading(true);
@@ -139,6 +139,7 @@ export function AdminGames() {
         page={page}
         pageSize={pageSize}
         onPageChange={setPage}
+        onPageSizeChange={(size) => { setPageSize(size); setPage(0); }}
         onRowClick={(row) => navigate(`/pm-admin/games/${row.id}`)}
         loading={loading}
         emptyMessage="No games found"

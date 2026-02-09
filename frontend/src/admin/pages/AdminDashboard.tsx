@@ -1,30 +1,37 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useAdminApi } from '../hooks/useAdminApi';
-import type { AdminStats, AdminAccountBalance, AccountTransaction } from '../types/admin.types';
+import { DataTable, Column } from '../components/DataTable';
+import type { AdminStats, AdminAccountBalance } from '../types/admin.types';
+
+interface AcctTxnRow {
+  id: number;
+  debit_account?: string;
+  credit_account?: string;
+  amount: number;
+  reference_type?: string;
+  reference_id?: number;
+  description?: string;
+  created_at: string;
+}
 
 export function AdminDashboard() {
   const { get } = useAdminApi();
   const [activeTab, setActiveTab] = useState<'stats' | 'accounts' | 'transactions'>('stats');
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [accounts, setAccounts] = useState<AdminAccountBalance[]>([]);
-  const [transactions, setTransactions] = useState<AccountTransaction[]>([]);
+  const [transactions, setTransactions] = useState<AcctTxnRow[]>([]);
+  const [txnTotal, setTxnTotal] = useState(0);
+  const [txnPage, setTxnPage] = useState(0);
+  const [txnPageSize, setTxnPageSize] = useState(25);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const loadData = async (tab: string) => {
+  const loadStats = async () => {
     setLoading(true);
     setError(null);
     try {
-      if (tab === 'stats') {
-        const data = await get('/stats');
-        setStats(data);
-      } else if (tab === 'accounts') {
-        const data = await get('/accounts');
-        setAccounts(data.accounts || []);
-      } else if (tab === 'transactions') {
-        const data = await get('/account_transactions', { limit: 100 });
-        setTransactions(data.transactions || []);
-      }
+      const data = await get('/stats');
+      setStats(data);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to load data');
     } finally {
@@ -32,12 +39,85 @@ export function AdminDashboard() {
     }
   };
 
-  useEffect(() => { loadData('stats'); }, []);
+  const loadAccounts = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await get('/accounts');
+      setAccounts(data.accounts || []);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to load data');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadTransactions = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await get('/account_transactions', {
+        limit: txnPageSize,
+        offset: txnPage * txnPageSize,
+      });
+      setTransactions(data.transactions || []);
+      setTxnTotal(data.total || 0);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to load data');
+    } finally {
+      setLoading(false);
+    }
+  }, [get, txnPage, txnPageSize]);
+
+  useEffect(() => { loadStats(); }, []);
+
+  useEffect(() => {
+    if (activeTab === 'transactions') {
+      loadTransactions();
+    }
+  }, [activeTab, loadTransactions]);
 
   const handleTabChange = (tab: 'stats' | 'accounts' | 'transactions') => {
     setActiveTab(tab);
-    loadData(tab);
+    if (tab === 'stats') loadStats();
+    else if (tab === 'accounts') loadAccounts();
   };
+
+  const txnColumns: Column<AcctTxnRow & Record<string, unknown>>[] = [
+    { key: 'id', label: 'ID' },
+    {
+      key: 'debit_account',
+      label: 'Debit (From)',
+      render: (_, row) => (
+        <span className="text-sm">{row.debit_account || '—'}</span>
+      ),
+    },
+    {
+      key: 'credit_account',
+      label: 'Credit (To)',
+      render: (_, row) => (
+        <span className="text-sm">{row.credit_account || '—'}</span>
+      ),
+    },
+    {
+      key: 'amount',
+      label: 'Amount',
+      align: 'right',
+      render: (_, row) => `${row.amount.toLocaleString()} UGX`,
+    },
+    {
+      key: 'description',
+      label: 'Description',
+      render: (_, row) => (
+        <span className="text-sm text-gray-500">{row.description || '—'}</span>
+      ),
+    },
+    {
+      key: 'created_at',
+      label: 'Date',
+      render: (_, row) => new Date(row.created_at).toLocaleString(),
+    },
+  ];
 
   return (
     <div>
@@ -62,7 +142,7 @@ export function AdminDashboard() {
 
       {error && <div className="mb-4 p-3 bg-red-100 text-red-700 rounded text-sm">{error}</div>}
 
-      {loading && (
+      {loading && activeTab !== 'transactions' && (
         <div className="text-center py-8">
           <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-[#373536] mx-auto"></div>
         </div>
@@ -143,37 +223,18 @@ export function AdminDashboard() {
       )}
 
       {/* Transactions */}
-      {!loading && activeTab === 'transactions' && (
-        <div className="bg-white rounded-lg overflow-hidden border border-gray-200">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Debit</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Credit</th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Amount</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Description</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {transactions.map((txn) => (
-                <tr key={txn.id}>
-                  <td className="px-4 py-3 text-sm text-gray-900">{txn.id}</td>
-                  <td className="px-4 py-3 text-sm text-gray-900">{txn.debit_account_id ?? '—'}</td>
-                  <td className="px-4 py-3 text-sm text-gray-900">{txn.credit_account_id ?? '—'}</td>
-                  <td className="px-4 py-3 text-sm text-right font-semibold text-gray-900">
-                    {txn.amount.toLocaleString()} UGX
-                  </td>
-                  <td className="px-4 py-3 text-sm text-gray-500">{txn.description ?? '—'}</td>
-                  <td className="px-4 py-3 text-sm text-gray-500">
-                    {new Date(txn.created_at).toLocaleString()}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      {activeTab === 'transactions' && (
+        <DataTable
+          columns={txnColumns}
+          data={transactions as (AcctTxnRow & Record<string, unknown>)[]}
+          total={txnTotal}
+          page={txnPage}
+          pageSize={txnPageSize}
+          onPageChange={setTxnPage}
+          onPageSizeChange={(size) => { setTxnPageSize(size); setTxnPage(0); }}
+          loading={loading}
+          emptyMessage="No account transactions found"
+        />
       )}
     </div>
   );

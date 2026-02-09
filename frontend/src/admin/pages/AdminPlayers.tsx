@@ -19,7 +19,7 @@ export function AdminPlayers() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const pageSize = 50;
+  const [pageSize, setPageSize] = useState(25);
 
   const loadPlayers = useCallback(async () => {
     setLoading(true);
@@ -152,6 +152,7 @@ export function AdminPlayers() {
         page={page}
         pageSize={pageSize}
         onPageChange={setPage}
+        onPageSizeChange={(size) => { setPageSize(size); setPage(0); }}
         onRowClick={(row) => navigate(`/pm-admin/players/${row.id}`)}
         loading={loading}
         emptyMessage="No players found"

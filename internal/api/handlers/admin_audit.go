@@ -14,7 +14,7 @@ import (
 func GetAdminAuditLogs(db *sqlx.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		adminUsername := c.DefaultQuery("admin_username", "")
-		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "25"))
 		offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 		if limit > 200 {
 			limit = 200

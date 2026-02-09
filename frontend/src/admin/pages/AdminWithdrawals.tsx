@@ -37,7 +37,7 @@ export function AdminWithdrawals() {
   const [rejectReason, setRejectReason] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
 
-  const pageSize = 50;
+  const [pageSize, setPageSize] = useState(25);
 
   const loadWithdrawals = useCallback(async () => {
     setLoading(true);
@@ -188,6 +188,7 @@ export function AdminWithdrawals() {
         page={page}
         pageSize={pageSize}
         onPageChange={setPage}
+        onPageSizeChange={(size) => { setPageSize(size); setPage(0); }}
         loading={loading}
         emptyMessage="No withdrawals found"
       />

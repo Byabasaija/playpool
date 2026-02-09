@@ -23,7 +23,7 @@ export function AdminAuditLog() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const pageSize = 50;
+  const [pageSize, setPageSize] = useState(25);
 
   const loadLogs = useCallback(async () => {
     setLoading(true);
@@ -124,6 +124,7 @@ export function AdminAuditLog() {
         page={page}
         pageSize={pageSize}
         onPageChange={setPage}
+        onPageSizeChange={(size) => { setPageSize(size); setPage(0); }}
         loading={loading}
         emptyMessage="No audit log entries found"
       />

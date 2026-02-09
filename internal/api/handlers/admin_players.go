@@ -18,7 +18,7 @@ func GetAdminPlayers(db *sqlx.DB) gin.HandlerFunc {
 
 		q := c.DefaultQuery("q", "")
 		status := c.DefaultQuery("status", "all")
-		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "25"))
 		offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 		if limit > 200 {
 			limit = 200
@@ -255,7 +255,7 @@ func AdminResetPlayerPIN(db *sqlx.DB) gin.HandlerFunc {
 func GetAdminPlayerGames(db *sqlx.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		playerID := c.Param("id")
-		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "25"))
 		offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 		if limit > 200 {
 			limit = 200
@@ -309,7 +309,7 @@ func GetAdminPlayerGames(db *sqlx.DB) gin.HandlerFunc {
 func GetAdminPlayerTransactions(db *sqlx.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		playerID := c.Param("id")
-		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "25"))
 		offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 		if limit > 200 {
 			limit = 200

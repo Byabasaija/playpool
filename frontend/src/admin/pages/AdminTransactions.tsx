@@ -30,7 +30,7 @@ export function AdminTransactions() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const pageSize = 50;
+  const [pageSize, setPageSize] = useState(25);
 
   const loadTransactions = useCallback(async () => {
     setLoading(true);
@@ -183,6 +183,7 @@ export function AdminTransactions() {
         page={page}
         pageSize={pageSize}
         onPageChange={setPage}
+        onPageSizeChange={(size) => { setPageSize(size); setPage(0); }}
         loading={loading}
         emptyMessage="No transactions found"
       />
