@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMatchmaking } from '../hooks/useMatchmaking';
 import { validatePhone, formatPhone } from '../utils/phoneUtils';
-import { getPlayerProfile, getConfig, checkPlayerStatus, verifyPIN } from '../utils/apiClient';
+import { getPlayerProfile, getConfig, checkPlayerStatus, verifyPIN, checkSession } from '../utils/apiClient';
 import PinInput from '../components/PinInput';
 
 function generateRandomName() {
@@ -92,14 +92,24 @@ export const RematchPage: React.FC = () => {
     }
   }, [stage, gameLink, navigate]);
 
-  // Try to get stored phone from localStorage first
+  // Try session cookie first, then fall back to PIN entry
   React.useEffect(() => {
     const storedPhone = localStorage.getItem('playmatatu_phone') || localStorage.getItem('matatu_phone');
-    if (storedPhone && !isAuthenticated && !playerPhone) {
-      setPlayerPhone(storedPhone);
-      // Auto-prompt for PIN since we're at rematch stage, user must have an account
+    if (!storedPhone || isAuthenticated || playerPhone) return;
+
+    setPlayerPhone(storedPhone);
+
+    // Try existing session cookie first
+    checkSession().then(async (session) => {
+      if (session && session.phone === storedPhone) {
+        // Valid session — skip PIN
+        await loadPlayerProfile(storedPhone);
+        setIsAuthenticated(true);
+        return;
+      }
+      // No session — prompt for PIN
       checkPlayerStatusAndPromptPin(storedPhone);
-    }
+    });
   }, []);
 
   const checkPlayerStatusAndPromptPin = async (phone: string) => {
@@ -124,20 +134,9 @@ export const RematchPage: React.FC = () => {
     setPinLoading(true);
     setPinError(undefined);
     try {
-      // Verify PIN for profile access
+      // Single verifyPIN call — cookie is set automatically by the backend
       await verifyPIN(playerPhone, pin, 'rematch');
-      
-      // Also get winnings token in case user wants to use winnings later
-      try {
-        const winningsResult = await verifyPIN(playerPhone, pin, 'stake_winnings');
-        if (winningsResult.action_token) {
-          sessionStorage.setItem('rematch_action_token', winningsResult.action_token);
-        }
-      } catch (err) {
-        // Non-fatal if winnings token fails - user can still rematch
-        console.warn('Failed to get winnings token:', err);
-      }
-      
+
       // Load player profile after PIN verification
       await loadPlayerProfile(playerPhone);
       setIsAuthenticated(true);
@@ -192,15 +191,9 @@ export const RematchPage: React.FC = () => {
       invite_phone: formattedOpponent
     };
 
+    // Cookie auth handles winnings authorization
     if (useWinnings) {
       opts.source = 'winnings';
-      // Include the action token for winnings authentication
-      const actionToken = sessionStorage.getItem('rematch_action_token');
-      if (actionToken) {
-        opts.action_token = actionToken;
-        // Clean up the token after use
-        sessionStorage.removeItem('rematch_action_token');
-      }
     }
 
     await startGame(playerPhone, initialStake, displayNameInput || generateRandomName(), opts);

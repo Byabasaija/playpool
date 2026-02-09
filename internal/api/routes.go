@@ -12,20 +12,7 @@ import (
 
 // SetupRoutes configures all API routes
 func SetupRoutes(router *gin.Engine, db *sqlx.DB, rdb *redis.Client, cfg *config.Config) {
-	// CORS middleware for React development server
-	router.Use(func(c *gin.Context) {
-		c.Header("Access-Control-Allow-Origin", "*")
-		c.Header("Access-Control-Allow-Credentials", "true")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, X-Admin-Session")
-		c.Header("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
-
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(204)
-			return
-		}
-
-		c.Next()
-	})
+	// CORS is handled by middleware.CORSMiddleware applied in main.go
 
 	// CRITICAL: No-cache middleware MUST be first in development
 	if cfg.Environment != "production" {
@@ -85,6 +72,10 @@ func SetupRoutes(router *gin.Engine, db *sqlx.DB, rdb *redis.Client, cfg *config
 		v1.POST("/auth/set-pin", handlers.SetPIN(db, rdb, cfg))
 		v1.POST("/auth/verify-pin", handlers.VerifyPIN(db, rdb, cfg))
 		v1.POST("/auth/reset-pin", handlers.ResetPIN(db, rdb, cfg))
+
+		// Player session endpoints
+		v1.GET("/session/check", handlers.PlayerSessionMiddleware(rdb, db, cfg), handlers.PlayerCheckSession(rdb, db))
+		v1.POST("/session/logout", handlers.PlayerLogout(rdb, cfg))
 
 		// Protected profile endpoint
 		v1.GET("/me", handlers.AuthMiddleware(cfg, rdb), handlers.GetMe(db))

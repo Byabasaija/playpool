@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { getConfig, checkPlayerStatus, verifyPIN, requestOTP, verifyOTPAction, resetPIN, getProfile, getPlayerStats, getWithdraws, requestWithdraw } from '../utils/apiClient';
+import { getConfig, checkPlayerStatus, verifyPIN, requestOTP, verifyOTPAction, resetPIN, getProfile, getPlayerStats, getWithdraws, requestWithdraw, checkSession, playerLogout } from '../utils/apiClient';
 import PinInput from '../components/PinInput';
 
 export const ProfilePage: React.FC = () => {
@@ -16,7 +16,6 @@ export const ProfilePage: React.FC = () => {
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [showWithdrawForm, setShowWithdrawForm] = useState(false);
   const [showAllWithdraws, setShowAllWithdraws] = useState(false);
-  const [confirmLoading, setConfirmLoading] = useState(false);
   const [amountError, setAmountError] = useState<string | null>(null);
   const confirmBtnRef = useRef<HTMLButtonElement | null>(null);
   const withdrawInputRef = useRef<HTMLInputElement | null>(null);
@@ -38,20 +37,39 @@ export const ProfilePage: React.FC = () => {
   // Forgot PIN OTP flow state
   const [otpRequested, setOtpRequested] = useState(false);
   const [code, setCode] = useState('');
+  // Withdrawal PIN modal
+  const [showWithdrawPinModal, setShowWithdrawPinModal] = useState(false);
+  const [withdrawPinError, setWithdrawPinError] = useState<string | undefined>();
+  const [withdrawPinLoading, setWithdrawPinLoading] = useState(false);
 
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
-  // Initialize phone from URL params and auto-check if PIN is needed
+  // Initialize: try session cookie first, then fall back to PIN entry
   useEffect(() => {
     const phoneParam = searchParams.get('phone');
-    if (phoneParam && !token && !phoneRest) {
-      // Extract the part after 256 prefix
-      const rest = phoneParam.startsWith('256') ? phoneParam.slice(3) : phoneParam;
-      setPhoneRest(rest);
-      // Auto-check player status
-      checkPlayerAndPin(rest);
-    }
+
+    checkSession().then(async (session) => {
+      if (session) {
+        // Valid session — skip PIN, load profile directly via cookie
+        const rest = session.phone.replace(/^256/, '');
+        setPhoneRest(rest);
+        setShowPinEntry(false);
+        localStorage.setItem('matatu_phone', session.phone);
+        await fetchAllProfileData();
+        if (searchParams.get('withdraw') === '1') {
+          setShowWithdrawForm(true);
+        }
+        return;
+      }
+
+      // No session — fall back to phone/PIN check
+      if (phoneParam && !token && !phoneRest) {
+        const rest = phoneParam.startsWith('256') ? phoneParam.slice(3) : phoneParam;
+        setPhoneRest(rest);
+        checkPlayerAndPin(rest);
+      }
+    });
   }, [searchParams]);
 
   useEffect(() => {
@@ -96,7 +114,8 @@ export const ProfilePage: React.FC = () => {
   };
 
   const signOut = () => {
-    // Clear all local data and return to landing page
+    playerLogout();
+    localStorage.removeItem('matatu_phone');
     setProfile(null);
     setStats(null);
     navigate('/');
@@ -116,7 +135,7 @@ export const ProfilePage: React.FC = () => {
           setHasPin(true);
           setShowPinEntry(true);
         } else {
-          setMessage('PIN not set for this account. Please play a game first to set up PIN.');
+          setMessage('No PIN set. Please set a PIN from the home page to access your profile.');
         }
       } else {
         setPlayerExists(false);
@@ -127,14 +146,12 @@ export const ProfilePage: React.FC = () => {
     }
   };
 
-  // Fetch all profile data using token immediately, then discard token
-  const fetchAllProfileData = async (token: string) => {
+  // Fetch all profile data — uses token if provided, otherwise cookie auth
+  const fetchAllProfileData = async (t?: string) => {
     try {
-      // Fetch profile data
-      const data = await getProfile(token);
+      const data = await getProfile(t);
       setProfile(data);
-      
-      // Fetch stats using public endpoint (no auth required)
+
       if (data && data.phone) {
         try {
           const sdata = await getPlayerStats(data.phone);
@@ -143,19 +160,16 @@ export const ProfilePage: React.FC = () => {
           // Stats fetch is non-critical
         }
       }
-      
-      // Fetch withdraws with the same token
+
       try {
         setLoadingWithdraws(true);
-        const wdata = await getWithdraws(token);
+        const wdata = await getWithdraws(t);
         setWithdraws(wdata.withdraws || []);
       } catch (e) {
         // Withdraws fetch failed, but profile succeeded
       } finally {
         setLoadingWithdraws(false);
       }
-      
-      // Token is now used and discarded - no storage
     } catch (error: any) {
       setPinError(error.message || 'Failed to load profile data');
     }
@@ -285,47 +299,39 @@ export const ProfilePage: React.FC = () => {
 
   const confirmWithdraw = async () => {
     if (!withdrawAmount) return;
-    setConfirmLoading(true);
+    // Show PIN modal for fresh verification
+    setShowConfirmModal(false);
+    setShowWithdrawPinModal(true);
+    setWithdrawPinError(undefined);
+  };
+
+  const handleWithdrawPinSubmit = async (pin: string) => {
+    setWithdrawPinLoading(true);
+    setWithdrawPinError(undefined);
+    const fullPhone = '256' + phoneRest.replace(/\D/g, '');
     try {
-      // Require fresh PIN verification for withdrawal
-      const pin = prompt('Enter your PIN to authorize withdrawal:');
-      if (!pin) {
-        setMessage('PIN required for withdrawal');
-        setConfirmLoading(false);
-        return;
-      }
-      
-      const phone = localStorage.getItem('playmatatu_phone');
-      if (!phone) {
-        setMessage('Phone not available');
-        setConfirmLoading(false);
-        return;
-      }
-      
-      // Get fresh token for withdrawal
-      const result = await verifyPIN(phone, pin, 'view_profile');
-      if (!result.action_token) {
-        setMessage('PIN verification failed');
-        setConfirmLoading(false);
-        return;
-      }
-      
-      // Use token immediately for withdrawal
+      // Fresh PIN verify — also refreshes cookie
+      const result = await verifyPIN(fullPhone, pin, 'view_profile');
+
+      // Use cookie or token for withdrawal
       try {
         await requestWithdraw(result.action_token, Number(withdrawAmount), 'MOMO', '');
         setMessage('Withdraw requested');
-        setShowConfirmModal(false);
+        setShowWithdrawPinModal(false);
         setWithdrawAmount('');
-        // Refresh profile data requires new PIN entry
-        setProfile(null);
-        setShowPinEntry(true);
+        // Refresh profile data using cookie
+        await fetchAllProfileData();
       } catch (err: any) {
-        setMessage(err.message || 'Failed to request withdraw');
+        setWithdrawPinError(err.message || 'Failed to request withdraw');
       }
     } catch (e: any) {
-      setMessage(e.message || 'Network error');
+      if (e.locked_until) {
+        setWithdrawPinError('Account locked. Try again later.');
+      } else {
+        setWithdrawPinError(e.message || 'Incorrect PIN');
+      }
     }
-    setConfirmLoading(false);
+    setWithdrawPinLoading(false);
   };
 
   return (
@@ -431,7 +437,7 @@ export const ProfilePage: React.FC = () => {
 
                 {playerExists && !hasPin && (
                   <div className="text-sm text-yellow-600">
-                    PIN not set for this account. Please play a game first to set up PIN.
+                    No PIN set. <button className="underline text-blue-600" onClick={() => navigate('/')}>Go to home page</button> to set up your PIN.
                   </div>
                 )}
 
@@ -558,9 +564,33 @@ export const ProfilePage: React.FC = () => {
                 <div>Amount: <span className="font-semibold">{withdrawAmount} UGX</span></div>
               </div>
               <div className="mt-6 flex gap-3">
-                <button ref={confirmBtnRef} className="flex-1 bg-[#373536] text-white py-2 rounded" onClick={confirmWithdraw} disabled={confirmLoading}>{confirmLoading ? 'Processing...' : 'Confirm'}</button>
-                <button className="flex-1 bg-white border py-2 rounded" onClick={() => setShowConfirmModal(false)} disabled={confirmLoading}>Cancel</button>
+                <button ref={confirmBtnRef} className="flex-1 bg-[#373536] text-white py-2 rounded" onClick={confirmWithdraw}>Confirm</button>
+                <button className="flex-1 bg-white border py-2 rounded" onClick={() => setShowConfirmModal(false)}>Cancel</button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Withdrawal PIN verification modal */}
+        {showWithdrawPinModal && (
+          <div className="fixed inset-0 flex items-center justify-center z-50" role="dialog" aria-modal="true">
+            <div className="absolute inset-0 bg-black opacity-40" onClick={() => setShowWithdrawPinModal(false)} aria-hidden="true"></div>
+            <div className="bg-white rounded-lg p-6 z-10 max-w-sm w-full mx-4">
+              <h2 className="text-lg font-semibold text-center mb-1">Authorize Withdrawal</h2>
+              <p className="text-sm text-gray-600 text-center mb-4">{withdrawAmount} UGX</p>
+              <PinInput
+                title="Enter PIN"
+                subtitle="Enter your PIN to confirm withdrawal"
+                onSubmit={handleWithdrawPinSubmit}
+                loading={withdrawPinLoading}
+                error={withdrawPinError}
+              />
+              <button
+                className="w-full mt-3 text-sm text-gray-500 underline"
+                onClick={() => { setShowWithdrawPinModal(false); setWithdrawPinError(undefined); }}
+              >
+                Cancel
+              </button>
             </div>
           </div>
         )}

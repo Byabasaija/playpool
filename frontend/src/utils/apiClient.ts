@@ -4,6 +4,9 @@ import { formatPhone } from './phoneUtils';
 //@ts-ignore
 const API_BASE = import.meta.env.VITE_BACKEND_URL + '/api/v1';
 
+// Common fetch options for cookie auth
+const withCredentials: RequestInit = { credentials: 'include' };
+
 export async function initiateStake(phone: string, stake: number, displayName?: string, opts?: { create_private?: boolean; match_code?: string; invite_phone?: string; source?: string; action_token?: string }): Promise<StakeResponse> {
   const body:any = {
     phone_number: formatPhone(phone),
@@ -22,7 +25,8 @@ export async function initiateStake(phone: string, stake: number, displayName?: 
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    ...withCredentials
   });
 
   const data = await response.json();
@@ -60,7 +64,8 @@ export async function requeuePlayer(phone: string, queueId?: number, stakeAmount
   const response = await fetch(`${API_BASE}/player/${formatPhone(phone)}/requeue`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    ...withCredentials
   });
 
   const data = await response.json();
@@ -72,7 +77,7 @@ export async function requeuePlayer(phone: string, queueId?: number, stakeAmount
 }
 
 export async function pollMatchStatus(queueToken: string): Promise<QueueStatusResponse> {
-  const response = await fetch(`${API_BASE}/game/queue/status?queue_token=${queueToken}`);
+  const response = await fetch(`${API_BASE}/game/queue/status?queue_token=${queueToken}`, withCredentials);
   const data = await response.json();
 
   if (!response.ok) {
@@ -89,7 +94,7 @@ export async function pollMatchStatus(queueToken: string): Promise<QueueStatusRe
 }
 
 export async function pollMatchStatusByPhone(phone: string): Promise<QueueStatusResponse & { queue_token?: string }> {
-  const response = await fetch(`${API_BASE}/game/queue/status?phone=${formatPhone(phone)}`);
+  const response = await fetch(`${API_BASE}/game/queue/status?phone=${formatPhone(phone)}`, withCredentials);
   const data = await response.json();
 
   if (!response.ok) {
@@ -110,7 +115,8 @@ export async function updateDisplayName(phone: string, name: string): Promise<{ 
   const resp = await fetch(`${API_BASE}/player/${formatPhone(phone)}/display-name`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ display_name: name })
+    body: JSON.stringify({ display_name: name }),
+    ...withCredentials
   });
 
   const data = await resp.json();
@@ -122,7 +128,7 @@ export async function updateDisplayName(phone: string, name: string): Promise<{ 
 }
 
 export async function getPlayerProfile(phone: string): Promise<{display_name?: string, player_winnings?: number, expired_queue?: {id:number, stake_amount:number, match_code?: string, is_private?: boolean}} | null> {
-  const response = await fetch(`${API_BASE}/player/${formatPhone(phone)}`);
+  const response = await fetch(`${API_BASE}/player/${formatPhone(phone)}`, withCredentials);
   if (response.status === 404) return null;
 
   const data = await response.json();
@@ -131,15 +137,15 @@ export async function getPlayerProfile(phone: string): Promise<{display_name?: s
     throw new Error(data.error || 'Failed to fetch player');
   }
 
-  return { 
-    display_name: data.display_name, 
-    player_winnings: data.player_winnings, 
-    expired_queue: data.expired_queue 
+  return {
+    display_name: data.display_name,
+    player_winnings: data.player_winnings,
+    expired_queue: data.expired_queue
   };
 }
 
 export async function getConfig(): Promise<{ commission_flat: number; payout_tax_percent: number; min_stake_amount: number; min_withdraw_amount?: number }> {
-  const response = await fetch(`${API_BASE}/config`);
+  const response = await fetch(`${API_BASE}/config`, withCredentials);
   const data = await response.json();
   if (!response.ok) {
     throw new Error(data.error || 'Failed to fetch config');
@@ -156,7 +162,8 @@ export async function requestOTP(phone: string): Promise<{ sms_queued: boolean }
   const response = await fetch(`${API_BASE}/auth/request-otp`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phone: formatPhone(phone) })
+    body: JSON.stringify({ phone: formatPhone(phone) }),
+    ...withCredentials
   });
 
   const data = await response.json();
@@ -175,7 +182,8 @@ export async function verifyOTPAction(phone: string, code: string, action: strin
   const response = await fetch(`${API_BASE}/auth/verify-otp-action`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phone: formatPhone(phone), code, action })
+    body: JSON.stringify({ phone: formatPhone(phone), code, action }),
+    ...withCredentials
   });
 
   const data = await response.json();
@@ -193,7 +201,7 @@ export async function checkPlayerStatus(phone: string): Promise<{
   has_pin: boolean;
   display_name: string;
 }> {
-  const response = await fetch(`${API_BASE}/player/check?phone=${formatPhone(phone)}`);
+  const response = await fetch(`${API_BASE}/player/check?phone=${formatPhone(phone)}`, withCredentials);
   const data = await response.json();
   if (!response.ok) {
     if (response.status >= 500) throw new Error('Server error, please try again later');
@@ -206,7 +214,8 @@ export async function setPIN(phone: string, pin: string): Promise<{ success: boo
   const response = await fetch(`${API_BASE}/auth/set-pin`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phone: formatPhone(phone), pin })
+    body: JSON.stringify({ phone: formatPhone(phone), pin }),
+    ...withCredentials
   });
 
   const data = await response.json();
@@ -242,7 +251,8 @@ export async function verifyPIN(phone: string, pin: string, action: string): Pro
   const response = await fetch(`${API_BASE}/auth/verify-pin`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phone: formattedPhone, pin: pin.trim(), action: action.trim() })
+    body: JSON.stringify({ phone: formattedPhone, pin: pin.trim(), action: action.trim() }),
+    ...withCredentials
   });
 
   const data = await response.json();
@@ -268,7 +278,8 @@ export async function resetPIN(phone: string, newPin: string, actionToken: strin
   const response = await fetch(`${API_BASE}/auth/reset-pin`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phone: formatPhone(phone), new_pin: newPin, action_token: actionToken })
+    body: JSON.stringify({ phone: formatPhone(phone), new_pin: newPin, action_token: actionToken }),
+    ...withCredentials
   });
 
   const data = await response.json();
@@ -283,10 +294,11 @@ export async function declineMatchInvite(phone: string, matchCode: string): Prom
   const response = await fetch(`${API_BASE}/match/decline`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ 
-      phone: formatPhone(phone), 
-      match_code: matchCode 
-    })
+    body: JSON.stringify({
+      phone: formatPhone(phone),
+      match_code: matchCode
+    }),
+    ...withCredentials
   });
 
   const data = await response.json();
@@ -298,10 +310,14 @@ export async function declineMatchInvite(phone: string, matchCode: string): Prom
   return { success: true };
 }
 
-// Profile endpoints
-export async function getProfile(token: string): Promise<any> {
+// Profile endpoints — token is optional, cookie auth is used as fallback
+export async function getProfile(token?: string): Promise<any> {
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
   const response = await fetch(`${API_BASE}/me`, {
-    headers: { 'Authorization': `Bearer ${token}` }
+    headers,
+    ...withCredentials
   });
 
   const data = await response.json();
@@ -313,8 +329,8 @@ export async function getProfile(token: string): Promise<any> {
 }
 
 export async function getPlayerStats(phone: string): Promise<any> {
-  const response = await fetch(`${API_BASE}/player/${encodeURIComponent(phone)}/stats`);
-  
+  const response = await fetch(`${API_BASE}/player/${encodeURIComponent(phone)}/stats`, withCredentials);
+
   const data = await response.json();
   if (!response.ok) {
     if (response.status >= 500) throw new Error('Server error, please try again later');
@@ -323,9 +339,13 @@ export async function getPlayerStats(phone: string): Promise<any> {
   return data;
 }
 
-export async function getWithdraws(token: string): Promise<any> {
+export async function getWithdraws(token?: string): Promise<any> {
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
   const response = await fetch(`${API_BASE}/me/withdraws`, {
-    headers: { 'Authorization': `Bearer ${token}` }
+    headers,
+    ...withCredentials
   });
 
   const data = await response.json();
@@ -336,14 +356,15 @@ export async function getWithdraws(token: string): Promise<any> {
   return data;
 }
 
-export async function requestWithdraw(token: string, amount: number, method: string = 'MOMO', destination: string = ''): Promise<any> {
+export async function requestWithdraw(token: string | undefined, amount: number, method: string = 'MOMO', destination: string = ''): Promise<any> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
   const response = await fetch(`${API_BASE}/me/withdraw`, {
     method: 'POST',
-    headers: { 
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`
-    },
-    body: JSON.stringify({ amount, method, destination })
+    headers,
+    body: JSON.stringify({ amount, method, destination }),
+    ...withCredentials
   });
 
   const data = await response.json();
@@ -352,4 +373,34 @@ export async function requestWithdraw(token: string, amount: number, method: str
     throw new Error(data.error || 'Failed to request withdraw');
   }
   return data;
+}
+
+// Player session endpoints
+
+export async function checkSession(): Promise<{
+  authenticated: boolean;
+  player_id: number;
+  phone: string;
+  display_name: string;
+} | null> {
+  try {
+    const response = await fetch(`${API_BASE}/session/check`, withCredentials);
+    if (!response.ok) return null;
+    const data = await response.json();
+    if (!data.authenticated) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+export async function playerLogout(): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/session/logout`, {
+      method: 'POST',
+      ...withCredentials
+    });
+  } catch {
+    // Best effort
+  }
 }

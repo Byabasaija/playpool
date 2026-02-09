@@ -38,11 +38,18 @@ func CORSMiddleware(cfg *config.Config) gin.HandlerFunc {
 		corsConfig.AllowCredentials = true
 		corsConfig.AllowAllOrigins = false
 	} else {
-		// Production: Use permissive mode temporarily to avoid gin-contrib/cors validation issues
-		// TODO: Restrict to specific origins once deployment is stable
-		log.Printf("[CORS] Using permissive CORS mode for production")
-		corsConfig.AllowAllOrigins = true
-		corsConfig.AllowCredentials = false // Must be false when AllowAllOrigins is true
+		// Production: explicit allowed origins with credentials for cookie auth
+		allowedOrigins := []string{
+			"https://playmatatu.com",
+			"https://demo.playmatatu.com",
+		}
+		if cfg.FrontendURL != "" {
+			allowedOrigins = append(allowedOrigins, cfg.FrontendURL)
+		}
+		corsConfig.AllowOrigins = allowedOrigins
+		corsConfig.AllowCredentials = true
+		corsConfig.AllowAllOrigins = false
+		log.Printf("[CORS] Production allowed origins: %v", allowedOrigins)
 	}
 
 	return cors.New(corsConfig)

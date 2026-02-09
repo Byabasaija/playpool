@@ -252,10 +252,36 @@ func VerifyOTPAction(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Han
 	}
 }
 
-// AuthMiddleware validates bearer JWT and sets player_id in context
-// For action tokens from PIN verification, also validates those for specific actions
+// AuthMiddleware validates player identity via (in order):
+// 1. Player session cookie
+// 2. Bearer JWT
+// 3. Bearer action token
 func AuthMiddleware(cfg *config.Config, rdb *redis.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		ctx := context.Background()
+
+		// 1. Try player session cookie first
+		if cookieToken, err := c.Cookie(playerCookieName); err == nil && cookieToken != "" {
+			sessionKey := fmt.Sprintf("player_session:%s", cookieToken)
+			sessionJSON, err := rdb.Get(ctx, sessionKey).Result()
+			if err == nil {
+				var sessionData map[string]interface{}
+				if err := json.Unmarshal([]byte(sessionJSON), &sessionData); err == nil {
+					if playerIDf, ok := sessionData["player_id"].(float64); ok && playerIDf > 0 {
+						c.Set("player_id", int(playerIDf))
+						if phone, ok := sessionData["phone"].(string); ok {
+							c.Set("player_phone", phone)
+						}
+						// Sliding window: refresh TTL
+						rdb.Expire(ctx, sessionKey, playerSessionTTL)
+						c.Next()
+						return
+					}
+				}
+			}
+		}
+
+		// 2. Try Bearer token (JWT or action token)
 		auth := c.GetHeader("Authorization")
 		if auth == "" || !strings.HasPrefix(auth, "Bearer ") {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing token"})
@@ -263,7 +289,7 @@ func AuthMiddleware(cfg *config.Config, rdb *redis.Client) gin.HandlerFunc {
 		}
 		token := strings.TrimPrefix(auth, "Bearer ")
 
-		// Try JWT first
+		// Try JWT
 		parsed, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
 			if token.Method.Alg() != jwt.SigningMethodHS256.Alg() {
 				return nil, fmt.Errorf("unexpected signing method")
@@ -286,14 +312,12 @@ func AuthMiddleware(cfg *config.Config, rdb *redis.Client) gin.HandlerFunc {
 			return
 		}
 
-		// Try action token (for PIN-based auth)
+		// 3. Try action token (for PIN-based auth)
 		tokenHash := sha256.Sum256([]byte(token))
 		tokenHashStr := hex.EncodeToString(tokenHash[:])
 
-		ctx := context.Background()
 		payload, err := rdb.Get(ctx, fmt.Sprintf("action_token:%s", tokenHashStr)).Result()
 		if err == nil {
-			// Parse action token payload as JSON
 			var tokenData struct {
 				Phone      string `json:"phone"`
 				Action     string `json:"action"`
@@ -599,6 +623,91 @@ func GetMyWithdraws(db *sqlx.DB) gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, gin.H{"withdraws": rows})
+	}
+}
+
+// PlayerSessionMiddleware validates player session from cookie, sets player_id/player_phone in context.
+// Refreshes TTL on each request (sliding window).
+func PlayerSessionMiddleware(rdb *redis.Client, db *sqlx.DB, cfg *config.Config) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token, err := c.Cookie(playerCookieName)
+		if err != nil || token == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
+			c.Abort()
+			return
+		}
+
+		ctx := context.Background()
+		sessionKey := fmt.Sprintf("player_session:%s", token)
+		sessionJSON, err := rdb.Get(ctx, sessionKey).Result()
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired session"})
+			c.Abort()
+			return
+		}
+
+		var sessionData map[string]interface{}
+		if err := json.Unmarshal([]byte(sessionJSON), &sessionData); err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid session"})
+			c.Abort()
+			return
+		}
+
+		playerIDf, ok := sessionData["player_id"].(float64)
+		if !ok || playerIDf == 0 {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid session"})
+			c.Abort()
+			return
+		}
+
+		c.Set("player_id", int(playerIDf))
+		if phone, ok := sessionData["phone"].(string); ok {
+			c.Set("player_phone", phone)
+		}
+
+		// Sliding window: refresh TTL
+		rdb.Expire(ctx, sessionKey, playerSessionTTL)
+
+		c.Next()
+	}
+}
+
+// PlayerCheckSession returns the current player session info
+// GET /api/v1/session/check
+func PlayerCheckSession(rdb *redis.Client, db *sqlx.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		pid, _ := c.Get("player_id")
+		phone, _ := c.Get("player_phone")
+
+		playerID := pid.(int)
+
+		var displayName string
+		db.Get(&displayName, `SELECT display_name FROM players WHERE id=$1`, playerID)
+
+		c.JSON(http.StatusOK, gin.H{
+			"authenticated": true,
+			"player_id":     playerID,
+			"phone":         phone,
+			"display_name":  displayName,
+		})
+	}
+}
+
+// PlayerLogout clears the player session cookie and Redis key
+// POST /api/v1/session/logout
+func PlayerLogout(rdb *redis.Client, cfg *config.Config) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token, err := c.Cookie(playerCookieName)
+		if err == nil && token != "" {
+			ctx := context.Background()
+			rdb.Del(ctx, fmt.Sprintf("player_session:%s", token))
+		}
+
+		secure := cfg.Environment == "production"
+		c.SetSameSite(http.SameSiteLaxMode)
+		c.SetCookie(playerCookieName, "", -1, "/api/v1", "", secure, true)
+
+		c.JSON(http.StatusOK, gin.H{"success": true})
 	}
 }
 

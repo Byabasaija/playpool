@@ -149,9 +149,32 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 		if req.Source == "winnings" {
 			useWinnings = true
 
-			// Action token is optional for PIN-authenticated users
-			// If provided, validate it; if not, proceed with basic validation
-			if req.ActionToken != "" {
+			// Require auth: action_token OR player session cookie
+			if req.ActionToken == "" {
+				// Fall back to player session cookie
+				cookieToken, err := c.Cookie(playerCookieName)
+				if err != nil || cookieToken == "" {
+					c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication required for winnings stake"})
+					return
+				}
+				ctx := context.Background()
+				sessionJSON, err := rdb.Get(ctx, fmt.Sprintf("player_session:%s", cookieToken)).Result()
+				if err != nil {
+					c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired session"})
+					return
+				}
+				var sess map[string]interface{}
+				if err := json.Unmarshal([]byte(sessionJSON), &sess); err != nil {
+					c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid session"})
+					return
+				}
+				sessPlayerID, ok := sess["player_id"].(float64)
+				if !ok || int(sessPlayerID) != player.ID {
+					c.JSON(http.StatusUnauthorized, gin.H{"error": "session does not match player"})
+					return
+				}
+				log.Printf("[INFO] Winnings stake authorized via session cookie: player=%d", player.ID)
+			} else if req.ActionToken != "" {
 				// Validate and consume action token (atomic GET+DEL with Lua)
 				ctx := context.Background()
 				tokenHash := sha256.Sum256([]byte(req.ActionToken))

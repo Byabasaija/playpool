@@ -2,7 +2,7 @@ import React, { useState, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useMatchmaking } from '../hooks/useMatchmaking';
 import { validatePhone, formatPhone } from '../utils/phoneUtils';
-import { getPlayerProfile, requeuePlayer, getConfig, requestOTP, checkPlayerStatus, verifyPIN } from '../utils/apiClient';
+import { getPlayerProfile, requeuePlayer, getConfig, requestOTP, checkPlayerStatus, verifyPIN, checkSession, playerLogout } from '../utils/apiClient';
 import PinInput from '../components/PinInput';
 import SetPinModal from '../components/SetPinModal';
 
@@ -46,22 +46,41 @@ export const LandingPage: React.FC = () => {
   const [showPinSetup, setShowPinSetup] = useState(false);
   const [pendingGameData, setPendingGameData] = useState<any>(null);
 
-  // Check localStorage for remembered phone on mount
+  // Check session cookie first, then fall back to PIN entry
   React.useEffect(() => {
-    const savedPhone = localStorage.getItem('matatu_phone');
-    if (savedPhone) {
-      // Check if this player has a PIN
-      checkPlayerStatus(savedPhone).then((status) => {
-        if (status.exists && status.has_pin) {
-          setPhoneRest(savedPhone.replace(/^256/, ''));
-          setDisplayNameInput(status.display_name || '');
-          setPlayerHasPin(true);
-          setShowPinEntry(true);
+    // Try existing session cookie first
+    checkSession().then(async (session) => {
+      if (session) {
+        // Valid session — skip PIN, restore state
+        const phoneRest = session.phone.replace(/^256/, '');
+        setPhoneRest(phoneRest);
+        setDisplayNameInput(session.display_name || '');
+        localStorage.setItem('matatu_phone', session.phone);
+
+        // Load balance + expired queue
+        const profile = await getPlayerProfile(session.phone).catch(() => null);
+        if (profile) {
+          setPlayerBalance(profile.player_winnings || 0);
+          if (profile.expired_queue) setExpiredQueue(profile.expired_queue);
         }
-      }).catch(() => {
-        // Ignore errors, just show normal form
-      });
-    }
+
+        setIsAuthenticated(true);
+        return;
+      }
+
+      // No session — check if returning user with PIN
+      const savedPhone = localStorage.getItem('matatu_phone');
+      if (savedPhone) {
+        checkPlayerStatus(savedPhone).then((status) => {
+          if (status.exists && status.has_pin) {
+            setPhoneRest(savedPhone.replace(/^256/, ''));
+            setDisplayNameInput(status.display_name || '');
+            setPlayerHasPin(true);
+            setShowPinEntry(true);
+          }
+        }).catch(() => {});
+      }
+    });
   }, []);
 
   React.useEffect(() => {
@@ -257,23 +276,12 @@ export const LandingPage: React.FC = () => {
     setPinAttemptsRemaining(undefined);
 
     try {
-      // Verify PIN for profile access
+      // Single verifyPIN call — cookie is set automatically by the backend
       await verifyPIN(full, pin, 'view_profile');
-      
-      // Also get winnings token in case user wants to use winnings later
-      try {
-        const winningsResult = await verifyPIN(full, pin, 'stake_winnings');
-        if (winningsResult.action_token) {
-          sessionStorage.setItem('landing_action_token', winningsResult.action_token);
-        }
-      } catch (err) {
-        // Non-fatal if winnings token fails - user can still view profile
-        console.warn('Failed to get winnings token:', err);
-      }
-      
-      // PIN verified successfully - save phone to localStorage
+
+      // PIN verified successfully - save phone, cookie is now set
       localStorage.setItem('matatu_phone', full);
-      
+
       // Load profile data including balance
       const profile = await getPlayerProfile(full);
       if (profile) {
@@ -282,7 +290,7 @@ export const LandingPage: React.FC = () => {
           setExpiredQueue(profile.expired_queue);
         }
       }
-      
+
       // Mark as authenticated and hide PIN entry
       setShowPinEntry(false);
       setIsAuthenticated(true);
@@ -313,18 +321,8 @@ export const LandingPage: React.FC = () => {
 
   
 
-  // Handle useWinnings toggle change
+  // Handle useWinnings toggle change — cookie auth handles authorization
   const handleUseWinningsChange = (enabled: boolean) => {
-    if (enabled) {
-      // Check if we have the required action token
-      const actionToken = sessionStorage.getItem('landing_action_token');
-      if (!actionToken) {
-        alert('Winnings authorization expired. Please re-enter your PIN to refresh your session.');
-        setShowPinEntry(true);
-        setIsAuthenticated(false);
-        return;
-      }
-    }
     setUseWinnings(enabled);
   };
 
@@ -441,20 +439,9 @@ export const LandingPage: React.FC = () => {
       // Continue with game start - PIN setup will be optional
     }
 
-    // Prepare game options
-
-    // Use winnings if selected (requires action token)
+    // Use winnings if selected — cookie auth handles authorization
     if (useWinnings) {
       opts.source = 'winnings';
-      const actionToken = sessionStorage.getItem('landing_action_token');
-      if (actionToken) {
-        opts.action_token = actionToken;
-        // Clean up the token after use
-        sessionStorage.removeItem('landing_action_token');
-      } else {
-        // This shouldn't happen due to toggle validation, but handle gracefully
-        throw new Error('Winnings authorization expired. Please refresh and try again.');
-      }
     }
 
     await startGame(full, stake, displayNameInput || generateRandomName(), opts);
@@ -465,22 +452,13 @@ export const LandingPage: React.FC = () => {
     setShowPinSetup(false);
     if (pendingGameData) {
       const { full, stake, displayNameInput, opts } = pendingGameData;
-      
+
       // Add match code if specified
       if (matchCodeInput) opts.match_code = matchCodeInput.trim().toUpperCase();
 
-      // Use winnings if selected (requires action token)
+      // Use winnings if selected — cookie auth handles authorization
       if (useWinnings) {
         opts.source = 'winnings';
-        const actionToken = sessionStorage.getItem('landing_action_token');
-        if (actionToken) {
-          opts.action_token = actionToken;
-          // Clean up the token after use
-          sessionStorage.removeItem('landing_action_token');
-        } else {
-          // This shouldn't happen due to toggle validation, but handle gracefully
-          throw new Error('Winnings authorization expired. Please refresh and try again.');
-        }
       }
 
       await startGame(full, stake, displayNameInput || generateRandomName(), opts);
@@ -595,9 +573,9 @@ export const LandingPage: React.FC = () => {
               
               <button
                 onClick={() => {
+                  playerLogout();
                   localStorage.removeItem('playmatatu_phone');
                   localStorage.removeItem('matatu_phone');
-                  sessionStorage.clear();
                   setPhoneRest('');
                   setShowPinEntry(false);
                   setPlayerHasPin(false);
@@ -666,8 +644,8 @@ export const LandingPage: React.FC = () => {
                 
                 <button
                   onClick={() => {
-                    localStorage.clear();
-                    sessionStorage.clear();
+                    playerLogout();
+                    localStorage.removeItem('matatu_phone');
                     setPhoneRest('');
                     setShowPinEntry(false);
                     setPlayerHasPin(false);
@@ -803,20 +781,14 @@ export const LandingPage: React.FC = () => {
                   const full = '256' + phoneRest.replace(/\D/g, '');
                   const inviteFull = isPrivate && invitePhoneRest ? '256' + invitePhoneRest.replace(/\D/g, '') : undefined;
                   
-                  const opts: { create_private?: boolean; invite_phone?: string; source?: string; action_token?: string } = {
+                  const opts: { create_private?: boolean; invite_phone?: string; source?: string } = {
                     create_private: isPrivate,
                     invite_phone: inviteFull
                   };
 
-                  // Add winnings source if using balance
+                  // Add winnings source if using balance — cookie auth handles authorization
                   if (useWinnings) {
                     opts.source = 'winnings';
-                    const actionToken = sessionStorage.getItem('landing_action_token');
-                    if (actionToken) {
-                      opts.action_token = actionToken;
-                      // Clean up the token after use
-                      sessionStorage.removeItem('landing_action_token');
-                    }
                   }
 
                   startGame(full, stake, displayNameInput || undefined, opts);

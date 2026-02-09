@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMatchmaking } from '../hooks/useMatchmaking';
 import { formatPhone } from '../utils/phoneUtils';
-import { getPlayerProfile, checkPlayerStatus, verifyPIN, declineMatchInvite } from '../utils/apiClient';
+import { getPlayerProfile, checkPlayerStatus, verifyPIN, declineMatchInvite, checkSession } from '../utils/apiClient';
 import PinInput from '../components/PinInput';
 
 function generateRandomName() {
@@ -41,19 +41,19 @@ export const JoinPage: React.FC = () => {
   const [useWinnings, setUseWinnings] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  // URL parsing and player check
+  // URL parsing and player check — try session cookie first
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const code = params.get('match_code');
     const s = params.get('stake');
     const phone = params.get('invite_phone');
-    
+
     if (code) setMatchCode(code.toUpperCase());
     if (s && !Number.isNaN(Number(s))) setStake(Number(s));
     if (phone) {
       const normalized = formatPhone(phone);
       setInvitePhone(normalized);
-      
+
       // Check if player exists in database
       checkPlayerStatus(normalized).then(async (status) => {
         if (status && status.exists) {
@@ -67,11 +67,18 @@ export const JoinPage: React.FC = () => {
               player_winnings: profile?.player_winnings || 0
             });
           } catch (err) {
-            // Fallback to basic info if profile fetch fails
-            setPlayerProfile({ 
+            setPlayerProfile({
               display_name: status.display_name,
-              phone_number: normalized 
+              phone_number: normalized
             });
+          }
+
+          // Try session cookie — skip PIN if valid
+          if (status.has_pin) {
+            const session = await checkSession();
+            if (session && session.phone === normalized) {
+              setIsAuthenticated(true);
+            }
           }
         } else {
           setPlayerExists(false);
@@ -84,23 +91,12 @@ export const JoinPage: React.FC = () => {
 
   const handlePinSubmit = async (pin: string) => {
     if (!invitePhone) return;
-    
+
     try {
       setFormError(null);
-      // Verify PIN for profile access
+      // Single verifyPIN call — cookie is set automatically by the backend
       await verifyPIN(invitePhone, pin, 'view_profile');
-      
-      // Also get winnings token in case user wants to use winnings later
-      try {
-        const winningsResult = await verifyPIN(invitePhone, pin, 'stake_winnings');
-        if (winningsResult.action_token) {
-          sessionStorage.setItem('join_action_token', winningsResult.action_token);
-        }
-      } catch (err) {
-        // Non-fatal if winnings token fails - user can still join
-        console.warn('Failed to get winnings token:', err);
-      }
-      
+
       setIsAuthenticated(true);
       // Refresh player profile for latest balance
       const profile = await getPlayerProfile(invitePhone);
@@ -113,25 +109,17 @@ export const JoinPage: React.FC = () => {
   const handleJoinMatch = async () => {
     try {
       setFormError(null);
-      
-      // For authenticated players, use their profile data
+
       if (isAuthenticated && playerProfile) {
         const opts: any = { match_code: matchCode };
+        // Cookie auth handles winnings authorization
         if (useWinnings) {
           opts.source = 'winnings';
-          // Include the action token for winnings authentication
-          const actionToken = sessionStorage.getItem('join_action_token');
-          if (actionToken) {
-            opts.action_token = actionToken;
-            // Clean up the token after use
-            sessionStorage.removeItem('join_action_token');
-          }
         }
         await startGame(invitePhone, stake, playerProfile.display_name, opts);
       } else {
-        // For new/guest players, use phone and generate display name
         const displayName = generateRandomName();
-        await startGame(invitePhone, stake, displayName, { 
+        await startGame(invitePhone, stake, displayName, {
           match_code: matchCode
         });
       }

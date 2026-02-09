@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -19,6 +20,9 @@ import (
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 )
+
+const playerSessionTTL = 1 * time.Hour
+const playerCookieName = "player_session"
 
 // CheckPlayerStatus returns whether a player exists and has a PIN set
 // GET /api/v1/player/check?phone=...
@@ -258,6 +262,28 @@ func VerifyPIN(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerFu
 		}
 
 		expiresAt := time.Now().Add(ttl)
+
+		// Set player session cookie (same pattern as admin session)
+		sessionBytes := make([]byte, 32)
+		if _, err := rand.Read(sessionBytes); err != nil {
+			log.Printf("VerifyPIN session token generation error: %v", err)
+			// Non-fatal: still return action_token, just skip cookie
+		} else {
+			sessionToken := hex.EncodeToString(sessionBytes)
+			sessionKey := fmt.Sprintf("player_session:%s", sessionToken)
+			sessionData, _ := json.Marshal(map[string]interface{}{
+				"player_id":  player.ID,
+				"phone":      phone,
+				"created_at": time.Now().Format(time.RFC3339),
+			})
+			if err := rdb.Set(ctx, sessionKey, sessionData, playerSessionTTL).Err(); err != nil {
+				log.Printf("VerifyPIN session storage error: %v", err)
+			} else {
+				secure := cfg.Environment == "production"
+				c.SetSameSite(http.SameSiteLaxMode)
+				c.SetCookie(playerCookieName, sessionToken, int(playerSessionTTL.Seconds()), "/api/v1", "", secure, true)
+			}
+		}
 
 		c.JSON(http.StatusOK, gin.H{
 			"action_token": actionToken,
