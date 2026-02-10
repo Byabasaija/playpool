@@ -476,7 +476,7 @@ func RequeueStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handle
 	}
 }
 
-// CancelQueue cancels an active queue and refunds the stake to player's winnings
+// CancelQueue cancels an active or expired queue and refunds the stake to player's winnings
 func CancelQueue(db *sqlx.DB, cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		queueIDStr := c.Param("id")
@@ -515,7 +515,7 @@ func CancelQueue(db *sqlx.DB, cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
-		if queue.Status != "queued" && queue.Status != "processing" && queue.Status != "matching" {
+		if queue.Status != "queued" && queue.Status != "processing" && queue.Status != "matching" && queue.Status != "expired" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "queue is not active"})
 			return
 		}
@@ -559,7 +559,7 @@ func CancelQueue(db *sqlx.DB, cfg *config.Config) gin.HandlerFunc {
 		}
 
 		// Insert escrow ledger entry
-		_, err = tx.Exec(`INSERT INTO escrow_ledger (entry_type, amount, player_id, description, created_at) VALUES ('REFUND', $1, $2, $3, NOW())`, float64(stakeAmount), pid, fmt.Sprintf("Queue %d cancelled", queueID))
+		_, err = tx.Exec(`INSERT INTO escrow_ledger (entry_type, amount, player_id, balance_after, description, created_at) VALUES ('REFUND', $1, $2, 0.0, $3, NOW())`, float64(stakeAmount), pid, fmt.Sprintf("Queue %d cancelled", queueID))
 		if err != nil {
 			log.Printf("[CANCEL] Failed to insert ledger entry: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record refund"})

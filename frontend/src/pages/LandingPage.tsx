@@ -31,6 +31,7 @@ export const LandingPage: React.FC = () => {
   const [requeueLoading, setRequeueLoading] = useState(false);
   const [requeueError, setRequeueError] = useState<string | null>(null);
 
+
   // PIN authentication state
   const [showPinEntry, setShowPinEntry] = useState(false);
   const [playerHasPin, setPlayerHasPin] = useState(false);
@@ -293,6 +294,30 @@ export const LandingPage: React.FC = () => {
       // Do not reset the UI; show error so user can act
     } finally {
       setRequeueLoading(false);
+    }
+  };
+
+  // Handle cancel expired queue
+  const handleCancel = async () => {
+    if (!expiredQueue) return;
+
+    setCancelLoading(true);
+    try {
+      await cancelQueue(expiredQueue.id);
+      // Refresh profile to update balance and remove expired queue
+      const fullPhone = '256' + phoneRest.replace(/\D/g, '');
+      const profile = await getPlayerProfile(fullPhone);
+      if (profile) {
+        setPlayerBalance(profile.player_winnings || 0);
+        setExpiredQueue(null);
+      }
+      // Reset to main authenticated screen
+      reset();
+    } catch (err: any) {
+      console.error('Cancel failed:', err);
+      // Optionally show error, but for now just log
+    } finally {
+      setCancelLoading(false);
     }
   };
 
@@ -752,6 +777,14 @@ export const LandingPage: React.FC = () => {
                   className="w-full bg-[#373536] text-white py-3 px-6 rounded-lg font-semibold hover:bg-[#2c2b2a] transition-colors disabled:opacity-50 mb-3"
                 >
                   {requeueLoading ? 'Rejoining...' : 'Rejoin Queue'}
+                </button>
+
+                <button
+                  onClick={handleCancel}
+                  disabled={cancelLoading}
+                  className="w-full py-2 px-4 text-sm text-red-600 hover:text-red-800 underline disabled:opacity-50"
+                >
+                  {cancelLoading ? 'Cancelling...' : 'Cancel Queue'}
                 </button>
 
                 <div className="flex gap-2">
@@ -1434,12 +1467,13 @@ export const LandingPage: React.FC = () => {
               >
                 Requeue Now
               </button>
-              {/* <button
-                onClick={() => navigate('/profile')}
-                className="w-full bg-white border border-gray-300 text-gray-700 py-3 px-6 rounded-lg font-semibold hover:bg-gray-50 transition-colors"
+              <button
+                onClick={handleCancel}
+                disabled={cancelLoading}
+                className="w-full py-2 px-4 text-sm text-red-600 hover:text-red-800 underline disabled:opacity-50"
               >
-                View Balance / Withdraw
-              </button> */}
+                {cancelLoading ? 'Cancelling...' : 'Cancel Queue'}
+              </button>
             </div>
           </div>
         );

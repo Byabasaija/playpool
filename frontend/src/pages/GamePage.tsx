@@ -507,13 +507,13 @@ export const GamePage: React.FC = () => {
             <span className={`inline-block px-4 py-1 rounded-full text-sm font-semibold ${
               winType === 'classic' ? 'bg-[#373536] text-white' : 
               winType === 'chop' ? 'bg-orange-500 text-white' :
-              isConcede ? 'bg-purple-500 text-white' :
-              isForfeit ? 'bg-red-500 text-white' : 'bg-gray-500 text-white'
+              isConcede ? 'bg-[#373536] text-white' :
+              isForfeit ? 'bg-[#373536] text-white' : 'bg-gray-500 text-white'
             }`}>
               {winType === 'classic' ? '👑 Classic Win' : 
                winType === 'chop' ? '✂️ Chop Win' :
-               isConcede ? '🏳️ Opponent Conceeded' :
-               isForfeit ? '⏱️ Opponent Forfeited' : 'Win'}
+               isConcede ? '🏳️ Conceeded' :
+               isForfeit ? '⏱️ Forfeited' : 'Win'}
             </span>
           </div>
 
