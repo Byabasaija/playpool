@@ -101,7 +101,7 @@ export const TurnIndicator: React.FC<TurnIndicatorProps> = ({
 
   // PASS (you can pass)
   if (canPass) {
-    return <ChipBody label="PASS" sublabel="Your" onClick={onPass} />;
+    return <ChipBody label="PASS" sublabel="" onClick={onPass} />;
   }
 
   // PLAY (your turn to play a card)

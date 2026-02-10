@@ -38,6 +38,10 @@ export const LandingPage: React.FC = () => {
   const [pinLockedUntil, setPinLockedUntil] = useState<string | undefined>();
 
   // Authenticated user state (after PIN verification)
+  const [authChecking, setAuthChecking] = useState(() => {
+    // Optimistic: if localStorage has phone, assume checking session
+    return localStorage.getItem('matatu_phone') ? true : false;
+  });
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [playerBalance, setPlayerBalance] = useState<number>(0);
   const [useWinnings, setUseWinnings] = useState<boolean>(false);
@@ -48,6 +52,14 @@ export const LandingPage: React.FC = () => {
 
   // Check session cookie first, then fall back to PIN entry
   React.useEffect(() => {
+    const savedPhone = localStorage.getItem('matatu_phone');
+    
+    // If no saved phone, skip auth check
+    if (!savedPhone) {
+      setAuthChecking(false);
+      return;
+    }
+
     // Try existing session cookie first
     checkSession().then(async (session) => {
       if (session) {
@@ -65,21 +77,27 @@ export const LandingPage: React.FC = () => {
         }
 
         setIsAuthenticated(true);
+        setAuthChecking(false);
         return;
       }
 
-      // No session — check if returning user with PIN
-      const savedPhone = localStorage.getItem('matatu_phone');
-      if (savedPhone) {
-        checkPlayerStatus(savedPhone).then((status) => {
-          if (status.exists && status.has_pin) {
-            setPhoneRest(savedPhone.replace(/^256/, ''));
-            setDisplayNameInput(status.display_name || '');
-            setPlayerHasPin(true);
-            setShowPinEntry(true);
-          }
-        }).catch(() => {});
-      }
+      // No session but have savedPhone — check if user has PIN
+      checkPlayerStatus(savedPhone).then((status) => {
+        if (status.exists && status.has_pin) {
+          setPhoneRest(savedPhone.replace(/^256/, ''));
+          setDisplayNameInput(status.display_name || '');
+          setPlayerHasPin(true);
+          setShowPinEntry(true);
+        } else {
+          // Phone in localStorage but no PIN - clear it
+          localStorage.removeItem('matatu_phone');
+        }
+        setAuthChecking(false);
+      }).catch(() => {
+        // Error checking status - clear stale localStorage
+        localStorage.removeItem('matatu_phone');
+        setAuthChecking(false);
+      });
     });
   }, []);
 
@@ -319,6 +337,26 @@ export const LandingPage: React.FC = () => {
     }
   };
 
+  // Handle logout - clear session and reset to unauthenticated state
+  const handleLogout = async () => {
+    try {
+      await playerLogout();
+    } catch (err) {
+      console.error('Logout failed:', err);
+    } finally {
+      // Clear local state regardless of API call result
+      localStorage.removeItem('matatu_phone');
+      setIsAuthenticated(false);
+      setShowPinEntry(false);
+      setPlayerHasPin(false);
+      setPhoneRest('');
+      setDisplayNameInput('');
+      setPlayerBalance(0);
+      setExpiredQueue(null);
+      setPinError('');
+    }
+  };
+
   
 
   // Handle useWinnings toggle change — cookie auth handles authorization
@@ -546,6 +584,18 @@ export const LandingPage: React.FC = () => {
   };
 
   const renderContent = () => {
+    // Show loading spinner while checking authentication
+    if (authChecking) {
+      return (
+        <div className="max-w-md mx-auto rounded-2xl p-8 flex items-center justify-center min-h-[400px]">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#D4A574] mx-auto mb-4"></div>
+            <p className="text-gray-600">Loading...</p>
+          </div>
+        </div>
+      );
+    }
+
     switch (stage) {
       case 'form':
         // Show PIN entry for returning users with PIN
@@ -572,18 +622,10 @@ export const LandingPage: React.FC = () => {
               />
               
               <button
-                onClick={() => {
-                  playerLogout();
-                  localStorage.removeItem('playmatatu_phone');
-                  localStorage.removeItem('matatu_phone');
-                  setPhoneRest('');
-                  setShowPinEntry(false);
-                  setPlayerHasPin(false);
-                  setIsAuthenticated(false);
-                }}
+                onClick={handleLogout}
                 className="w-full mt-4 py-2 px-4 text-sm text-gray-500 hover:text-gray-700 underline"
               >
-                Use different phone
+                Not you? Logout
               </button>
             </div>
           );
@@ -815,14 +857,7 @@ export const LandingPage: React.FC = () => {
               </div>
               
               <button
-                onClick={() => {
-                  localStorage.clear();
-                  sessionStorage.clear();
-                  setPhoneRest('');
-                  setShowPinEntry(false);
-                  setPlayerHasPin(false);
-                  setIsAuthenticated(false);
-                }}
+                onClick={handleLogout}
                 className="w-full mt-3 py-2 px-4 text-sm text-gray-500 hover:text-gray-700 underline"
               >
                 Logout

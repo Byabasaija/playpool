@@ -171,6 +171,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
           myTurn={myTurn}
           canPass={canPass}
           onPass={onPassTurn}
+          opponentName={opponentDisplayName}
         />
         
         {/* Suit Reveal - positioned in center of game area */}
