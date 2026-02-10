@@ -3,7 +3,7 @@ export interface StakeRequest {
   stake_amount: number;
   display_name?: string;
   create_private?: boolean;
-  match_code?: string;
+  matchcode?: string;
   invite_phone?: string;
 }
 
@@ -21,7 +21,7 @@ export interface StakeResponse {
   // Player token for authenticated actions
   player_token?: string;
   // Private match fields
-  match_code?: string;
+  matchcode?: string;
   expires_at?: string;
   queue_id?: number;
   // Payment fields (when status is PENDING)

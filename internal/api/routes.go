@@ -70,7 +70,7 @@ func SetupRoutes(router *gin.Engine, db *sqlx.DB, rdb *redis.Client, cfg *config
 
 		// Game/Match endpoints
 		v1.POST("/match/decline", handlers.DeclineMatchInvite(db, rdb, cfg))
-		v1.GET("/match/:match_code", handlers.GetMatchDetails(db, rdb, cfg))
+		v1.GET("/match/:matchcode", handlers.GetMatchDetails(db, rdb, cfg))
 
 		// PIN auth endpoints
 		v1.GET("/player/check", handlers.CheckPlayerStatus(db))

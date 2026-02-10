@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useMatchmaking } from '../hooks/useMatchmaking';
 import { validatePhone, formatPhone } from '../utils/phoneUtils';
 import { getPlayerProfile, getConfig, checkPlayerStatus, verifyPIN, checkSession } from '../utils/apiClient';
@@ -36,20 +36,18 @@ export const RematchPage: React.FC = () => {
   const [pinLockoutUntil, setPinLockoutUntil] = useState<string | undefined>(undefined);
 
   // Helper function to build invite link (similar to LandingPage)
-  const buildInviteLink = (matchCode: string, stake: number, invitePhone?: string) => {
+  const buildInviteLink = (matchCode: string) => {
     const base = window.location.origin + '/join';
     const params = new URLSearchParams();
-    params.set('match_code', matchCode);
-    params.set('stake', stake.toString());
-    if (invitePhone) params.set('invite_phone', formatPhone(invitePhone));
+    params.set('matchcode', matchCode);
     return base + '?' + params.toString();
   };
 
   // Share functionality
   const handleShare = async () => {
     if (!privateMatch) return;
-    const link = buildInviteLink(privateMatch.match_code, initialStake, opponentPhone);
-    const text = `Join my PlayMatatu rematch. Code: ${privateMatch.match_code}. Stake: ${initialStake} UGX`;
+    const link = buildInviteLink(privateMatch.matchcode);
+    const text = `Join my PlayMatatu rematch. Code: ${privateMatch.matchcode}. Stake: ${initialStake} UGX`;
     
     if (navigator.share) {
       try {
@@ -250,7 +248,7 @@ export const RematchPage: React.FC = () => {
         {privateMatch && (
           <>
             <div className="bg-gray-100 p-4 rounded-lg inline-block mb-4">
-              <div className="text-2xl font-mono">{privateMatch.match_code}</div>
+              <div className="text-2xl font-mono">{privateMatch.matchcode}</div>
               {privateMatch.expires_at && (
                 <div className="text-sm text-gray-500">Expires: {new Date(privateMatch.expires_at).toLocaleString()}</div>
               )}
@@ -265,12 +263,12 @@ export const RematchPage: React.FC = () => {
               <div className="flex items-center space-x-2">
                 <input 
                   readOnly 
-                  value={buildInviteLink(privateMatch.match_code, initialStake, opponentPhone)} 
+                  value={buildInviteLink(privateMatch.matchcode)} 
                   className="px-3 py-2 border rounded-l-lg w-72 bg-white text-sm" 
                 />
                 <button 
                   onClick={async () => { 
-                    await navigator.clipboard.writeText(buildInviteLink(privateMatch.match_code, initialStake, opponentPhone)); 
+                    await navigator.clipboard.writeText(buildInviteLink(privateMatch.matchcode)); 
                     setCopiedLink(true); 
                     setTimeout(() => setCopiedLink(false), 2000); 
                   }} 
@@ -314,7 +312,9 @@ export const RematchPage: React.FC = () => {
   return (
     <div className="max-w-md mx-auto rounded-2xl p-8">
       <div className="text-center mb-4">
-        <img src="/logo.webp" alt="PlayMatatu Logo" width={160} height={113} className="mx-auto mb-4" />
+        <Link to="/">
+          <img src="/logo.webp" alt="PlayMatatu Logo" width={160} height={113} className="mx-auto mb-4" />
+        </Link>
       </div>
       <h1 className="text-2xl font-bold text-gray-900 mb-6 text-center">Rematch</h1>
 

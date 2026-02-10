@@ -7,7 +7,7 @@ const API_BASE = import.meta.env.VITE_BACKEND_URL + '/api/v1';
 // Common fetch options for cookie auth
 const withCredentials: RequestInit = { credentials: 'include' };
 
-export async function initiateStake(phone: string, stake: number, displayName?: string, opts?: { create_private?: boolean; match_code?: string; invite_phone?: string; source?: string; action_token?: string }): Promise<StakeResponse> {
+export async function initiateStake(phone: string, stake: number, displayName?: string, opts?: { create_private?: boolean; matchcode?: string; invite_phone?: string; source?: string; action_token?: string }): Promise<StakeResponse> {
   const body:any = {
     phone_number: formatPhone(phone),
     stake_amount: stake
@@ -15,7 +15,7 @@ export async function initiateStake(phone: string, stake: number, displayName?: 
 
   if (displayName) body.display_name = displayName
   if (opts?.create_private) body.create_private = true
-  if (opts?.match_code) body.match_code = opts.match_code
+  if (opts?.matchcode) body.matchcode = opts.matchcode
   if (opts?.invite_phone) body.invite_phone = formatPhone(opts.invite_phone)
   if (opts?.source) body.source = opts.source
   if (opts?.action_token) body.action_token = opts.action_token
@@ -45,7 +45,7 @@ export async function initiateStake(phone: string, stake: number, displayName?: 
     my_display_name: data.my_display_name,
     opponent_display_name: data.opponent_display_name,
     queue_token: data.queue_token,
-    match_code: data.match_code,
+    matchcode: data.matchcode,
     expires_at: data.expires_at,
     queue_id: data.queue_id,
     transaction_id: data.transaction_id,
@@ -140,7 +140,7 @@ export async function updateDisplayName(phone: string, name: string): Promise<{ 
   return { display_name: data.display_name };
 }
 
-export async function getPlayerProfile(phone: string): Promise<{display_name?: string, player_winnings?: number, expired_queue?: {id:number, stake_amount:number, match_code?: string, is_private?: boolean}, active_queue?: {id:number, stake_amount:number, queue_token?: string, status?: string, expires_at?: string}} | null> {
+export async function getPlayerProfile(phone: string): Promise<{display_name?: string, player_winnings?: number, expired_queue?: {id:number, stake_amount:number, matchcode?: string, is_private?: boolean}, active_queue?: {id:number, stake_amount:number, queue_token?: string, status?: string, expires_at?: string}} | null> {
   const response = await fetch(`${API_BASE}/player/${formatPhone(phone)}`, withCredentials);
   if (response.status === 404) return null;
 
@@ -310,7 +310,7 @@ export async function declineMatchInvite(phone: string, matchCode: string): Prom
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       phone: formatPhone(phone),
-      match_code: matchCode
+      matchcode: matchCode
     }),
     ...withCredentials
   });
@@ -325,7 +325,7 @@ export async function declineMatchInvite(phone: string, matchCode: string): Prom
 }
 
 export async function getMatchDetails(matchCode: string): Promise<{
-  match_code: string;
+  matchcode: string;
   stake_amount: number;
   inviter_phone: string;
   expires_at: string;

@@ -24,7 +24,7 @@ export const LandingPage: React.FC = () => {
   const { stage, gameLink, isLoading, startGame, startPolling, reset, displayName, error, privateMatch } = useMatchmaking();
 
   const [displayNameInput, setDisplayNameInput] = useState<string>('');
-  const [expiredQueue, setExpiredQueue] = useState<{id:number, stake_amount:number, match_code?: string, is_private?: boolean} | null>(null);
+  const [expiredQueue, setExpiredQueue] = useState<{id:number, stake_amount:number, matchcode?: string, is_private?: boolean} | null>(null);
   const [activeQueue, setActiveQueue] = useState<{id:number, stake_amount:number, queue_token?: string, status?: string, expires_at?: string} | null>(null);
   const [cancelLoading, setCancelLoading] = useState(false);
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
@@ -157,7 +157,7 @@ export const LandingPage: React.FC = () => {
     // Prefill from URL (join links): ?match_code=ABC123&stake=5000&invite_phone=2567...
     try {
       const params = new URLSearchParams(window.location.search);
-      const code = params.get('match_code');
+      const code = params.get('matchcode');
       const stakeParam = params.get('stake');
       const invitePhoneParam = params.get('invite_phone');
       if (code) {
@@ -554,7 +554,7 @@ export const LandingPage: React.FC = () => {
       const { full, stake, displayNameInput, opts } = pendingGameData;
 
       // Add match code if specified
-      if (matchCodeInput) opts.match_code = matchCodeInput.trim().toUpperCase();
+      if (matchCodeInput) opts.matchcode = matchCodeInput.trim().toUpperCase();
 
       // Use winnings if selected — cookie auth handles authorization
       if (useWinnings) {
@@ -604,19 +604,17 @@ export const LandingPage: React.FC = () => {
     return () => clearInterval(timer);
   }, [privateMatch]);
 
-  const buildInviteLink = (matchCode?: string, stakeAmount?: number, invitePhoneRestParam?: string) => {
+  const buildInviteLink = (matchCode?: string) => {
     const base = window.location.origin + '/join';
     const params = new URLSearchParams();
-    if (matchCode) params.set('match_code', matchCode);
-    if (stakeAmount) params.set('stake', String(stakeAmount));
-    if (invitePhoneRestParam) params.set('invite_phone', formatPhone(invitePhoneRestParam));
+    if (matchCode) params.set('matchcode', matchCode);
     return base + '?' + params.toString();
   };
 
   const handleShare = async () => {
     if (!privateMatch) return;
-    const link = buildInviteLink(privateMatch.match_code, stake, invitePhoneRest || undefined);
-    const text = `Join my PlayMatatu private match. Code: ${privateMatch.match_code}. Expires: ${privateMatch.expires_at ? new Date(privateMatch.expires_at).toLocaleString() : ''}`;
+    const link = buildInviteLink(privateMatch.matchcode);
+    const text = `Join my PlayMatatu private match. Code: ${privateMatch.matchcode}. Expires: ${privateMatch.expires_at ? new Date(privateMatch.expires_at).toLocaleString() : ''}`;
     if (navigator.share) {
       try {
         await navigator.share({ title: 'PlayMatatu Invite', text });
@@ -666,7 +664,9 @@ export const LandingPage: React.FC = () => {
             <div className="max-w-md mx-auto rounded-2xl p-8">
               <div className="text-center mb-6">
                 <div className="mb-3">
-                  <img src="/logo.webp" alt="PlayMatatu Logo" width={200} height={141} className="mx-auto"/>
+                  <Link to="/">
+                    <img src="/logo.webp" alt="PlayMatatu Logo" width={200} height={141} className="mx-auto"/>
+                  </Link>
                 </div>
                 <h2 className="text-xl font-bold text-[#373536] mb-1">Welcome back{displayNameInput ? `, ${displayNameInput}` : ''}!</h2>
                 <p className="text-gray-600 text-sm">256{phoneRest}</p>
@@ -700,7 +700,9 @@ export const LandingPage: React.FC = () => {
             return (
               <div className="max-w-md mx-auto rounded-2xl p-8">
                 <div className="text-center mb-4">
-                  <img src="/logo.webp" alt="PlayMatatu Logo" width={200} height={141} className="mx-auto"/>
+                  <Link to="/">
+                    <img src="/logo.webp" alt="PlayMatatu Logo" width={200} height={141} className="mx-auto"/>
+                  </Link>
                 </div>
                 
                 <div className="text-center mb-4">
@@ -711,8 +713,8 @@ export const LandingPage: React.FC = () => {
                 <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
                   <p className="text-sm text-yellow-800">
                     Pending stake: <span className="font-bold">{expiredQueue.stake_amount.toLocaleString()} UGX</span>
-                    {expiredQueue.is_private && expiredQueue.match_code && (
-                      <span className="block text-xs mt-1">Code: {expiredQueue.match_code}</span>
+                    {expiredQueue.is_private && expiredQueue.matchcode && (
+                      <span className="block text-xs mt-1">Code: {expiredQueue.matchcode}</span>
                     )}
                   </p>
                 </div>
@@ -823,7 +825,9 @@ export const LandingPage: React.FC = () => {
           return (
             <div className="max-w-md mx-auto rounded-2xl p-8">
               <div className="text-center mb-4">
-                <img src="/logo.webp" alt="PlayMatatu Logo" width={200} height={141} className="mx-auto"/>
+                <Link to="/">
+                  <img src="/logo.webp" alt="PlayMatatu Logo" width={200} height={141} className="mx-auto"/>
+                </Link>
               </div>
               
               <div className="text-center mb-6">
@@ -990,7 +994,9 @@ export const LandingPage: React.FC = () => {
             <div className="max-w-md mx-auto rounded-2xl p-8">
               <div className="text-center mb-4 mb-md-5">
                 <div className="mb-3">
-                  <img src="/logo.webp" alt="PlayMatatu Logo" width={200} height={141}/>
+                  <Link to="/">
+                    <img src="/logo.webp" alt="PlayMatatu Logo" width={200} height={141}/>
+                  </Link>
                 </div>
               </div>
 
@@ -1009,9 +1015,9 @@ export const LandingPage: React.FC = () => {
                   You have a pending stake of <span className="font-bold text-lg">{expiredQueue.stake_amount.toLocaleString()} UGX</span>
                 </p>
 
-                {expiredQueue.is_private && expiredQueue.match_code && (
+                {expiredQueue.is_private && expiredQueue.matchcode && (
                   <p className="text-sm text-gray-500 mb-4">
-                    Private match code: <span className="font-mono">{expiredQueue.match_code}</span>
+                    Private match code: <span className="font-mono">{expiredQueue.matchcode}</span>
                   </p>
                 )}
 
@@ -1076,7 +1082,9 @@ export const LandingPage: React.FC = () => {
           <div className="max-w-md mx-auto rounded-2xl p-8">
             <div className="text-center mb-4 mb-md-5">
                      <div className="mb-3">
-                        <img src="/logo.webp" alt="PlayMatatu Logo" width={200} height={141}/>
+                        <Link to="/">
+                          <img src="/logo.webp" alt="PlayMatatu Logo" width={200} height={141}/>
+                        </Link>
                     </div>
 
                 </div>
@@ -1356,15 +1364,15 @@ export const LandingPage: React.FC = () => {
               <h2 className="text-2xl font-bold text-gray-900 mb-2">Waiting for Friend</h2>
               <p className="text-gray-600 mb-4">We've sent the invite — waiting for your friend to join.</p>
               <div className="bg-gray-100 p-4 rounded-lg inline-block">
-                <div className="text-2xl font-mono">{privateMatch.match_code}</div>
+                <div className="text-2xl font-mono">{privateMatch.matchcode}</div>
                 {privateMatch.expires_at && (
                   <div className="text-sm text-gray-500">Expires: {new Date(privateMatch.expires_at).toLocaleString()}</div>
                 )}
               </div>
               <div className="mt-4 flex flex-col items-center space-y-3">
                 <div className="flex items-center space-x-2">
-                  <input readOnly value={buildInviteLink(privateMatch.match_code, stake, invitePhoneRest || undefined)} className="px-3 py-2 border rounded-l-lg w-72 bg-white text-sm" />
-                  <button onClick={async () => { await navigator.clipboard.writeText(buildInviteLink(privateMatch.match_code, stake, invitePhoneRest || undefined)); setCopiedLink(true); setTimeout(() => setCopiedLink(false), 2000); }} className="px-3 py-2 bg-gray-100 rounded-r-lg border">{copiedLink ? 'Copied' : 'Copy'}</button>
+                  <input readOnly value={buildInviteLink(privateMatch.matchcode)} className="px-3 py-2 border rounded-l-lg w-72 bg-white text-sm" />
+                  <button onClick={async () => { await navigator.clipboard.writeText(buildInviteLink(privateMatch.matchcode)); setCopiedLink(true); setTimeout(() => setCopiedLink(false), 2000); }} className="px-3 py-2 bg-gray-100 rounded-r-lg border">{copiedLink ? 'Copied' : 'Copy'}</button>
                 </div>
                 <div className="flex space-x-3">
                   <button onClick={handleShare} className="px-4 py-2 bg-gray-100 rounded-lg border">Share</button>
@@ -1428,7 +1436,7 @@ export const LandingPage: React.FC = () => {
             <h2 className="text-2xl font-bold text-gray-900 mb-2">Private Match Created</h2>
             <p className="text-gray-600 mb-4">Share this code with your friend to join the match:</p>
             <div className="bg-gray-100 p-4 rounded-lg inline-block">
-              <div className="text-2xl font-mono" id="private-code">{privateMatch?.match_code}</div>
+              <div className="text-2xl font-mono" id="private-code">{privateMatch?.matchcode}</div>
               {privateMatch?.expires_at && (
                 <div className="text-sm text-gray-500">Expires: {new Date(privateMatch.expires_at).toLocaleString()}</div>
               )}
@@ -1438,7 +1446,7 @@ export const LandingPage: React.FC = () => {
             </div>
             <div className="mt-6">
               <button onClick={handleShare} className="px-4 py-2 bg-[#22c55e] text-white rounded-lg mr-3">Share</button>
-              <button onClick={() => { navigator.clipboard?.writeText(privateMatch?.match_code || ''); }} className="px-4 py-2 bg-[#373536] text-white rounded-lg mr-3">Copy Code</button>
+              <button onClick={() => { navigator.clipboard?.writeText(privateMatch?.matchcode || ''); }} className="px-4 py-2 bg-[#373536] text-white rounded-lg mr-3">Copy Code</button>
               <button onClick={handleWaitForFriend} disabled={!privateMatch?.queue_token} className="px-4 py-2 bg-[#0ea5e9] text-white rounded-lg mr-3">Wait for Friend</button>
               <button onClick={() => { reset(); }} className="px-4 py-2 border rounded-lg">Done</button>
             </div>

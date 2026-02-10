@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useMatchmaking } from '../hooks/useMatchmaking';
 import { formatPhone } from '../utils/phoneUtils';
 import { getPlayerProfile, checkPlayerStatus, verifyPIN, declineMatchInvite, checkSession, getMatchDetails } from '../utils/apiClient';
@@ -45,7 +45,7 @@ export const JoinPage: React.FC = () => {
   // URL parsing and match details fetch
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const code = params.get('match_code');
+    const code = params.get('matchcode');
 
     if (!code) {
       setFormError('No match code provided');
@@ -139,7 +139,7 @@ export const JoinPage: React.FC = () => {
       setFormError(null);
 
       if (isAuthenticated && playerProfile) {
-        const opts: any = { match_code: matchCode };
+        const opts: any = { matchcode: matchCode };
         // Cookie auth handles winnings authorization
         if (useWinnings) {
           opts.source = 'winnings';
@@ -148,7 +148,7 @@ export const JoinPage: React.FC = () => {
       } else {
         const displayName = generateRandomName();
         await startGame(invitePhone, stake, displayName, {
-          match_code: matchCode
+          matchcode: matchCode
         });
       }
     } catch (err) {
@@ -184,7 +184,9 @@ export const JoinPage: React.FC = () => {
     return (
       <div className="max-w-md mx-auto rounded-2xl p-8">
         <div className="text-center mb-6">
-          <img src="/logo.webp" alt="PlayMatatu Logo" width={180} height={127} className="mx-auto" />
+          <Link to="/">
+            <img src="/logo.webp" alt="PlayMatatu Logo" width={180} height={127} className="mx-auto" />
+          </Link>
         </div>
         <div className="text-center">
           <div className="text-red-500 mb-4">{formError}</div>
@@ -204,7 +206,9 @@ export const JoinPage: React.FC = () => {
     return (
       <div className="max-w-md mx-auto rounded-2xl p-8">
         <div className="text-center mb-6">
-          <img src="/logo.webp" alt="PlayMatatu Logo" width={180} height={127} className="mx-auto" />
+          <Link to="/">
+            <img src="/logo.webp" alt="PlayMatatu Logo" width={180} height={127} className="mx-auto" />
+          </Link>
         </div>
         
         <h2 className="text-2xl font-bold text-gray-900 mb-6 text-center">Join Match</h2>
@@ -260,7 +264,9 @@ export const JoinPage: React.FC = () => {
     return (
       <div className="max-w-md mx-auto rounded-2xl p-8">
         <div className="text-center mb-6">
-          <img src="/logo.webp" alt="PlayMatatu Logo" width={180} height={127} className="mx-auto" />
+          <Link to="/">
+            <img src="/logo.webp" alt="PlayMatatu Logo" width={180} height={127} className="mx-auto" />
+          </Link>
         </div>
         
         <h2 className="text-2xl font-bold text-gray-900 mb-6 text-center">Join Match</h2>
@@ -335,7 +341,9 @@ export const JoinPage: React.FC = () => {
   return (
     <div className="max-w-md mx-auto rounded-2xl p-8">
       <div className="text-center mb-4">
-        <img src="/logo.webp" alt="PlayMatatu Logo" width={180} height={127} className="mx-auto" />
+        <Link to="/">
+          <img src="/logo.webp" alt="PlayMatatu Logo" width={180} height={127} className="mx-auto" />
+        </Link>
       </div>
       <h2 className="text-2xl font-bold mb-4">Join PlayMatatu Match</h2>
       

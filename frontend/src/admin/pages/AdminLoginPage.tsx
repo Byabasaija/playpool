@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { adminLogin, adminVerifyOTP, adminCheckSession } from '../hooks/useAdminApi';
 
 export function AdminLoginPage() {
@@ -52,7 +52,9 @@ export function AdminLoginPage() {
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       <div className="max-w-md w-full bg-white rounded-2xl shadow-lg p-8">
         <div className="text-center mb-6">
-          <img src="/logo.webp" alt="PlayMatatu Logo" width={160} height={113} className="mx-auto mb-4" />
+          <Link to="/">
+            <img src="/logo.webp" alt="PlayMatatu Logo" width={160} height={113} className="mx-auto mb-4" />
+          </Link>
           <h1 className="text-2xl font-bold text-gray-900">Admin Login</h1>
           <p className="text-gray-600 text-sm mt-2">
             {otpRequired ? 'Enter the OTP sent to your phone' : 'Enter your admin credentials'}

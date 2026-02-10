@@ -262,7 +262,7 @@ func GetPlayerProfile(db *sqlx.DB) gin.HandlerFunc {
 
 		resp := gin.H{"display_name": p.DisplayName, "player_winnings": winningsBalance, "player_token": p.PlayerToken}
 		if hasExpired {
-			resp["expired_queue"] = gin.H{"id": expired.ID, "stake_amount": int(expired.StakeAmount), "match_code": expired.MatchCode, "is_private": expired.IsPrivate}
+			resp["expired_queue"] = gin.H{"id": expired.ID, "stake_amount": int(expired.StakeAmount), "matchcode": expired.MatchCode, "is_private": expired.IsPrivate}
 		}
 
 		// Check if player has any active queue rows (not expired): processing, matching, or queued with future expires_at
@@ -412,7 +412,7 @@ func RequeueStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handle
 				invite := normalizePhone(req.InvitePhone)
 				if invite != "" {
 					smsInviteQueued = true
-					joinLink := fmt.Sprintf("%s/join?match_code=%s", cfg.FrontendURL, code)
+					joinLink := fmt.Sprintf("%s/join?matchcode=%s", cfg.FrontendURL, code)
 					go func(code string, invite string, stake int, link string) {
 						msg := fmt.Sprintf("Join my PlayMatatu match!\nCode: %s\nStake: %d UGX\n\n%s", code, stake, link)
 						if msgID, err := sms.SendSMS(context.Background(), invite, msg); err != nil {
@@ -427,7 +427,7 @@ func RequeueStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handle
 			// Return private_created payload
 			c.JSON(http.StatusOK, gin.H{
 				"status":            "private_created",
-				"match_code":        code,
+				"matchcode":         code,
 				"expires_at":        expiresAt,
 				"queue_id":          queueID,
 				"queue_token":       qToken,

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { getConfig, checkPlayerStatus, verifyPIN, requestOTP, verifyOTPAction, resetPIN, getProfile, getPlayerStats, getWithdraws, requestWithdraw, checkSession, playerLogout } from '../utils/apiClient';
 import PinInput from '../components/PinInput';
 
@@ -338,7 +338,9 @@ export const ProfilePage: React.FC = () => {
     <div className="min-h-screen flex items-center justify-center">
       <div className="max-w-md mx-auto rounded-2xl p-8">
         <div className="text-center mb-6">
-          <img src="/logo.webp" alt="PlayMatatu Logo" width={160} height={113} className="mx-auto mb-4" />
+          <Link to="/">
+            <img src="/logo.webp" alt="PlayMatatu Logo" width={160} height={113} className="mx-auto mb-4" />
+          </Link>
           <h2 className="text-2xl font-bold">Profile</h2>
         </div>
 

@@ -60,7 +60,7 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 			StakeAmount   int    `json:"stake_amount" binding:"required"`
 			DisplayName   string `json:"display_name,omitempty"`
 			CreatePrivate bool   `json:"create_private,omitempty"`
-			MatchCode     string `json:"match_code,omitempty"`
+			MatchCode     string `json:"matchcode,omitempty"`
 			InvitePhone   string `json:"invite_phone,omitempty"`
 			Source        string `json:"source,omitempty"`
 			ActionToken   string `json:"action_token,omitempty"`
@@ -524,7 +524,7 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 						invitePhone := normalizePhone(req.InvitePhone)
 						if invitePhone != "" {
 							smsInviteQueued = true
-							joinLink := fmt.Sprintf("%s/join?match_code=%s", cfg.FrontendURL, code)
+							joinLink := fmt.Sprintf("%s/join?matchcode=%s", cfg.FrontendURL, code)
 							go func(code string, invite string, stake int, link string) {
 								msg := fmt.Sprintf("Join my PlayMatatu match!\nCode: %s\nStake: %d UGX\n\n%s", code, stake, link)
 								if msgID, err := sms.SendSMS(context.Background(), invite, msg); err != nil {
@@ -538,7 +538,7 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 
 					c.JSON(http.StatusOK, gin.H{
 						"status":            "private_created",
-						"match_code":        code,
+						"matchcode":         code,
 						"expires_at":        expiresAt,
 						"queue_id":          queueID,
 						"queue_token":       queueToken,
@@ -1100,7 +1100,7 @@ func DeclineMatchInvite(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.
 // GetMatchDetails returns match details by match code for join flow
 func GetMatchDetails(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		matchCode := c.Param("match_code")
+		matchCode := c.Param("matchcode")
 		if matchCode == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "match_code is required"})
 			return
@@ -1156,7 +1156,7 @@ func GetMatchDetails(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Han
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"match_code":    queue.MatchCode,
+			"matchcode":     queue.MatchCode,
 			"stake_amount":  int(queue.StakeAmount),
 			"inviter_phone": queue.InviterPhone,
 			"expires_at":    queue.ExpiresAt,
