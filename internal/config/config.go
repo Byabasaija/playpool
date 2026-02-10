@@ -85,6 +85,9 @@ type Config struct {
 	IdleForfeitSeconds     int
 	IdleWorkerPollInterval int
 
+	// Disconnect grace period
+	DisconnectGraceSeconds int
+
 	// Matchmaker worker
 	MatchmakerPollSeconds int
 	// Withdraw settings
@@ -170,6 +173,9 @@ func Load() *Config {
 		IdleWarningSeconds:     getEnvInt("IDLE_WARNING_SECONDS", 45),
 		IdleForfeitSeconds:     getEnvInt("IDLE_FORFEIT_SECONDS", 90),
 		IdleWorkerPollInterval: getEnvInt("IDLE_WORKER_POLL_INTERVAL", 1),
+
+		// Disconnect grace period (default 60 seconds = 1 minute)
+		DisconnectGraceSeconds: getEnvInt("DISCONNECT_GRACE_SECONDS", 60),
 
 		// Matchmaker worker (how often to check for pairs to match)
 		MatchmakerPollSeconds: getEnvInt("MATCHMAKER_POLL_SECONDS", 2),

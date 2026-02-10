@@ -59,6 +59,10 @@ func SetupRoutes(router *gin.Engine, db *sqlx.DB, rdb *redis.Client, cfg *config
 			player.POST(":phone/requeue", handlers.RequeueStake(db, rdb, cfg))
 		}
 
+		// Queue operations
+		// Cancel an active queue and refund the stake to player's winnings (auth required via session cookie)
+		v1.POST("/queue/:id/cancel", handlers.PlayerSessionMiddleware(rdb, db, cfg), handlers.CancelQueue(db, cfg))
+
 		// Auth endpoints (OTP)
 		v1.POST("/auth/request-otp", handlers.RequestOTP(db, rdb, cfg))
 		v1.POST("/auth/verify-otp", handlers.VerifyOTP(db, rdb, cfg))
@@ -66,6 +70,7 @@ func SetupRoutes(router *gin.Engine, db *sqlx.DB, rdb *redis.Client, cfg *config
 
 		// Game/Match endpoints
 		v1.POST("/match/decline", handlers.DeclineMatchInvite(db, rdb, cfg))
+		v1.GET("/match/:match_code", handlers.GetMatchDetails(db, rdb, cfg))
 
 		// PIN auth endpoints
 		v1.GET("/player/check", handlers.CheckPlayerStatus(db))

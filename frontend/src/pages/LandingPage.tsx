@@ -2,7 +2,7 @@ import React, { useState, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useMatchmaking } from '../hooks/useMatchmaking';
 import { validatePhone, formatPhone } from '../utils/phoneUtils';
-import { getPlayerProfile, requeuePlayer, getConfig, requestOTP, checkPlayerStatus, verifyPIN, checkSession, playerLogout } from '../utils/apiClient';
+import { getPlayerProfile, requeuePlayer, cancelQueue, getConfig, requestOTP, checkPlayerStatus, verifyPIN, checkSession, playerLogout } from '../utils/apiClient';
 import PinInput from '../components/PinInput';
 import SetPinModal from '../components/SetPinModal';
 
@@ -25,6 +25,8 @@ export const LandingPage: React.FC = () => {
 
   const [displayNameInput, setDisplayNameInput] = useState<string>('');
   const [expiredQueue, setExpiredQueue] = useState<{id:number, stake_amount:number, match_code?: string, is_private?: boolean} | null>(null);
+  const [activeQueue, setActiveQueue] = useState<{id:number, stake_amount:number, queue_token?: string, status?: string, expires_at?: string} | null>(null);
+  const [cancelLoading, setCancelLoading] = useState(false);
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
   const [requeueLoading, setRequeueLoading] = useState(false);
   const [requeueError, setRequeueError] = useState<string | null>(null);
@@ -111,6 +113,25 @@ export const LandingPage: React.FC = () => {
       setIsPrivate(false);
     }
   }, [expiredQueue]);
+
+  // Refresh player profile when matchmaking stage becomes 'expired' to update expired_queue
+  React.useEffect(() => {
+    if (stage === 'expired' && phoneRest) {
+      (async () => {
+        try {
+          const fullPhone = '256' + phoneRest.replace(/\D/g, '');
+          const profile = await getPlayerProfile(fullPhone);
+          if (profile) {
+            setPlayerBalance(profile.player_winnings || 0);
+            setExpiredQueue(profile.expired_queue || null);
+            setActiveQueue(profile.active_queue || null);
+          }
+        } catch (e) {
+          console.error('Failed to refresh profile on expired:', e);
+        }
+      })();
+    }
+  }, [stage, phoneRest]);
 
   // Focus invite phone input when private invite toggle is enabled
   React.useEffect(() => {
@@ -233,6 +254,11 @@ export const LandingPage: React.FC = () => {
       } else {
         setExpiredQueue(null);
       }
+      if (profile && profile.active_queue) {
+        setActiveQueue(profile.active_queue);
+      } else {
+        setActiveQueue(null);
+      }
     } catch (e) {
       setDisplayNameInput(generateRandomName());
       setExpiredQueue(null);
@@ -248,6 +274,9 @@ export const LandingPage: React.FC = () => {
       return;
     }
 
+    setRequeueLoading(true);
+    setRequeueError(null);
+
     try {
       const result = await requeuePlayer(full);
       if (result.queue_token) {
@@ -257,10 +286,13 @@ export const LandingPage: React.FC = () => {
         // Fallback if no queue_token returned
         reset();
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Requeue failed:', err);
-      // If requeue fails, fall back to form
-      reset();
+      const message = err?.message || 'Failed to requeue';
+      setRequeueError(message);
+      // Do not reset the UI; show error so user can act
+    } finally {
+      setRequeueLoading(false);
     }
   };
 
@@ -306,6 +338,11 @@ export const LandingPage: React.FC = () => {
         setPlayerBalance(profile.player_winnings || 0);
         if (profile.expired_queue) {
           setExpiredQueue(profile.expired_queue);
+        }
+        if (profile.active_queue) {
+          setActiveQueue(profile.active_queue);
+        } else {
+          setActiveQueue(null);
         }
       }
 
@@ -655,6 +692,54 @@ export const LandingPage: React.FC = () => {
                   </p>
                 </div>
 
+                {activeQueue && (
+                  <div className="mb-4">
+                    <div className="mb-2 p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
+                      You already have an active queue ({activeQueue.status}). Stake: <span className="font-semibold">{activeQueue.stake_amount.toLocaleString()} UGX</span>.
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={async () => {
+                          if (!activeQueue) return;
+                          if (!confirm('Cancel this queued match and refund your stake to Winnings (no commission)?')) return;
+                          setCancelLoading(true);
+                          setRequeueError(null);
+                          try {
+                            await cancelQueue(activeQueue.id);
+                            // Refresh profile
+                            const full = '256' + phoneRest.replace(/\D/g, '');
+                            const profile = await getPlayerProfile(full);
+                            if (profile) {
+                              setPlayerBalance(profile.player_winnings || 0);
+                              setExpiredQueue(profile.expired_queue || null);
+                              setActiveQueue(profile.active_queue || null);
+                            }
+                            setRequeueError('Queue cancelled and refunded to Winnings');
+                          } catch (err: any) {
+                            const message = err?.message || 'Failed to cancel queue';
+                            setRequeueError(message);
+                          } finally {
+                            setCancelLoading(false);
+                          }
+                        }}
+                        className="flex-1 py-2 px-4 bg-white border border-gray-300 rounded-lg text-sm hover:bg-gray-50 disabled:opacity-50"
+                        disabled={cancelLoading}
+                      >
+                        {cancelLoading ? 'Cancelling...' : 'Cancel existing queue'}
+                      </button>
+                      <button
+                        onClick={() => {
+                          // open profile for withdraw/review
+                          navigate(`/profile?phone=256${phoneRest}&withdraw=1`);
+                        }}
+                        className="flex-1 py-2 px-4 border border-gray-300 rounded-lg text-sm hover:bg-gray-50"
+                      >
+                        Withdraw
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {requeueError && (
                   <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
                     {requeueError}
@@ -663,10 +748,10 @@ export const LandingPage: React.FC = () => {
 
                 <button
                   onClick={handlePlayAgain}
-                  disabled={isLoading}
+                  disabled={isLoading || requeueLoading || !!activeQueue}
                   className="w-full bg-[#373536] text-white py-3 px-6 rounded-lg font-semibold hover:bg-[#2c2b2a] transition-colors disabled:opacity-50 mb-3"
                 >
-                  {isLoading ? 'Rejoining...' : 'Rejoin Queue'}
+                  {requeueLoading ? 'Rejoining...' : 'Rejoin Queue'}
                 </button>
 
                 <div className="flex gap-2">
@@ -915,6 +1000,38 @@ export const LandingPage: React.FC = () => {
                   >
                     {requeueLoading ? 'Sending verification...' : 'Requeue'}
                   </button>
+
+                  {expiredQueue.is_private && (
+                    <button
+                      onClick={async () => {
+                        const full = '256' + phoneRest.replace(/\D/g, '');
+                        if (!validatePhone(full)) {
+                          setRequeueError('Invalid phone number');
+                          return;
+                        }
+                        setRequeueLoading(true);
+                        setRequeueError(null);
+                        try {
+                          const result = await requeuePlayer(full, expiredQueue.id, undefined, { mode: 'private' });
+                          if (result.queue_token) {
+                            startPolling(result.queue_token, displayNameInput || undefined);
+                          } else {
+                            reset();
+                          }
+                        } catch (err: any) {
+                          console.error('Private retry failed:', err);
+                          const message = err?.message || 'Failed to retry private match';
+                          setRequeueError(message);
+                        } finally {
+                          setRequeueLoading(false);
+                        }
+                      }}
+                      disabled={requeueLoading}
+                      className="w-full bg-blue-600 text-white py-3 px-6 rounded-lg font-semibold hover:bg-blue-700 transition-colors disabled:opacity-50"
+                    >
+                      {requeueLoading ? 'Creating...' : 'Retry Private Invite'}
+                    </button>
+                  )}
                 
                 </div>
               </div>

@@ -26,11 +26,12 @@ var upgrader = websocket.Upgrader{
 
 // Client represents a connected WebSocket client
 type Client struct {
-	conn      *websocket.Conn
-	playerID  string
-	gameID    string
-	gameToken string
-	send      chan []byte
+	conn       *websocket.Conn
+	playerID   string
+	opponentID string
+	gameID     string
+	gameToken  string
+	send       chan []byte
 }
 
 // Hub maintains the set of active clients
@@ -103,6 +104,8 @@ func (h *Hub) Run() {
 
 			// Mark player as connected and showed up in game
 			if g, err := game.Manager.GetGameByToken(client.gameToken); err == nil {
+				// Store opponent ID for local lookups
+				client.opponentID = g.GetOpponentID(client.playerID)
 				g.SetPlayerConnected(client.playerID, true)
 				g.MarkPlayerShowedUp(client.playerID)
 
@@ -212,10 +215,13 @@ func (h *Hub) Run() {
 							time.Sleep(500 * time.Millisecond)
 							if g2, err := game.Manager.GetGameByToken(token); err == nil {
 								if p := g2.GetPlayerByID(playerID); p != nil && !p.Connected && p.DisconnectedAt != nil && time.Since(*p.DisconnectedAt) >= 500*time.Millisecond {
+									graceSeconds := game.Manager.GetConfig().DisconnectGraceSeconds
 									h.BroadcastToGame(gameID, map[string]interface{}{
-										"type":    "player_disconnected",
-										"player":  playerID,
-										"message": "Opponent disconnected. Waiting 2 minutes...",
+										"type":            "player_disconnected",
+										"player":          playerID,
+										"grace_seconds":   graceSeconds,
+										"disconnected_at": p.DisconnectedAt.Unix(),
+										"message":         fmt.Sprintf("Opponent disconnected. Waiting %d seconds...", graceSeconds),
 									})
 								}
 							}
@@ -338,11 +344,12 @@ func HandleWebSocket(c *gin.Context) {
 	}
 
 	client := &Client{
-		conn:      conn,
-		playerID:  playerID,
-		gameID:    g.ID,
-		gameToken: gameToken,
-		send:      make(chan []byte, 256),
+		conn:       conn,
+		playerID:   playerID,
+		opponentID: g.GetOpponentID(playerID),
+		gameID:     g.ID,
+		gameToken:  gameToken,
+		send:       make(chan []byte, 256),
 	}
 
 	// Register client - this will handle sending appropriate initial messages
@@ -383,11 +390,30 @@ func (c *Client) readPump() {
 			ctx := context.Background()
 			member := fmt.Sprintf("g:%s:p:%s", c.gameToken, c.playerID)
 			now := time.Now().Unix()
-			// store last active
-			rdbClient.Set(ctx, "last_active:"+member, fmt.Sprintf("%d", now), 0)
-			// schedule warning and forfeit
-			rdbClient.ZAdd(ctx, "idle_warning", redis.Z{Score: float64(now + int64(wsConfig.IdleWarningSeconds)), Member: member})
-			rdbClient.ZAdd(ctx, "idle_forfeit", redis.Z{Score: float64(now + int64(wsConfig.IdleForfeitSeconds)), Member: member})
+
+			// Check if opponent is disconnected via Hub (local lookup - more resilient than GetGameByToken)
+			shouldTrackIdle := true
+			if c.opponentID != "" {
+				GameHub.mu.RLock()
+				opponentClient, opponentConnected := GameHub.clients[c.opponentID]
+				GameHub.mu.RUnlock()
+
+				// Don't track idle if opponent is not connected (player can't act anyway)
+				if !opponentConnected || opponentClient == nil || opponentClient.gameID != c.gameID {
+					shouldTrackIdle = false
+					log.Printf("[IDLE] Skipping idle tracking for player %s - opponent not connected (opponentConnected=%v)", c.playerID, opponentConnected)
+				}
+			}
+
+			// Only track idle activity if opponent is connected
+			if shouldTrackIdle {
+				// store last active
+				rdbClient.Set(ctx, "last_active:"+member, fmt.Sprintf("%d", now), 0)
+				// schedule warning and forfeit
+				rdbClient.ZAdd(ctx, "idle_warning", redis.Z{Score: float64(now + int64(wsConfig.IdleWarningSeconds)), Member: member})
+				rdbClient.ZAdd(ctx, "idle_forfeit", redis.Z{Score: float64(now + int64(wsConfig.IdleForfeitSeconds)), Member: member})
+				log.Printf("[IDLE] Tracking activity for player %s (warning_at=%d, forfeit_at=%d)", c.playerID, now+int64(wsConfig.IdleWarningSeconds), now+int64(wsConfig.IdleForfeitSeconds))
+			}
 		}
 
 		var msg WSMessage

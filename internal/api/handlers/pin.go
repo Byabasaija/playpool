@@ -280,6 +280,7 @@ func VerifyPIN(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerFu
 				log.Printf("VerifyPIN session storage error: %v", err)
 			} else {
 				secure := cfg.Environment == "production"
+				// Allow cross-site cookie for XHR fetches from frontend dev server
 				c.SetSameSite(http.SameSiteLaxMode)
 				c.SetCookie(playerCookieName, sessionToken, int(playerSessionTTL.Seconds()), "/api/v1", "", secure, true)
 			}

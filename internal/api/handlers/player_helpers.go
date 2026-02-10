@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -265,11 +265,27 @@ func GetPlayerProfile(db *sqlx.DB) gin.HandlerFunc {
 			resp["expired_queue"] = gin.H{"id": expired.ID, "stake_amount": int(expired.StakeAmount), "match_code": expired.MatchCode, "is_private": expired.IsPrivate}
 		}
 
+		// Check if player has any active queue rows (not expired): processing, matching, or queued with future expires_at
+		var active struct {
+			ID          int       `db:"id"`
+			StakeAmount float64   `db:"stake_amount"`
+			QueueToken  string    `db:"queue_token"`
+			Status      string    `db:"status"`
+			ExpiresAt   time.Time `db:"expires_at"`
+		}
+		if err := db.Get(&active, `
+		SELECT id, stake_amount, queue_token, status, expires_at
+		FROM matchmaking_queue
+		WHERE player_id=$1 AND (status IN ('processing','matching') OR (status='queued' AND expires_at > NOW()))
+		ORDER BY created_at DESC LIMIT 1
+	`, p.ID); err == nil {
+			resp["active_queue"] = gin.H{"id": active.ID, "stake_amount": int(active.StakeAmount), "queue_token": active.QueueToken, "status": active.Status, "expires_at": active.ExpiresAt}
+		}
+
 		c.JSON(http.StatusOK, resp)
 	}
 }
 
-// RequeueStake allows a player to requeue (commission-free if expired queue exists). Route: POST /api/v1/player/:phone/requeue
 func RequeueStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if db == nil {
@@ -304,10 +320,19 @@ func RequeueStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handle
 		// Determine stake amount
 		var stakeAmount int
 		if req.QueueID != nil {
-			// fetch the expired queue row
+			// fetch the queue row and verify it's expired
 			var q models.MatchmakingQueue
-			if err := db.Get(&q, `SELECT id, stake_amount FROM matchmaking_queue WHERE id=$1 AND player_id=$2 AND status='expired'`, *req.QueueID, player.ID); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "expired queue not found or not eligible"})
+			if err := db.Get(&q, `SELECT id, stake_amount FROM matchmaking_queue WHERE id=$1 AND player_id=$2`, *req.QueueID, player.ID); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "queue not found"})
+				return
+			}
+			expired, err := models.IsQueueExpired(db, *req.QueueID)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check queue status"})
+				return
+			}
+			if !expired {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "queue is not expired"})
 				return
 			}
 			stakeAmount = int(q.StakeAmount)
@@ -315,13 +340,13 @@ func RequeueStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handle
 			stakeAmount = *req.StakeAmount
 			// attempt to find a matching expired queue row for audit link (optional)
 			var q models.MatchmakingQueue
-			if err := db.Get(&q, `SELECT id FROM matchmaking_queue WHERE player_id=$1 AND stake_amount=$2 AND status='expired' ORDER BY created_at DESC LIMIT 1`, player.ID, float64(stakeAmount)); err == nil {
+			if err := db.Get(&q, `SELECT id FROM matchmaking_queue WHERE player_id=$1 AND stake_amount=$2 AND (status='expired' OR (status='queued' AND expires_at < NOW())) ORDER BY created_at DESC LIMIT 1`, player.ID, float64(stakeAmount)); err == nil {
 				// nothing to do; optional linkage
 			}
 		} else {
-			// try to pick latest expired queue
+			// try to pick latest expired queue (include queued rows whose expires_at has passed)
 			var q models.MatchmakingQueue
-			if err := db.Get(&q, `SELECT id, stake_amount FROM matchmaking_queue WHERE player_id=$1 AND status='expired' ORDER BY created_at DESC LIMIT 1`, player.ID); err != nil {
+			if err := db.Get(&q, `SELECT id, stake_amount FROM matchmaking_queue WHERE player_id=$1 AND (status='expired' OR (status='queued' AND expires_at < NOW())) ORDER BY created_at DESC LIMIT 1`, player.ID); err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "no expired stake available to requeue"})
 				return
 			}
@@ -387,7 +412,7 @@ func RequeueStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handle
 				invite := normalizePhone(req.InvitePhone)
 				if invite != "" {
 					smsInviteQueued = true
-					joinLink := fmt.Sprintf("%s/join?match_code=%s&stake=%d&invite_phone=%s", cfg.FrontendURL, code, stakeAmount, url.QueryEscape(invite))
+					joinLink := fmt.Sprintf("%s/join?match_code=%s", cfg.FrontendURL, code)
 					go func(code string, invite string, stake int, link string) {
 						msg := fmt.Sprintf("Join my PlayMatatu match!\nCode: %s\nStake: %d UGX\n\n%s", code, stake, link)
 						if msgID, err := sms.SendSMS(context.Background(), invite, msg); err != nil {
@@ -448,5 +473,109 @@ func RequeueStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handle
 
 		// Matchmaker worker will pick up from DB and match players
 		c.JSON(http.StatusOK, gin.H{"status": "queued", "queue_id": expiredQueue.ID, "stake_amount": stakeAmount, "queue_token": newQueueToken, "player_token": player.PlayerToken})
+	}
+}
+
+// CancelQueue cancels an active queue and refunds the stake to player's winnings
+func CancelQueue(db *sqlx.DB, cfg *config.Config) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		queueIDStr := c.Param("id")
+		queueID, err := strconv.Atoi(queueIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid queue id"})
+			return
+		}
+
+		// Get player from session
+		playerID, exists := c.Get("player_id")
+		if !exists {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
+			return
+		}
+
+		pid, ok := playerID.(int)
+		if !ok {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid player id"})
+			return
+		}
+
+		// Verify the queue belongs to the player and is active
+		var queue struct {
+			Status      string  `db:"status"`
+			StakeAmount float64 `db:"stake_amount"`
+		}
+		err = db.Get(&queue, `SELECT status, stake_amount FROM matchmaking_queue WHERE id=$1 AND player_id=$2`, queueID, pid)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				c.JSON(http.StatusNotFound, gin.H{"error": "queue not found"})
+				return
+			}
+			log.Printf("[CANCEL] Failed to fetch queue %d: %v", queueID, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch queue"})
+			return
+		}
+
+		if queue.Status != "queued" && queue.Status != "processing" && queue.Status != "matching" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "queue is not active"})
+			return
+		}
+
+		// Start transaction
+		tx, err := db.Beginx()
+		if err != nil {
+			log.Printf("[CANCEL] Failed to start transaction: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to cancel queue"})
+			return
+		}
+		defer tx.Rollback()
+
+		// Update queue status to cancelled
+		_, err = tx.Exec(`UPDATE matchmaking_queue SET status='cancelled' WHERE id=$1`, queueID)
+		if err != nil {
+			log.Printf("[CANCEL] Failed to update queue status: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to cancel queue"})
+			return
+		}
+
+		// Refund stake to player's winnings account
+		stakeAmount := int(queue.StakeAmount)
+		escrowAccount, err := accounts.GetOrCreateAccount(db, accounts.AccountEscrow, nil)
+		if err != nil {
+			log.Printf("[CANCEL] Failed to get escrow account: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to refund stake"})
+			return
+		}
+		playerAccount, err := accounts.GetOrCreateAccount(db, accounts.AccountPlayerWinnings, &pid)
+		if err != nil {
+			log.Printf("[CANCEL] Failed to get player account: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to refund stake"})
+			return
+		}
+		err = accounts.Transfer(tx, escrowAccount.ID, playerAccount.ID, float64(stakeAmount), "queue_cancel", sql.NullInt64{Int64: int64(queueID), Valid: true}, fmt.Sprintf("Cancelled queue %d", queueID))
+		if err != nil {
+			log.Printf("[CANCEL] Failed to refund stake: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to refund stake"})
+			return
+		}
+
+		// Insert escrow ledger entry
+		_, err = tx.Exec(`INSERT INTO escrow_ledger (entry_type, amount, player_id, description, created_at) VALUES ('REFUND', $1, $2, $3, NOW())`, float64(stakeAmount), pid, fmt.Sprintf("Queue %d cancelled", queueID))
+		if err != nil {
+			log.Printf("[CANCEL] Failed to insert ledger entry: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record refund"})
+			return
+		}
+
+		// Commit transaction
+		err = tx.Commit()
+		if err != nil {
+			log.Printf("[CANCEL] Failed to commit transaction: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to cancel queue"})
+			return
+		}
+
+		log.Printf("[CANCEL] Cancelled queue %d for player %d, refunded %d UGX", queueID, pid, stakeAmount)
+
+		c.JSON(http.StatusOK, gin.H{"message": "Queue cancelled and stake refunded"})
 	}
 }

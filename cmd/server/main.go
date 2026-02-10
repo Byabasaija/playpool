@@ -44,6 +44,11 @@ func main() {
 		}
 	}
 
+	// Apply runtime config overrides from database
+	if err := admin.ApplyRuntimeConfigToConfig(db, cfg); err != nil {
+		log.Printf("[CONFIG] Warning: failed to load runtime config from database: %v", err)
+	}
+
 	// Ensure super admin account exists
 	if cfg.AdminUsername != "" && cfg.AdminPassword != "" {
 		if err := admin.EnsureSuperAdmin(db, cfg.AdminUsername, cfg.AdminPassword, cfg.AdminPhone); err != nil {

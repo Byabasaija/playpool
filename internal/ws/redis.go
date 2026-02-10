@@ -50,10 +50,11 @@ func StartIdleEventSubscriber(ctx context.Context) {
 			case "player_idle_warning":
 				// Broadcast a warning message to the game room
 				msg := map[string]interface{}{
-					"type":       "player_idle_warning",
-					"message":    payload["message"],
-					"player":     payload["player"],
-					"forfeit_at": payload["forfeit_at"],
+					"type":              "player_idle_warning",
+					"message":           payload["message"],
+					"player":            payload["player"],
+					"forfeit_at":        payload["forfeit_at"],
+					"remaining_seconds": payload["remaining_seconds"],
 				}
 				// log room size before broadcasting
 				GameHub.mu.RLock()

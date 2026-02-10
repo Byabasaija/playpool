@@ -90,13 +90,17 @@ func ApplyRuntimeConfigToConfig(db *sqlx.DB, cfg *config.Config) error {
 			if v, err := strconv.Atoi(c.Value); err == nil {
 				cfg.QueueExpiryMinutes = v
 			}
-case "idle_warning_seconds":
+		case "idle_warning_seconds":
 			if v, err := strconv.Atoi(c.Value); err == nil {
 				cfg.IdleWarningSeconds = v
 			}
 		case "idle_forfeit_seconds":
 			if v, err := strconv.Atoi(c.Value); err == nil {
 				cfg.IdleForfeitSeconds = v
+			}
+		case "disconnect_grace_seconds":
+			if v, err := strconv.Atoi(c.Value); err == nil {
+				cfg.DisconnectGraceSeconds = v
 			}
 		case "min_withdraw_amount":
 			if v, err := strconv.Atoi(c.Value); err == nil {

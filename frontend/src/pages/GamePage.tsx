@@ -238,8 +238,27 @@ export const GamePage: React.FC = () => {
         break;
 
       case 'player_connected':
-        // Opponent reconnected - could show a notification here
+        // Opponent reconnected - clear disconnect countdown
         console.log('Opponent reconnected:', message.player);
+        setDisconnectForfeitAt(null);
+        setDisconnectRemaining(null);
+        break;
+
+      case 'player_disconnected':
+        // Opponent disconnected - start countdown
+        try {
+          const graceSeconds = (message as any).grace_seconds as number | undefined;
+          const disconnectedAt = (message as any).disconnected_at as number | undefined;
+          console.log('[DISCONNECT] warning received', { graceSeconds, disconnectedAt });
+          
+          if (graceSeconds && disconnectedAt) {
+            // Calculate forfeit time from disconnect timestamp + grace period
+            setDisconnectForfeitAt((disconnectedAt * 1000) + (graceSeconds * 1000));
+            setDisconnectRemaining(graceSeconds);
+          }
+        } catch (e) {
+          console.error('[DISCONNECT] Failed to parse disconnect warning:', e);
+        }
         break;
 
       case 'error':
@@ -339,6 +358,10 @@ export const GamePage: React.FC = () => {
   const [idlePlayer, setIdlePlayer] = useState<string | null>(null);
   const [idleRemaining, setIdleRemaining] = useState<number | null>(null);
 
+  // Disconnect countdown state
+  const [disconnectForfeitAt, setDisconnectForfeitAt] = useState<number | null>(null);
+  const [disconnectRemaining, setDisconnectRemaining] = useState<number | null>(null);
+
   // Refs to ensure WS handlers see the latest playerId and idlePlayer without recreating callbacks
   const playerIdRef = useRef<string | null>(null);
   const idlePlayerRef = useRef<string | null>(null);
@@ -365,6 +388,26 @@ export const GamePage: React.FC = () => {
     const t = window.setInterval(update, 1000);
     return () => window.clearInterval(t);
   }, [idleForfeitAt]);
+
+  // Countdown tick for disconnect forfeit
+  useEffect(() => {
+    if (!disconnectForfeitAt) {
+      setDisconnectRemaining(null);
+      return;
+    }
+    const update = () => {
+      const now = Date.now();
+      const rem = Math.max(0, Math.ceil((disconnectForfeitAt - now) / 1000));
+      setDisconnectRemaining(rem);
+      if (rem <= 0) {
+        setDisconnectForfeitAt(null);
+        setDisconnectRemaining(null);
+      }
+    };
+    update();
+    const t = window.setInterval(update, 1000);
+    return () => window.clearInterval(t);
+  }, [disconnectForfeitAt]);
 
   // Fetch an immediate REST snapshot of the game state on mount as a fallback
   React.useEffect(() => {
@@ -435,6 +478,10 @@ export const GamePage: React.FC = () => {
     const playerPoints = (gameOver as any).playerPoints;
     const opponentPoints = (gameOver as any).opponentPoints;
 
+    // Check if it's a forfeit/concede win
+    const isConcede = winType === 'concede';
+    const isForfeit = winType === 'forfeit';
+
     return (
       <div className="min-h-screen flex items-center justify-center bg-white relative overflow-hidden">
         <div className="p-8 text-center max-w-md mx-auto relative z-10">
@@ -458,9 +505,15 @@ export const GamePage: React.FC = () => {
           {/* Win type badge */}
           <div className="mb-4">
             <span className={`inline-block px-4 py-1 rounded-full text-sm font-semibold ${
-              winType === 'classic' ? 'bg-[#373536] text-white' : 'bg-orange-500 text-white'
+              winType === 'classic' ? 'bg-[#373536] text-white' : 
+              winType === 'chop' ? 'bg-orange-500 text-white' :
+              isConcede ? 'bg-purple-500 text-white' :
+              isForfeit ? 'bg-red-500 text-white' : 'bg-gray-500 text-white'
             }`}>
-              {winType === 'classic' ? '👑 Classic Win' : '✂️ Chop Win'}
+              {winType === 'classic' ? '👑 Classic Win' : 
+               winType === 'chop' ? '✂️ Chop Win' :
+               isConcede ? '🏳️ Opponent Conceeded' :
+               isForfeit ? '⏱️ Opponent Forfeited' : 'Win'}
             </span>
           </div>
 
@@ -605,6 +658,25 @@ export const GamePage: React.FC = () => {
       {notice && (
         <div className="fixed top-6 right-6 bg-black bg-opacity-60 text-white px-4 py-2 rounded">
           {notice}
+        </div>
+      )}
+
+      {/* Disconnect countdown banner */}
+      {disconnectRemaining !== null && (
+        <div className="fixed top-20 left-1/2 transform -translate-x-1/2 z-40">
+          <div className={`
+            px-4 py-3 rounded-lg shadow-lg text-center font-semibold text-sm
+            ${disconnectRemaining <= 10 ? 'bg-red-500 text-white animate-pulse' : 
+              disconnectRemaining <= 20 ? 'bg-orange-400 text-white' : 
+              'bg-blue-400 text-white'}
+            transition-all duration-300
+          `}>
+            <div className="flex items-center gap-2">
+              <span>📡</span>
+              <span>Opponent disconnected</span>
+              <span className="font-bold">{disconnectRemaining}s</span>
+            </div>
+          </div>
         </div>
       )}
 

@@ -118,6 +118,17 @@ export function useMatchmaking() {
           return;
         }
 
+        // Check if expires_at has passed (if provided)
+        if (result.expires_at) {
+          const expiresAt = new Date(result.expires_at);
+          if (expiresAt <= new Date()) {
+            setError('Queue expired. Your balance is available to play again or withdraw.');
+            setStage('expired');
+            setIsLoading(false);
+            return;
+          }
+        }
+
         // Adaptive backoff
         if (result.status === 'queued') {
           pollInterval = Math.min(pollInterval * 1.15, 3000);
@@ -332,6 +343,17 @@ export function useMatchmaking() {
           setStage('expired');
           setIsLoading(false);
           return;
+        }
+
+        // Check if expires_at has passed (if provided)
+        if (result.expires_at) {
+          const expiresAt = new Date(result.expires_at);
+          if (expiresAt <= new Date()) {
+            setError('Queue expired. Your balance is available to play again or withdraw.');
+            setStage('expired');
+            setIsLoading(false);
+            return;
+          }
         }
 
         // Adaptive backoff

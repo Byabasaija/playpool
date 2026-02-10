@@ -2,8 +2,10 @@ package models
 
 import (
 	"database/sql"
+	"fmt"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq"
 )
 
@@ -165,4 +167,24 @@ type RuntimeConfig struct {
 	Description sql.NullString `db:"description" json:"description,omitempty"`
 	UpdatedBy   sql.NullString `db:"updated_by" json:"updated_by,omitempty"`
 	UpdatedAt   time.Time      `db:"updated_at" json:"updated_at"`
+}
+
+// IsQueueExpired checks if a matchmaking queue entry is expired
+// A queue is expired if status is 'expired' or status is 'queued' and expires_at has passed
+func IsQueueExpired(db *sqlx.DB, queueID int) (bool, error) {
+	var q MatchmakingQueue
+	err := db.Get(&q, "SELECT status, expires_at FROM matchmaking_queue WHERE id = $1", queueID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false, fmt.Errorf("queue not found")
+		}
+		return false, err
+	}
+	if q.Status == "expired" {
+		return true, nil
+	}
+	if q.Status == "queued" && q.ExpiresAt.Before(time.Now()) {
+		return true, nil
+	}
+	return false, nil
 }

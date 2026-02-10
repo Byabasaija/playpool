@@ -431,6 +431,11 @@ func (gm *GameManager) IsPlayerInQueue(queueToken string) bool {
 	return false
 }
 
+// GetConfig returns the game manager's config
+func (gm *GameManager) GetConfig() *config.Config {
+	return gm.config
+}
+
 // GetPlayerQueuePosition returns the player's position in queue (1-indexed) or 0 if not in queue
 func (gm *GameManager) GetPlayerQueuePosition(queueToken string, stakeAmount int) int {
 	gm.mu.RLock()
@@ -990,7 +995,7 @@ func (gm *GameManager) StartDisconnectChecker() {
 	}
 }
 
-// checkDisconnectForfeits checks for players who disconnected >2 minutes ago
+// checkDisconnectForfeits checks for players who disconnected >grace period
 func (gm *GameManager) checkDisconnectForfeits() {
 	gm.mu.RLock()
 	gamesToCheck := make([]*GameState, 0)
@@ -1002,7 +1007,7 @@ func (gm *GameManager) checkDisconnectForfeits() {
 	gm.mu.RUnlock()
 
 	now := time.Now()
-	graceMinutes := 2 * time.Minute
+	gracePeriod := time.Duration(gm.config.DisconnectGraceSeconds) * time.Second
 
 	for _, game := range gamesToCheck {
 		game.mu.RLock()
@@ -1010,9 +1015,9 @@ func (gm *GameManager) checkDisconnectForfeits() {
 		p2Disconnected := !game.Player2.Connected && game.Player2.DisconnectedAt != nil
 
 		var forfeitPlayerID string
-		if p1Disconnected && now.Sub(*game.Player1.DisconnectedAt) > graceMinutes {
+		if p1Disconnected && now.Sub(*game.Player1.DisconnectedAt) > gracePeriod {
 			forfeitPlayerID = game.Player1.ID
-		} else if p2Disconnected && now.Sub(*game.Player2.DisconnectedAt) > graceMinutes {
+		} else if p2Disconnected && now.Sub(*game.Player2.DisconnectedAt) > gracePeriod {
 			forfeitPlayerID = game.Player2.ID
 		}
 		game.mu.RUnlock()

@@ -42,6 +42,8 @@ export interface QueueStatusResponse {
   queue_token?: string;
   // Player token for authenticated actions
   player_token?: string;
+  // Expiry time for queued status
+  expires_at?: string;
 }
 
 export interface WithdrawRequestResponse {

@@ -95,20 +95,24 @@ export const RematchPage: React.FC = () => {
   // Try session cookie first, then fall back to PIN entry
   React.useEffect(() => {
     const storedPhone = localStorage.getItem('playmatatu_phone') || localStorage.getItem('matatu_phone');
-    if (!storedPhone || isAuthenticated || playerPhone) return;
 
-    setPlayerPhone(storedPhone);
-
-    // Try existing session cookie first
+    // Try existing session cookie first (accept any valid session)
     checkSession().then(async (session) => {
-      if (session && session.phone === storedPhone) {
-        // Valid session — skip PIN
-        await loadPlayerProfile(storedPhone);
+      if (session) {
+        const sessionPhone = session.phone;
+        setPlayerPhone(sessionPhone);
+        await loadPlayerProfile(sessionPhone);
         setIsAuthenticated(true);
         return;
       }
-      // No session — prompt for PIN
-      checkPlayerStatusAndPromptPin(storedPhone);
+
+      // No session — if we have a stored phone, prompt for PIN
+      if (storedPhone) {
+        checkPlayerStatusAndPromptPin(storedPhone);
+      }
+    }).catch(() => {
+      // Session check failed - if we have a stored phone, prompt for PIN
+      if (storedPhone) checkPlayerStatusAndPromptPin(storedPhone);
     });
   }, []);
 

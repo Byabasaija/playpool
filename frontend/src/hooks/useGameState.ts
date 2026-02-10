@@ -144,10 +144,11 @@ export function useGameState() {
   // Side effect: react to winner stored in state and set gameOver
   useEffect(() => {
     if (state.winner) {
-      const winType: 'classic' | 'chop' = state.winType === 'chop' ? 'chop' : 'classic';
+      // Pass through all win types (classic, chop, concede, forfeit)
+      const winType = state.winType || 'classic';
       setGameOver({
         isWinner: state.winner === state.playerId,
-        winType,
+        winType: winType as any,
         playerPoints: state.lastPlayerPoints ?? undefined,
         opponentPoints: state.lastOpponentPoints ?? undefined
       });

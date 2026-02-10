@@ -956,6 +956,7 @@ func (g *GameState) ForfeitByDisconnect(disconnectedPlayerID string) {
 	}
 
 	g.Status = StatusCompleted
+	g.WinType = "forfeit"
 	now := time.Now()
 	g.CompletedAt = &now
 

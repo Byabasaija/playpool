@@ -76,6 +76,19 @@ export async function requeuePlayer(phone: string, queueId?: number, stakeAmount
   return data;
 }
 
+export async function cancelQueue(queueID: number): Promise<any> {
+  const response = await fetch(`${API_BASE}/queue/${queueID}/cancel`, {
+    method: 'POST',
+    ...withCredentials
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    if (response.status >= 500) throw new Error('Server error, please try again later');
+    throw new Error(data.error || 'Failed to cancel queue');
+  }
+  return data;
+}
+
 export async function pollMatchStatus(queueToken: string): Promise<QueueStatusResponse> {
   const response = await fetch(`${API_BASE}/game/queue/status?queue_token=${queueToken}`, withCredentials);
   const data = await response.json();
@@ -127,7 +140,7 @@ export async function updateDisplayName(phone: string, name: string): Promise<{ 
   return { display_name: data.display_name };
 }
 
-export async function getPlayerProfile(phone: string): Promise<{display_name?: string, player_winnings?: number, expired_queue?: {id:number, stake_amount:number, match_code?: string, is_private?: boolean}} | null> {
+export async function getPlayerProfile(phone: string): Promise<{display_name?: string, player_winnings?: number, expired_queue?: {id:number, stake_amount:number, match_code?: string, is_private?: boolean}, active_queue?: {id:number, stake_amount:number, queue_token?: string, status?: string, expires_at?: string}} | null> {
   const response = await fetch(`${API_BASE}/player/${formatPhone(phone)}`, withCredentials);
   if (response.status === 404) return null;
 
@@ -140,7 +153,8 @@ export async function getPlayerProfile(phone: string): Promise<{display_name?: s
   return {
     display_name: data.display_name,
     player_winnings: data.player_winnings,
-    expired_queue: data.expired_queue
+    expired_queue: data.expired_queue,
+    active_queue: data.active_queue
   };
 }
 
@@ -308,6 +322,29 @@ export async function declineMatchInvite(phone: string, matchCode: string): Prom
   }
 
   return { success: true };
+}
+
+export async function getMatchDetails(matchCode: string): Promise<{
+  match_code: string;
+  stake_amount: number;
+  inviter_phone: string;
+  expires_at: string;
+  status: string;
+}> {
+  const response = await fetch(`${API_BASE}/match/${matchCode}`, {
+    method: 'GET',
+    ...withCredentials
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    if (response.status === 404) throw new Error('Match not found');
+    if (response.status === 410) throw new Error(data.error || 'Match is no longer available');
+    if (response.status >= 500) throw new Error('Server error, please try again later');
+    throw new Error(data.error || 'Failed to fetch match details');
+  }
+
+  return data;
 }
 
 // Profile endpoints — token is optional, cookie auth is used as fallback

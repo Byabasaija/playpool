@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMatchmaking } from '../hooks/useMatchmaking';
 import { formatPhone } from '../utils/phoneUtils';
-import { getPlayerProfile, checkPlayerStatus, verifyPIN, declineMatchInvite, checkSession } from '../utils/apiClient';
+import { getPlayerProfile, checkPlayerStatus, verifyPIN, declineMatchInvite, checkSession, getMatchDetails } from '../utils/apiClient';
 import PinInput from '../components/PinInput';
 
 function generateRandomName() {
@@ -40,53 +40,81 @@ export const JoinPage: React.FC = () => {
   const [playerProfile, setPlayerProfile] = useState<any>(null);
   const [useWinnings, setUseWinnings] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [loadingMatch, setLoadingMatch] = useState(false);
 
-  // URL parsing and player check — try session cookie first
+  // URL parsing and match details fetch
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const code = params.get('match_code');
-    const s = params.get('stake');
-    const phone = params.get('invite_phone');
 
-    if (code) setMatchCode(code.toUpperCase());
-    if (s && !Number.isNaN(Number(s))) setStake(Number(s));
-    if (phone) {
-      const normalized = formatPhone(phone);
-      setInvitePhone(normalized);
-
-      // Check if player exists in database
-      checkPlayerStatus(normalized).then(async (status) => {
-        if (status && status.exists) {
-          setPlayerExists(true);
-          // Fetch full profile for display (balance info)
-          try {
-            const profile = await getPlayerProfile(normalized);
-            setPlayerProfile({
-              display_name: status.display_name,
-              phone_number: normalized,
-              player_winnings: profile?.player_winnings || 0
-            });
-          } catch (err) {
-            setPlayerProfile({
-              display_name: status.display_name,
-              phone_number: normalized
-            });
-          }
-
-          // Try session cookie — skip PIN if valid
-          if (status.has_pin) {
-            const session = await checkSession();
-            if (session && session.phone === normalized) {
-              setIsAuthenticated(true);
-            }
-          }
-        } else {
-          setPlayerExists(false);
-        }
-      }).catch(() => {
-        setPlayerExists(false);
-      });
+    if (!code) {
+      setFormError('No match code provided');
+      return;
     }
+
+    setMatchCode(code.toUpperCase());
+    setLoadingMatch(true);
+
+    // Fetch match details from backend
+    getMatchDetails(code)
+      .then(async (matchData) => {
+        setStake(matchData.stake_amount);
+        const phone = matchData.inviter_phone;
+        
+        if (phone) {
+          const normalized = formatPhone(phone);
+          setInvitePhone(normalized);
+
+          // Check if player exists in database (inviter info for display)
+          try {
+            const status = await checkPlayerStatus(normalized);
+            if (status && status.exists) {
+              setPlayerExists(true);
+              // Fetch inviter profile for display (balance info)
+              try {
+                const profile = await getPlayerProfile(normalized);
+                setPlayerProfile({
+                  display_name: status.display_name,
+                  phone_number: normalized,
+                  player_winnings: profile?.player_winnings || 0
+                });
+              } catch (err) {
+                setPlayerProfile({
+                  display_name: status.display_name,
+                  phone_number: normalized
+                });
+              }
+            } else {
+              setPlayerExists(false);
+            }
+          } catch (err) {
+            setPlayerExists(false);
+          }
+
+          // Independently, check if the CURRENT VISITOR has an active session
+          try {
+            const mySession = await checkSession();
+            if (mySession) {
+              // Logged-in visitor — load their profile and skip PIN
+              const me = await getPlayerProfile(mySession.phone);
+              if (me) {
+                setPlayerProfile(me);
+                setIsAuthenticated(true);
+                setPlayerExists(true);
+                setInvitePhone(mySession.phone); // act as the joining player
+              }
+            }
+          } catch (e) {
+            // ignore session check errors
+          }
+        }
+      })
+      .catch((err) => {
+        setFormError(err.message || 'Failed to load match details');
+      })
+      .finally(() => {
+        setLoadingMatch(false);
+      });
   }, []);
 
   const handlePinSubmit = async (pin: string) => {
@@ -138,6 +166,38 @@ export const JoinPage: React.FC = () => {
       setFormError(err instanceof Error ? err.message : 'Failed to decline invite');
     }
   };
+
+  // Show loading while fetching match details
+  if (loadingMatch) {
+    return (
+      <div className="max-w-md mx-auto rounded-2xl p-8 flex items-center justify-center min-h-[400px]">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#D4A574] mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading match details...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show error if match loading failed
+  if (formError && !matchCode) {
+    return (
+      <div className="max-w-md mx-auto rounded-2xl p-8">
+        <div className="text-center mb-6">
+          <img src="/logo.webp" alt="PlayMatatu Logo" width={180} height={127} className="mx-auto" />
+        </div>
+        <div className="text-center">
+          <div className="text-red-500 mb-4">{formError}</div>
+          <button
+            onClick={() => navigate('/')}
+            className="py-2 px-6 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
+          >
+            Go Back
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // Show PIN entry for existing players
   if (playerExists && !isAuthenticated) {

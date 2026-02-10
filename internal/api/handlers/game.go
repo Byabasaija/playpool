@@ -11,7 +11,6 @@ import (
 	"log"
 	"math/big"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -525,7 +524,7 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 						invitePhone := normalizePhone(req.InvitePhone)
 						if invitePhone != "" {
 							smsInviteQueued = true
-							joinLink := fmt.Sprintf("%s/join?match_code=%s&stake=%d&invite_phone=%s", cfg.FrontendURL, code, req.StakeAmount, url.QueryEscape(invitePhone))
+							joinLink := fmt.Sprintf("%s/join?match_code=%s", cfg.FrontendURL, code)
 							go func(code string, invite string, stake int, link string) {
 								msg := fmt.Sprintf("Join my PlayMatatu match!\nCode: %s\nStake: %d UGX\n\n%s", code, stake, link)
 								if msgID, err := sms.SendSMS(context.Background(), invite, msg); err != nil {
@@ -720,17 +719,18 @@ func CheckQueueStatus(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Ha
 
 		// Query DB for queue entry status (single source of truth)
 		var dbQueue struct {
-			ID          int     `db:"id"`
-			PlayerID    int     `db:"player_id"`
-			PhoneNumber string  `db:"phone_number"`
-			StakeAmount float64 `db:"stake_amount"`
-			QueueToken  string  `db:"queue_token"`
-			Status      string  `db:"status"`
-			SessionID   *int    `db:"session_id"`
-			GameToken   *string `db:"game_token"`
+			ID          int       `db:"id"`
+			PlayerID    int       `db:"player_id"`
+			PhoneNumber string    `db:"phone_number"`
+			StakeAmount float64   `db:"stake_amount"`
+			QueueToken  string    `db:"queue_token"`
+			Status      string    `db:"status"`
+			SessionID   *int      `db:"session_id"`
+			GameToken   *string   `db:"game_token"`
+			ExpiresAt   time.Time `db:"expires_at"`
 		}
 		err := db.Get(&dbQueue, `
-			SELECT mq.id, mq.player_id, mq.phone_number, mq.stake_amount, mq.queue_token, mq.status, mq.session_id, gs.game_token
+			SELECT mq.id, mq.player_id, mq.phone_number, mq.stake_amount, mq.queue_token, mq.status, mq.session_id, gs.game_token, mq.expires_at
 			FROM matchmaking_queue mq
 			LEFT JOIN game_sessions gs ON mq.session_id = gs.id
 			WHERE mq.queue_token = $1
@@ -796,6 +796,7 @@ func CheckQueueStatus(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Ha
 				"status":       "queued",
 				"queue_token":  queueToken,
 				"player_token": playerToken,
+				"expires_at":   dbQueue.ExpiresAt,
 				"message":      "Still waiting for opponent...",
 			})
 
@@ -1092,6 +1093,74 @@ func DeclineMatchInvite(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"message": "Match invitation declined successfully",
+		})
+	}
+}
+
+// GetMatchDetails returns match details by match code for join flow
+func GetMatchDetails(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		matchCode := c.Param("match_code")
+		if matchCode == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "match_code is required"})
+			return
+		}
+
+		matchCode = strings.ToUpper(strings.TrimSpace(matchCode))
+
+		// Query matchmaking_queue for match details (get inviter phone from players table)
+		var queue struct {
+			ID           int       `db:"id"`
+			PlayerID     int       `db:"player_id"`
+			StakeAmount  float64   `db:"stake_amount"`
+			IsPrivate    bool      `db:"is_private"`
+			MatchCode    string    `db:"match_code"`
+			Status       string    `db:"status"`
+			CreatedAt    time.Time `db:"created_at"`
+			ExpiresAt    time.Time `db:"expires_at"`
+			InviterPhone string    `db:"inviter_phone"`
+		}
+
+		err := db.Get(&queue, `
+			SELECT mq.id, mq.player_id, mq.stake_amount, mq.is_private, mq.match_code, mq.status, mq.created_at, mq.expires_at, p.phone_number as inviter_phone
+			FROM matchmaking_queue mq
+			JOIN players p ON p.id = mq.player_id
+			WHERE mq.match_code = $1 AND mq.is_private = true
+			ORDER BY mq.created_at DESC
+			LIMIT 1
+		`, matchCode)
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "match not found"})
+			return
+		}
+		if err != nil {
+			log.Printf("[GetMatchDetails] DB error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch match details"})
+			return
+		}
+
+		// Check if match is still valid (not expired, not matched/declined)
+		if queue.Status != "queued" {
+			c.JSON(http.StatusGone, gin.H{
+				"error":  "match is no longer available",
+				"status": queue.Status,
+			})
+			return
+		}
+
+		if time.Now().After(queue.ExpiresAt) {
+			c.JSON(http.StatusGone, gin.H{
+				"error": "match has expired",
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"match_code":    queue.MatchCode,
+			"stake_amount":  int(queue.StakeAmount),
+			"inviter_phone": queue.InviterPhone,
+			"expires_at":    queue.ExpiresAt,
+			"status":        queue.Status,
 		})
 	}
 }
