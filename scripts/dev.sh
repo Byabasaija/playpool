@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Development environment setup script for PlayMatatu
+# Development environment setup script for PlayPool
 
 set -e
 
@@ -73,11 +73,11 @@ setup_database() {
     # Use full path to PostgreSQL tools and correct credentials
     export PGPASSWORD="password1"
     
-    if /opt/homebrew/opt/postgresql@12/bin/psql -h localhost -U postgres -lqt | cut -d \| -f 1 | grep -qw playmatatu_dev; then
-        log_info "Database 'playmatatu_dev' already exists"
+    if /opt/homebrew/opt/postgresql@12/bin/psql -h localhost -U postgres -lqt | cut -d \| -f 1 | grep -qw playpool_dev; then
+        log_info "Database 'playpool_dev' already exists"
     else
-        log_info "Creating database 'playmatatu_dev'..."
-        /opt/homebrew/opt/postgresql@12/bin/createdb -h localhost -U postgres playmatatu_dev
+        log_info "Creating database 'playpool_dev'..."
+        /opt/homebrew/opt/postgresql@12/bin/createdb -h localhost -U postgres playpool_dev
     fi
     
     log_info "Running migrations using migrate tool (scripts/migrate.sh)..."
@@ -127,7 +127,7 @@ check_migrate() {
 
 # Main setup function
 setup() {
-    log_info "Setting up PlayMatatu development environment..."
+    log_info "Setting up PlayPool development environment..."
     echo
     
     # Check prerequisites
@@ -164,7 +164,7 @@ setup() {
 
 # Help function
 help() {
-    echo "PlayMatatu Development Setup"
+    echo "PlayPool Development Setup"
     echo ""
     echo "Commands:"
     echo "  setup    - Set up development environment"
@@ -185,7 +185,7 @@ start() {
     fi
     
     # Start the application with Air (use full path)
-    log_info "Starting PlayMatatu with live reload..."
+    log_info "Starting PlayPool with live reload..."
     ~/go/bin/air
 }
 
@@ -201,8 +201,8 @@ stop() {
 reset() {
     log_info "Resetting database..."
     export PGPASSWORD="password1"
-    /opt/homebrew/opt/postgresql@12/bin/dropdb -h localhost -U postgres playmatatu_dev || true
-    /opt/homebrew/opt/postgresql@12/bin/createdb -h localhost -U postgres playmatatu_dev
+    /opt/homebrew/opt/postgresql@12/bin/dropdb -h localhost -U postgres playpool_dev || true
+    /opt/homebrew/opt/postgresql@12/bin/createdb -h localhost -U postgres playpool_dev
 
     log_info "Applying migrations to fresh DB using scripts/migrate.sh..."
     if ./scripts/migrate.sh up; then
@@ -252,4 +252,4 @@ esac
 #  - pressly/goose         (https://github.com/pressly/goose)
 # These tools support incremental migrations, rollbacks, and version tracking.
 # Example with golang-migrate:
-#   migrate -path ./migrations -database "postgres://postgres:password1@localhost:5432/playmatatu_dev?sslmode=disable" up
+#   migrate -path ./migrations -database "postgres://postgres:password1@localhost:5432/playpool_dev?sslmode=disable" up

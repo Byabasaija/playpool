@@ -71,7 +71,7 @@ func RequestOTP(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerF
 		}
 
 		// send SMS via DMark
-		msg := fmt.Sprintf("Your PlayMatatu OTP is %s. It expires in %d minutes.", code, cfg.OTPTokenTTLSeconds/60)
+		msg := fmt.Sprintf("Your PlayPool OTP is %s. It expires in %d minutes.", code, cfg.OTPTokenTTLSeconds/60)
 		if sms.Default != nil {
 			if _, err := sms.SendSMS(ctx, phone, msg); err != nil {
 				log.Printf("Failed to send OTP SMS to %s: %v", phone, err)

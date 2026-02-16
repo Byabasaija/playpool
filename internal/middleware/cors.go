@@ -40,8 +40,8 @@ func CORSMiddleware(cfg *config.Config) gin.HandlerFunc {
 	} else {
 		// Production: explicit allowed origins with credentials for cookie auth
 		allowedOrigins := []string{
-			"https://playmatatu.com",
-			"https://demo.playmatatu.com",
+			"https://playpool.com",
+			"https://demo.playpool.com",
 		}
 		if cfg.FrontendURL != "" {
 			allowedOrigins = append(allowedOrigins, cfg.FrontendURL)
@@ -80,8 +80,8 @@ func WebSocketCORSCheck(cfg *config.Config) gin.HandlerFunc {
 		} else {
 			// Production: check against allowed domains
 			allowedOrigins := []string{
-				"https://demo.playmatatu.com",
-				"https://playmatatu.com",
+				"https://demo.playpool.com",
+				"https://playpool.com",
 			}
 			if cfg.FrontendURL != "" {
 				allowedOrigins = append(allowedOrigins, cfg.FrontendURL)

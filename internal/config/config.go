@@ -107,7 +107,7 @@ func Load() *Config {
 		Environment: getEnv("APP_ENV", "development"),
 
 		// Database
-		DatabaseURL: getEnv("DATABASE_URL", "postgres://localhost:5432/playmatatu?sslmode=disable"),
+		DatabaseURL: getEnv("DATABASE_URL", "postgres://localhost:5432/playpool?sslmode=disable"),
 
 		// Redis
 		RedisURL: getEnv("REDIS_URL", "redis://localhost:6379/0"),
@@ -127,7 +127,7 @@ func Load() *Config {
 		PayoutTaxPercent:          getEnvInt("PAYOUT_TAX_PERCENT", 15),
 
 		// SMS
-		SMSSenderID:            getEnv("SMS_SENDER_ID", "PlayMatatu"),
+		SMSSenderID:            getEnv("SMS_SENDER_ID", "PlayPool"),
 		AfricasTalkingUsername: getEnv("AFRICAS_TALKING_USERNAME", ""),
 		AfricasTalkingAPIKey:   getEnv("AFRICAS_TALKING_API_KEY", ""),
 

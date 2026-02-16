@@ -197,7 +197,7 @@ func ProcessPayinSuccess(db *sqlx.DB, rdb *redis.Client, cfg *config.Config, txn
 
 	// Best-effort SMS
 	if sms.Default != nil {
-		msg := fmt.Sprintf("PlayMatatu: Payment of %.0f UGX received. You can now join a game!", amount)
+		msg := fmt.Sprintf("PlayPool: Payment of %.0f UGX received. You can now join a game!", amount)
 		go func() {
 			if _, err := sms.SendSMS(context.Background(), phone, msg); err != nil {
 				log.Printf("[PAYMENT] Failed to send deposit SMS: %v", err)

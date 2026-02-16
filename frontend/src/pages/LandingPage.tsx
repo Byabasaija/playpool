@@ -43,7 +43,7 @@ export const LandingPage: React.FC = () => {
   // Authenticated user state (after PIN verification)
   const [authChecking, setAuthChecking] = useState(() => {
     // Optimistic: if localStorage has phone, assume checking session
-    return localStorage.getItem('matatu_phone') ? true : false;
+    return localStorage.getItem('playpool_phone') ? true : false;
   });
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [playerBalance, setPlayerBalance] = useState<number>(0);
@@ -55,7 +55,7 @@ export const LandingPage: React.FC = () => {
 
   // Check session cookie first, then fall back to PIN entry
   React.useEffect(() => {
-    const savedPhone = localStorage.getItem('matatu_phone');
+    const savedPhone = localStorage.getItem('playpool_phone');
     
     // If no saved phone, skip auth check
     if (!savedPhone) {
@@ -70,7 +70,7 @@ export const LandingPage: React.FC = () => {
         const phoneRest = session.phone.replace(/^256/, '');
         setPhoneRest(phoneRest);
         setDisplayNameInput(session.display_name || '');
-        localStorage.setItem('matatu_phone', session.phone);
+        localStorage.setItem('playpool_phone', session.phone);
 
         // Load balance + expired queue
         const profile = await getPlayerProfile(session.phone).catch(() => null);
@@ -93,12 +93,12 @@ export const LandingPage: React.FC = () => {
           setShowPinEntry(true);
         } else {
           // Phone in localStorage but no PIN - clear it
-          localStorage.removeItem('matatu_phone');
+          localStorage.removeItem('playpool_phone');
         }
         setAuthChecking(false);
       }).catch(() => {
         // Error checking status - clear stale localStorage
-        localStorage.removeItem('matatu_phone');
+        localStorage.removeItem('playpool_phone');
         setAuthChecking(false);
       });
     });
@@ -223,7 +223,7 @@ export const LandingPage: React.FC = () => {
 
   const generateRandomName = () => {
     const adjectives = ["Lucky", "Swift", "Brave", "Jolly", "Mighty", "Quiet", "Clever", "Happy", "Kitenge", "Zesty"];
-    const nouns = ["Zebu", "Rider", "Matatu", "Champion", "Sevens", "Ace", "Mamba", "Jua", "Lion", "Drift"];
+    const nouns = ["Zebu", "Rider", "Cue", "Champion", "Sevens", "Ace", "Mamba", "Jua", "Lion", "Drift"];
     const ai = Math.floor(Math.random() * adjectives.length);
     const ni = Math.floor(Math.random() * nouns.length);
     const num = Math.floor(Math.random() * 1000);
@@ -355,7 +355,7 @@ export const LandingPage: React.FC = () => {
       await verifyPIN(full, pin, 'view_profile');
 
       // PIN verified successfully - save phone, cookie is now set
-      localStorage.setItem('matatu_phone', full);
+      localStorage.setItem('playpool_phone', full);
 
       // Load profile data including balance
       const profile = await getPlayerProfile(full);
@@ -407,7 +407,7 @@ export const LandingPage: React.FC = () => {
       console.error('Logout failed:', err);
     } finally {
       // Clear local state regardless of API call result
-      localStorage.removeItem('matatu_phone');
+      localStorage.removeItem('playpool_phone');
       setIsAuthenticated(false);
       setShowPinEntry(false);
       setPlayerHasPin(false);
@@ -554,7 +554,7 @@ export const LandingPage: React.FC = () => {
       const { full, stake, displayNameInput, opts } = pendingGameData;
 
       // Store phone in localStorage so future visits work properly
-      localStorage.setItem('matatu_phone', full);
+      localStorage.setItem('playpool_phone', full);
 
       // Add match code if specified
       if (matchCodeInput) opts.matchcode = matchCodeInput.trim().toUpperCase();
@@ -617,10 +617,10 @@ export const LandingPage: React.FC = () => {
   const handleShare = async () => {
     if (!privateMatch) return;
     const link = buildInviteLink(privateMatch.matchcode);
-    const text = `Join my PlayMatatu private match. Code: ${privateMatch.matchcode}. Expires: ${privateMatch.expires_at ? new Date(privateMatch.expires_at).toLocaleString() : ''}`;
+    const text = `Join my PlayPool private match. Code: ${privateMatch.matchcode}. Expires: ${privateMatch.expires_at ? new Date(privateMatch.expires_at).toLocaleString() : ''}`;
     if (navigator.share) {
       try {
-        await navigator.share({ title: 'PlayMatatu Invite', text });
+        await navigator.share({ title: 'PlayPool Invite', text });
         return;
       } catch (e) {
         // fallthrough to clipboard fallback
@@ -668,7 +668,7 @@ export const LandingPage: React.FC = () => {
               <div className="text-center mb-6">
                 <div className="mb-3">
                   <Link to="/">
-                    <img src="/logo.webp" alt="PlayMatatu Logo" width={200} height={141} className="mx-auto"/>
+                    <img src="/logo.webp" alt="PlayPool Logo" width={200} height={141} className="mx-auto"/>
                   </Link>
                 </div>
                 <h2 className="text-xl font-bold text-[#373536] mb-1">Welcome back{displayNameInput ? `, ${displayNameInput}` : ''}!</h2>
@@ -704,7 +704,7 @@ export const LandingPage: React.FC = () => {
               <div className="max-w-md mx-auto rounded-2xl p-8">
                 <div className="text-center mb-4">
                   <Link to="/">
-                    <img src="/logo.webp" alt="PlayMatatu Logo" width={200} height={141} className="mx-auto"/>
+                    <img src="/logo.webp" alt="PlayPool Logo" width={200} height={141} className="mx-auto"/>
                   </Link>
                 </div>
                 
@@ -810,7 +810,7 @@ export const LandingPage: React.FC = () => {
                 <button
                   onClick={() => {
                     playerLogout();
-                    localStorage.removeItem('matatu_phone');
+                    localStorage.removeItem('playpool_phone');
                     setPhoneRest('');
                     setShowPinEntry(false);
                     setPlayerHasPin(false);
@@ -829,7 +829,7 @@ export const LandingPage: React.FC = () => {
             <div className="max-w-md mx-auto rounded-2xl p-8">
               <div className="text-center mb-4">
                 <Link to="/">
-                  <img src="/logo.webp" alt="PlayMatatu Logo" width={200} height={141} className="mx-auto"/>
+                  <img src="/logo.webp" alt="PlayPool Logo" width={200} height={141} className="mx-auto"/>
                 </Link>
               </div>
               
@@ -998,7 +998,7 @@ export const LandingPage: React.FC = () => {
               <div className="text-center mb-4 mb-md-5">
                 <div className="mb-3">
                   <Link to="/">
-                    <img src="/logo.webp" alt="PlayMatatu Logo" width={200} height={141}/>
+                    <img src="/logo.webp" alt="PlayPool Logo" width={200} height={141}/>
                   </Link>
                 </div>
               </div>
@@ -1086,7 +1086,7 @@ export const LandingPage: React.FC = () => {
             <div className="text-center mb-4 mb-md-5">
                      <div className="mb-3">
                         <Link to="/">
-                          <img src="/logo.webp" alt="PlayMatatu Logo" width={200} height={141}/>
+                          <img src="/logo.webp" alt="PlayPool Logo" width={200} height={141}/>
                         </Link>
                     </div>
 

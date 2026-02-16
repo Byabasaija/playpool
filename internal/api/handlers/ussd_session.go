@@ -158,7 +158,7 @@ func (h *USSDSessionHandler) mainMenu(inputString string) (string, string) {
 
 // buildMainMenu constructs the main menu text
 func (h *USSDSessionHandler) buildMainMenu() string {
-	return `Welcome to PlayMatatu
+	return `Welcome to PlayPool
 1. Play Match
 2. My Account
 3. Withdraw
@@ -423,34 +423,36 @@ func (h *USSDSessionHandler) gameRules(inputString string) (string, string) {
 	switch h.session.MethodLevel {
 	case "":
 		h.session.MethodLevel = "show_rules"
-		return `MATATU RULES:
+		return `POOL RULES:
 
 Basic:
-- Match card suit/rank
-- First to 0 cards wins
+- 8-ball pool, 2 players
+- Pocket your group then the 8-ball
 
-Special Cards:
-1. View special effects
+Groups:
+1. Solids (1-7)
+2. Stripes (9-15)
+
+1. More rules
 2. Play tips
 0. Back to Main Menu`, "request"
 
 	case "show_rules":
 		switch inputString {
 		case "1":
-			return `Special Cards:
-2: +2 draw
-8: Change suit
-J: Skip opponent
-K: Play on anything
-A: Choose suit + skip
+			return `8-Ball Rules:
+- Break to start
+- Pocket a ball to claim group
+- Fouls give ball-in-hand
+- Pocket 8-ball last to win
 
-For more: playmatatu.com/rules
+For more: playpool.com/rules
 
 0. Back`, "request"
 		case "2":
 			return `Play Tips:
-- Save your 8s and Aces
-- Watch opponent's cards
+- Plan your shots ahead
+- Use position play
 - Use skip cards wisely
 - Don't let opponent finish
 
@@ -478,7 +480,7 @@ func (h *USSDSessionHandler) help(inputString string) (string, string) {
 	switch h.session.MethodLevel {
 	case "":
 		h.session.MethodLevel = "show_help"
-		return `PlayMatatu Help:
+		return `PlayPool Help:
 
 1. How to play
 2. Payment issues
@@ -496,7 +498,7 @@ func (h *USSDSessionHandler) help(inputString string) (string, string) {
 4. Play on web/mobile
 5. Winner takes pot!
 
-playmatatu.com for more info
+playpool.com for more info
 
 0. Back`, "request"
 		case "2":
@@ -511,7 +513,7 @@ playmatatu.com for more info
 			h.session.MethodLevel = "contact_support"
 			return `Support:
 WhatsApp: +256700000000
-Email: support@playmatatu.com
+Email: support@playpool.com
 Hours: 8AM-10PM EAT
 
 1. Report game issue
@@ -524,7 +526,7 @@ Hours: 8AM-10PM EAT
 - No cheating tolerated
 
 Full terms at:
-playmatatu.com/terms
+playpool.com/terms
 
 0. Back`, "request"
 		case "0":
@@ -541,7 +543,7 @@ playmatatu.com/terms
 		}
 		if inputString == "0" {
 			h.session.MethodLevel = "show_help"
-			return `PlayMatatu Help:
+			return `PlayPool Help:
 
 1. How to play
 2. Payment issues

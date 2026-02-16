@@ -1,13 +1,17 @@
 package ws
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 	"github.com/playpool/backend/internal/game"
+	"github.com/redis/go-redis/v9"
 )
 
 // Pool-specific message data types
@@ -23,8 +27,16 @@ type PlaceCueBallData struct {
 	Y float64 `json:"y"`
 }
 
-// HandlePoolWebSocket handles WebSocket connections for pool games.
-func HandlePoolWebSocket(c *gin.Context) {
+// GameHub is the single hub for all games.
+var GameHub *Hub
+
+func init() {
+	GameHub = NewHub()
+	go runGameHub(GameHub)
+}
+
+// HandleWebSocket handles WebSocket connections for pool games.
+func HandleWebSocket(c *gin.Context) {
 	gameToken := c.Query("token")
 	playerToken := c.Query("pt")
 
@@ -33,7 +45,7 @@ func HandlePoolWebSocket(c *gin.Context) {
 		return
 	}
 
-	g, err := game.Manager.GetPoolGameByToken(gameToken)
+	g, err := game.Manager.GetGameByToken(gameToken)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "game not found"})
 		return
@@ -51,7 +63,7 @@ func HandlePoolWebSocket(c *gin.Context) {
 
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		log.Printf("[WS/Pool] Upgrade error: %v", err)
+		log.Printf("[WS] Upgrade error: %v", err)
 		return
 	}
 
@@ -64,23 +76,14 @@ func HandlePoolWebSocket(c *gin.Context) {
 		send:       make(chan []byte, 256),
 	}
 
-	// Use the same Hub infrastructure
-	PoolHub.register <- client
+	GameHub.register <- client
 
 	go client.writePump()
-	go client.readPoolPump()
+	go client.readPump()
 }
 
-// PoolHub is a separate hub for pool games, using the same Hub type.
-var PoolHub *Hub
-
-func init() {
-	PoolHub = NewHub()
-	go runPoolHub(PoolHub)
-}
-
-// runPoolHub runs the pool hub with pool-specific game logic.
-func runPoolHub(h *Hub) {
+// runGameHub runs the game hub with pool-specific game logic.
+func runGameHub(h *Hub) {
 	for {
 		select {
 		case client := <-h.register:
@@ -88,7 +91,10 @@ func runPoolHub(h *Hub) {
 
 			isReconnect := false
 			if oldClient, exists := h.clients[client.playerID]; exists {
-				log.Printf("[Pool] Player %s reconnecting", client.playerID)
+				log.Printf("[WS] Player %s reconnecting - closing old connection", client.playerID)
+				if err := oldClient.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "replaced by new connection"), time.Now().Add(5*time.Second)); err != nil {
+					log.Printf("Error writing close control to old client %s: %v", oldClient.playerID, err)
+				}
 				oldClient.conn.Close()
 				select {
 				case <-oldClient.send:
@@ -109,11 +115,11 @@ func runPoolHub(h *Hub) {
 			h.gameRooms[client.gameID][client.playerID] = client
 			h.mu.Unlock()
 
-			log.Printf("[Pool] Player %s connected to game %s", client.playerID, client.gameID)
+			log.Printf("[WS] Player %s connected to game %s", client.playerID, client.gameID)
 
-			g, err := game.Manager.GetPoolGameByToken(client.gameToken)
+			g, err := game.Manager.GetGameByToken(client.gameToken)
 			if err != nil {
-				log.Printf("[Pool] Game not found for token %s: %v", client.gameToken, err)
+				log.Printf("[WS] Game not found for token %s: %v", client.gameToken, err)
 				continue
 			}
 
@@ -122,18 +128,22 @@ func runPoolHub(h *Hub) {
 			g.MarkPlayerShowedUp(client.playerID)
 
 			if g.Status == game.StatusWaiting && g.BothPlayersConnected() {
+				log.Printf("Both players connected - scheduling initialization of game %s", g.ID)
+
 				go func(gRef *game.PoolGameState) {
 					time.Sleep(150 * time.Millisecond)
 					if gRef.Status != game.StatusWaiting || !gRef.BothPlayersConnected() {
 						return
 					}
 					if err := gRef.Initialize(); err != nil {
-						log.Printf("[Pool] Init failed: %v", err)
+						log.Printf("[WS] Init failed: %v", err)
 						return
 					}
 
 					if gRef.SessionID > 0 && game.Manager != nil && gRef.StartedAt != nil {
-						game.Manager.MarkSessionStarted(gRef.SessionID, *gRef.StartedAt)
+						if err := game.Manager.MarkSessionStarted(gRef.SessionID, *gRef.StartedAt); err != nil {
+							log.Printf("[DB] MarkSessionStarted failed for session %d: %v", gRef.SessionID, err)
+						}
 					}
 
 					h.BroadcastToGame(client.gameID, map[string]interface{}{
@@ -185,12 +195,14 @@ func runPoolHub(h *Hub) {
 					}
 				}
 
-				if g, err := game.Manager.GetPoolGameByToken(client.gameToken); err == nil {
+				log.Printf("[WS] Player %s disconnected from game %s", client.playerID, client.gameID)
+
+				if g, err := game.Manager.GetGameByToken(client.gameToken); err == nil {
 					g.SetPlayerDisconnected(client.playerID)
 					if g.Status == game.StatusInProgress {
 						go func(token, gameID, playerID string) {
 							time.Sleep(500 * time.Millisecond)
-							if g2, err := game.Manager.GetPoolGameByToken(token); err == nil {
+							if g2, err := game.Manager.GetGameByToken(token); err == nil {
 								if p := g2.GetPlayerByID(playerID); p != nil && !p.Connected && p.DisconnectedAt != nil && time.Since(*p.DisconnectedAt) >= 500*time.Millisecond {
 									graceSeconds := game.Manager.GetConfig().DisconnectGraceSeconds
 									h.BroadcastToGame(gameID, map[string]interface{}{
@@ -198,6 +210,7 @@ func runPoolHub(h *Hub) {
 										"player":          playerID,
 										"grace_seconds":   graceSeconds,
 										"disconnected_at": p.DisconnectedAt.Unix(),
+										"message":         fmt.Sprintf("Opponent disconnected. Waiting %d seconds...", graceSeconds),
 									})
 								}
 							}
@@ -216,10 +229,10 @@ func runPoolHub(h *Hub) {
 	}
 }
 
-// readPoolPump reads messages for pool games.
-func (c *Client) readPoolPump() {
+// readPump reads messages for pool games.
+func (c *Client) readPump() {
 	defer func() {
-		PoolHub.unregister <- c
+		GameHub.unregister <- c
 		c.conn.Close()
 	}()
 
@@ -233,7 +246,36 @@ func (c *Client) readPoolPump() {
 	for {
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Printf("WebSocket error (unexpected) for player %s: %v", c.playerID, err)
+			} else {
+				log.Printf("WebSocket read error for player %s: %v", c.playerID, err)
+			}
 			break
+		}
+
+		// Update idle tracking in Redis
+		if rdbClient != nil && wsConfig != nil {
+			ctx := context.Background()
+			member := fmt.Sprintf("g:%s:p:%s", c.gameToken, c.playerID)
+			now := time.Now().Unix()
+
+			shouldTrackIdle := true
+			if c.opponentID != "" {
+				GameHub.mu.RLock()
+				opponentClient, opponentConnected := GameHub.clients[c.opponentID]
+				GameHub.mu.RUnlock()
+
+				if !opponentConnected || opponentClient == nil || opponentClient.gameID != c.gameID {
+					shouldTrackIdle = false
+				}
+			}
+
+			if shouldTrackIdle {
+				rdbClient.Set(ctx, "last_active:"+member, fmt.Sprintf("%d", now), 0)
+				rdbClient.ZAdd(ctx, "idle_warning", redis.Z{Score: float64(now + int64(wsConfig.IdleWarningSeconds)), Member: member})
+				rdbClient.ZAdd(ctx, "idle_forfeit", redis.Z{Score: float64(now + int64(wsConfig.IdleForfeitSeconds)), Member: member})
+			}
 		}
 
 		var msg WSMessage
@@ -241,15 +283,15 @@ func (c *Client) readPoolPump() {
 			continue
 		}
 
-		c.handlePoolMessage(msg)
+		c.handleMessage(msg)
 	}
 }
 
-// handlePoolMessage processes incoming pool game messages.
-func (c *Client) handlePoolMessage(msg WSMessage) {
-	g, err := game.Manager.GetPoolGameByToken(c.gameToken)
+// handleMessage processes incoming pool game messages.
+func (c *Client) handleMessage(msg WSMessage) {
+	g, err := game.Manager.GetGameByToken(c.gameToken)
 	if err != nil {
-		c.sendPoolError("Game not found")
+		c.sendError("Game not found")
 		return
 	}
 
@@ -257,7 +299,7 @@ func (c *Client) handlePoolMessage(msg WSMessage) {
 	case "take_shot":
 		var data TakeShotData
 		if err := json.Unmarshal(msg.Data, &data); err != nil {
-			c.sendPoolError("Invalid shot data")
+			c.sendError("Invalid shot data")
 			return
 		}
 		c.handleTakeShot(g, data)
@@ -265,7 +307,7 @@ func (c *Client) handlePoolMessage(msg WSMessage) {
 	case "place_cue_ball":
 		var data PlaceCueBallData
 		if err := json.Unmarshal(msg.Data, &data); err != nil {
-			c.sendPoolError("Invalid placement data")
+			c.sendError("Invalid placement data")
 			return
 		}
 		c.handlePlaceCueBall(g, data)
@@ -277,10 +319,10 @@ func (c *Client) handlePoolMessage(msg WSMessage) {
 		c.send <- d
 
 	case "concede":
-		c.handlePoolConcede(g)
+		c.handleConcede(g)
 
 	default:
-		c.sendPoolError("Unknown message type")
+		c.sendError("Unknown message type")
 	}
 }
 
@@ -295,12 +337,12 @@ func (c *Client) handleTakeShot(g *game.PoolGameState, data TakeShotData) {
 
 	result, err := g.TakeShot(c.playerID, params)
 	if err != nil {
-		c.sendPoolError(err.Error())
+		c.sendError(err.Error())
 		return
 	}
 
 	// Broadcast shot result to both players
-	PoolHub.BroadcastToGame(c.gameID, map[string]interface{}{
+	GameHub.BroadcastToGame(c.gameID, map[string]interface{}{
 		"type":           "shot_result",
 		"player":         c.playerID,
 		"shot_params":    result.ShotParams,
@@ -318,8 +360,12 @@ func (c *Client) handleTakeShot(g *game.PoolGameState, data TakeShotData) {
 		"win_type":       result.WinType,
 	})
 
+	// Reset idle timers for both players
+	resetIdleTimersForGame(c.gameToken, g.Player1.ID, g.Player2.ID)
+	GameHub.BroadcastToGame(c.gameID, map[string]interface{}{"type": "player_idle_canceled", "player": c.playerID})
+
 	// Send updated game state to each player
-	c.broadcastPoolGameState(g)
+	c.broadcastGameState(g)
 
 	// Save to Redis
 	g.SaveToRedis()
@@ -328,56 +374,48 @@ func (c *Client) handleTakeShot(g *game.PoolGameState, data TakeShotData) {
 // handlePlaceCueBall processes cue ball placement.
 func (c *Client) handlePlaceCueBall(g *game.PoolGameState, data PlaceCueBallData) {
 	if err := g.PlaceCueBall(c.playerID, data.X, data.Y); err != nil {
-		c.sendPoolError(err.Error())
+		c.sendError(err.Error())
 		return
 	}
 
-	PoolHub.BroadcastToGame(c.gameID, map[string]interface{}{
+	GameHub.BroadcastToGame(c.gameID, map[string]interface{}{
 		"type": "ball_placed",
 		"x":    data.X,
 		"y":    data.Y,
 	})
 
-	c.broadcastPoolGameState(g)
+	c.broadcastGameState(g)
 	g.SaveToRedis()
 }
 
-// handlePoolConcede processes a concede in a pool game.
-func (c *Client) handlePoolConcede(g *game.PoolGameState) {
+// handleConcede processes a concede in a pool game.
+func (c *Client) handleConcede(g *game.PoolGameState) {
 	if g.Status != game.StatusInProgress {
-		c.sendPoolError("Game is not in progress")
+		c.sendError("Game is not in progress")
 		return
 	}
 
 	g.ForfeitByConcede(c.playerID)
 
-	PoolHub.BroadcastToGame(c.gameID, map[string]interface{}{
+	GameHub.BroadcastToGame(c.gameID, map[string]interface{}{
 		"type":    "player_conceded",
 		"player":  c.playerID,
 		"message": "Player conceded",
 	})
 
-	c.broadcastPoolGameState(g)
+	c.broadcastGameState(g)
 }
 
-// broadcastPoolGameState sends personalized state to each player.
-func (c *Client) broadcastPoolGameState(g *game.PoolGameState) {
+// broadcastGameState sends personalized state to each player.
+func (c *Client) broadcastGameState(g *game.PoolGameState) {
 	if g.Player1 != nil {
 		state := g.GetGameStateForPlayer(g.Player1.ID)
 		state["type"] = "game_update"
-		PoolHub.SendToPlayer(g.Player1.ID, state)
+		GameHub.SendToPlayer(g.Player1.ID, state)
 	}
 	if g.Player2 != nil {
 		state := g.GetGameStateForPlayer(g.Player2.ID)
 		state["type"] = "game_update"
-		PoolHub.SendToPlayer(g.Player2.ID, state)
+		GameHub.SendToPlayer(g.Player2.ID, state)
 	}
-}
-
-func (c *Client) sendPoolError(message string) {
-	d, _ := json.Marshal(map[string]interface{}{
-		"type":    "error",
-		"message": message,
-	})
-	c.send <- d
 }

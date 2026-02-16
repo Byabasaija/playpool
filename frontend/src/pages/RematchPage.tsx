@@ -47,11 +47,11 @@ export const RematchPage: React.FC = () => {
   const handleShare = async () => {
     if (!privateMatch) return;
     const link = buildInviteLink(privateMatch.matchcode);
-    const text = `Join my PlayMatatu rematch. Code: ${privateMatch.matchcode}. Stake: ${initialStake} UGX`;
+    const text = `Join my PlayPool rematch. Code: ${privateMatch.matchcode}. Stake: ${initialStake} UGX`;
     
     if (navigator.share) {
       try {
-        await navigator.share({ title: 'PlayMatatu Rematch', text, url: link });
+        await navigator.share({ title: 'PlayPool Rematch', text, url: link });
       } catch (e) {
         await navigator.clipboard.writeText(link);
       }
@@ -92,7 +92,7 @@ export const RematchPage: React.FC = () => {
 
   // Try session cookie first, then fall back to PIN entry
   React.useEffect(() => {
-    const storedPhone = localStorage.getItem('playmatatu_phone') || localStorage.getItem('matatu_phone');
+    const storedPhone = localStorage.getItem('playpool_phone') || localStorage.getItem('playpool_phone');
 
     // Try existing session cookie first (accept any valid session)
     checkSession().then(async (session) => {
@@ -313,7 +313,7 @@ export const RematchPage: React.FC = () => {
     <div className="max-w-md mx-auto rounded-2xl p-8">
       <div className="text-center mb-4">
         <Link to="/">
-          <img src="/logo.webp" alt="PlayMatatu Logo" width={160} height={113} className="mx-auto mb-4" />
+          <img src="/logo.webp" alt="PlayPool Logo" width={160} height={113} className="mx-auto mb-4" />
         </Link>
       </div>
       <h1 className="text-2xl font-bold text-gray-900 mb-6 text-center">Rematch</h1>

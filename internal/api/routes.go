@@ -45,10 +45,8 @@ func SetupRoutes(router *gin.Engine, db *sqlx.DB, rdb *redis.Client, cfg *config
 			game.GET("/queue/status", handlers.CheckQueueStatus(db, rdb, cfg))
 			game.GET("/status", handlers.GetQueueStatus(rdb))
 			game.POST("/test", handlers.CreateTestGame(db, rdb, cfg))          // Dev only
-			game.POST("/test/draw", handlers.CreateTestDrawGame(db, rdb, cfg)) // Dev only - test draw scenario
 			game.GET("/:token", handlers.GetGameState(db, rdb, cfg))
 			game.GET("/:token/ws", handlers.HandleGameWebSocket(db, rdb, cfg))
-			game.GET("/:token/pool-ws", handlers.HandlePoolWebSocket(db, rdb, cfg))
 		}
 
 		// Player endpoints

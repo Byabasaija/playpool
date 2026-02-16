@@ -6,15 +6,15 @@ export function RulesPage() {
       <div className="max-w-2xl mx-auto px-4 py-8">
         <Link to="/" className="text-sm text-gray-500 hover:text-gray-700 mb-4 inline-block">&larr; Back</Link>
 
-        <h1 className="text-2xl font-bold text-[#373536] mb-6">How to Play Matatu</h1>
+        <h1 className="text-2xl font-bold text-[#373536] mb-6">How to Play Pool</h1>
 
         <div className="space-y-6 text-sm text-gray-800">
 
           <section>
             <h2 className="text-lg font-semibold text-[#373536] mb-2">Overview</h2>
             <p>
-              Matatu is a fast-paced two-player card game. Be the first to get rid of all your cards,
-              or play the Chop card to end the game and win on points.
+              Pool is a fast-paced two-player pool game. Pot your balls strategically
+              and sink the 8-ball to win.
             </p>
           </section>
 

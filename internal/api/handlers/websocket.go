@@ -12,8 +12,3 @@ import (
 func HandleGameWebSocket(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerFunc {
 	return ws.HandleWebSocket
 }
-
-// HandlePoolWebSocket handles real-time pool game communication
-func HandlePoolWebSocket(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerFunc {
-	return ws.HandlePoolWebSocket
-}

@@ -1,4 +1,4 @@
-// Pool-specific WebSocket hook — wraps the generic useWebSocket with pool-ws endpoint.
+// WebSocket hook for pool game communication.
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { PoolWSMessage, PoolOutgoingMessage } from '../types/pool.types';
@@ -51,8 +51,7 @@ export function usePoolWebSocket({
       baseUrl = 'ws://localhost:8000';
     }
 
-    // Use pool-ws endpoint
-    const wsUrl = `${baseUrl}/api/v1/game/${gameToken}/pool-ws?token=${gameToken}&pt=${playerToken}`;
+    const wsUrl = `${baseUrl}/api/v1/game/${gameToken}/ws?token=${gameToken}&pt=${playerToken}`;
     console.log('[Pool WS] Connecting:', wsUrl);
 
     const ws = new WebSocket(wsUrl);

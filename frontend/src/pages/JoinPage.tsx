@@ -8,7 +8,7 @@ import SetPinModal from '../components/SetPinModal';
 
 function generateRandomName() {
   const adjectives = ["Lucky", "Swift", "Brave", "Jolly", "Mighty", "Quiet", "Clever", "Happy", "Kitenge", "Zesty"];
-  const nouns = ["Zebu", "Rider", "Matatu", "Champion", "Sevens", "Ace", "Mamba", "Jua", "Lion", "Drift"];
+  const nouns = ["Zebu", "Rider", "Cue", "Champion", "Sevens", "Ace", "Mamba", "Jua", "Lion", "Drift"];
   const ai = Math.floor(Math.random() * adjectives.length);
   const ni = Math.floor(Math.random() * nouns.length);
   const num = Math.floor(Math.random() * 1000);
@@ -61,7 +61,7 @@ export const JoinPage: React.FC = () => {
   // Authentication checking state (prevents flicker)
   const [authChecking, setAuthChecking] = useState(() => {
     // Optimistic: if localStorage has phone, assume checking session
-    return localStorage.getItem('matatu_phone') ? true : false;
+    return localStorage.getItem('playpool_phone') ? true : false;
   });
 
   // PIN setup flow state
@@ -177,7 +177,7 @@ export const JoinPage: React.FC = () => {
       await verifyPIN(full, pin, 'view_profile');
 
       // PIN verified successfully - save phone, cookie is now set
-      localStorage.setItem('matatu_phone', full);
+      localStorage.setItem('playpool_phone', full);
 
       // Load profile data including balance
       const profile = await getPlayerProfile(full);
@@ -221,7 +221,7 @@ export const JoinPage: React.FC = () => {
       console.error('Logout failed:', err);
     } finally {
       // Clear local state regardless of API call result
-      localStorage.removeItem('matatu_phone');
+      localStorage.removeItem('playpool_phone');
       setIsAuthenticated(false);
       setShowPinEntry(false);
       setPlayerHasPin(false);
@@ -285,7 +285,7 @@ export const JoinPage: React.FC = () => {
       const { full, stake, displayNameInput, matchcode } = pendingGameData;
 
       // Store phone in localStorage so LandingPage can check session on return
-      localStorage.setItem('matatu_phone', full.replace(/^256/, ''));
+      localStorage.setItem('playpool_phone', full.replace(/^256/, ''));
 
       // Use winnings if selected — cookie auth handles authorization
       const opts: any = { matchcode };
@@ -328,7 +328,7 @@ export const JoinPage: React.FC = () => {
       <div className="max-w-md mx-auto rounded-2xl p-8">
         <div className="text-center mb-6">
           <Link to="/">
-            <img src="/logo.webp" alt="PlayMatatu Logo" width={180} height={127} className="mx-auto" />
+            <img src="/logo.webp" alt="PlayPool Logo" width={180} height={127} className="mx-auto" />
           </Link>
         </div>
         <div className="text-center">
@@ -350,7 +350,7 @@ export const JoinPage: React.FC = () => {
       <div className="max-w-md mx-auto rounded-2xl p-8">
         <div className="text-center mb-6">
           <Link to="/">
-            <img src="/logo.webp" alt="PlayMatatu Logo" width={200} height={141} className="mx-auto"/>
+            <img src="/logo.webp" alt="PlayPool Logo" width={200} height={141} className="mx-auto"/>
           </Link>
         </div>
 
@@ -399,7 +399,7 @@ export const JoinPage: React.FC = () => {
       <div className="max-w-md mx-auto rounded-2xl p-8">
         <div className="text-center mb-4">
           <Link to="/">
-            <img src="/logo.webp" alt="PlayMatatu Logo" width={200} height={141} className="mx-auto"/>
+            <img src="/logo.webp" alt="PlayPool Logo" width={200} height={141} className="mx-auto"/>
           </Link>
         </div>
 
@@ -491,7 +491,7 @@ export const JoinPage: React.FC = () => {
       <div className="text-center mb-4 mb-md-5">
         <div className="mb-3">
           <Link to="/">
-            <img src="/logo.webp" alt="PlayMatatu Logo" width={200} height={141}/>
+            <img src="/logo.webp" alt="PlayPool Logo" width={200} height={141}/>
           </Link>
         </div>
       </div>

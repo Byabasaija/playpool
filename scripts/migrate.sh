@@ -4,7 +4,7 @@ set -euo pipefail
 CMD=${1:-up}
 
 # Prefer DATABASE_URL env var, fall back to dev default
-DBURL=${DATABASE_URL:-"postgres://postgres:password1@localhost:5432/playmatatu_dev?sslmode=disable"}
+DBURL=${DATABASE_URL:-"postgres://postgres:password1@localhost:5432/playpool_dev?sslmode=disable"}
 
 if command -v migrate >/dev/null 2>&1; then
     echo "[migrate] Using local migrate binary"

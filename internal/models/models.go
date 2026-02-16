@@ -88,14 +88,12 @@ type MatchmakingQueue struct {
 
 // GameMove represents a single move in a game
 type GameMove struct {
-	ID           int       `db:"id" json:"id"`
-	SessionID    int       `db:"session_id" json:"session_id"`
-	PlayerID     int       `db:"player_id" json:"player_id"`
-	MoveNumber   int       `db:"move_number" json:"move_number"`
-	MoveType     string    `db:"move_type" json:"move_type"`
-	CardPlayed   string    `db:"card_played" json:"card_played,omitempty"`
-	SuitDeclared string    `db:"suit_declared" json:"suit_declared,omitempty"`
-	CreatedAt    time.Time `db:"created_at" json:"created_at"`
+	ID         int       `db:"id" json:"id"`
+	SessionID  int       `db:"session_id" json:"session_id"`
+	PlayerID   int       `db:"player_id" json:"player_id"`
+	MoveNumber int       `db:"move_number" json:"move_number"`
+	MoveType   string    `db:"move_type" json:"move_type"`
+	CreatedAt  time.Time `db:"created_at" json:"created_at"`
 }
 
 // Dispute represents a reported issue

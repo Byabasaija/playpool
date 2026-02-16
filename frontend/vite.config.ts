@@ -31,8 +31,8 @@ export default defineConfig({
         ]
       },
       manifest: {
-        name: 'PlayMatatu - Real Money Card Game',
-        short_name: 'PlayMatatu',
+        name: 'PlayPool - Real Money Pool Game',
+        short_name: 'PlayPool',
         description: 'Play. Win. Repeat.',
         theme_color: '#373536',
         background_color: '#ffffff',

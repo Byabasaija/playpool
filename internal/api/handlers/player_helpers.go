@@ -37,7 +37,7 @@ func generatePlayerToken() string {
 // generateDisplayName creates a short fun display name
 func generateDisplayName() string {
 	adjectives := []string{"Lucky", "Swift", "Brave", "Jolly", "Mighty", "Quiet", "Clever", "Happy", "Kitenge", "Zesty"}
-	nouns := []string{"Zebu", "Rider", "Matatu", "Champion", "Sevens", "Ace", "Mamba", "Jua", "Lion", "Drift"}
+	nouns := []string{"Zebu", "Rider", "Cue", "Champion", "Sevens", "Ace", "Mamba", "Jua", "Lion", "Drift"}
 	// use current time to avoid collisions
 	si := time.Now().UnixNano() % int64(len(nouns))
 	ai := (time.Now().UnixNano() / 7) % int64(len(adjectives))
@@ -414,7 +414,7 @@ func RequeueStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handle
 					smsInviteQueued = true
 					joinLink := fmt.Sprintf("%s/join?matchcode=%s", cfg.FrontendURL, code)
 					go func(code string, invite string, stake int, link string) {
-						msg := fmt.Sprintf("Join my PlayMatatu match!\nCode: %s\nStake: %d UGX\n\n%s", code, stake, link)
+						msg := fmt.Sprintf("Join my PlayPool match!\nCode: %s\nStake: %d UGX\n\n%s", code, stake, link)
 						if msgID, err := sms.SendSMS(context.Background(), invite, msg); err != nil {
 							log.Printf("[SMS] Failed to send invite to %s on requeue: %v", invite, err)
 						} else {

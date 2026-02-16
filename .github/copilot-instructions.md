@@ -1,7 +1,7 @@
-# PlayMatatu AI Coding Instructions
+# PlayPool AI Coding Instructions
 
 ## Project Overview
-PlayMatatu is a real-money Matatu card game platform built with Go backend and dual frontend (vanilla HTML/JS + React/TypeScript). Phone numbers serve as unique user identities with Mobile Money integration for payments.
+PlayPool is a real-money pool game platform built with Go backend and dual frontend (vanilla HTML/JS + React/TypeScript). Phone numbers serve as unique user identities with Mobile Money integration for payments.
 
 ## Architecture Patterns
 
@@ -125,7 +125,7 @@ err = stmt.Get(&player, map[string]interface{}{"phone": phone})
 ## Deployment Notes
 
 - **Single Binary**: `go build` produces self-contained executable
-- **Systemd**: Use `scripts/playmatatu.service` for production deployment
+- **Systemd**: Use `scripts/playpool.service` for production deployment
 - **Nginx**: Reverse proxy with static file serving from `/web`
 - **SSL**: Required for production, configure certificates
 - **Environment**: Separate `.env` files for dev/staging/prod

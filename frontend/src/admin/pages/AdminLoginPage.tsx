@@ -53,7 +53,7 @@ export function AdminLoginPage() {
       <div className="max-w-md w-full bg-white rounded-2xl shadow-lg p-8">
         <div className="text-center mb-6">
           <Link to="/">
-            <img src="/logo.webp" alt="PlayMatatu Logo" width={160} height={113} className="mx-auto mb-4" />
+            <img src="/logo.webp" alt="PlayPool Logo" width={160} height={113} className="mx-auto mb-4" />
           </Link>
           <h1 className="text-2xl font-bold text-gray-900">Admin Login</h1>
           <p className="text-gray-600 text-sm mt-2">

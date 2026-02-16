@@ -349,7 +349,7 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 					Amount:        float64(req.StakeAmount + cfg.CommissionFlat),
 					TransactionID: txnID,
 					NotifyURL:     callbackURL,
-					Description:   fmt.Sprintf("Matatu stake: %d UGX", req.StakeAmount),
+					Description:   fmt.Sprintf("PlayPool stake: %d UGX", req.StakeAmount),
 				}
 
 				payinResp, err := payment.Default.Payin(context.Background(), payinReq)
@@ -526,7 +526,7 @@ func InitiateStake(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handl
 							smsInviteQueued = true
 							joinLink := fmt.Sprintf("%s/join?matchcode=%s", cfg.FrontendURL, code)
 							go func(code string, invite string, stake int, link string) {
-								msg := fmt.Sprintf("Join my PlayMatatu match!\nCode: %s\nStake: %d UGX\n\n%s", code, stake, link)
+								msg := fmt.Sprintf("Join my PlayPool match!\nCode: %s\nStake: %d UGX\n\n%s", code, stake, link)
 								if msgID, err := sms.SendSMS(context.Background(), invite, msg); err != nil {
 									log.Printf("[SMS] Failed to send invite to %s: %v", invite, err)
 								} else {
@@ -827,39 +827,6 @@ func GetGameState(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handle
 		token := c.Param("token")
 		pt := c.Query("pt") // pt is either a player token (preferred) or a player id
 
-		// Try pool game first, then legacy card game
-		poolGame, poolErr := game.Manager.GetPoolGameByToken(token)
-		if poolErr == nil {
-			if pt == "" {
-				c.JSON(http.StatusOK, gin.H{
-					"game_id":      poolGame.ID,
-					"status":       poolGame.Status,
-					"stake_amount": poolGame.StakeAmount,
-					"created_at":   poolGame.CreatedAt,
-					"game_type":    "pool",
-				})
-				return
-			}
-
-			var resolvedPlayerID string
-			if pt == poolGame.Player1.ID || pt == poolGame.Player2.ID {
-				resolvedPlayerID = pt
-			} else if pt == poolGame.Player1.PlayerToken {
-				resolvedPlayerID = poolGame.Player1.ID
-			} else if pt == poolGame.Player2.PlayerToken {
-				resolvedPlayerID = poolGame.Player2.ID
-			} else {
-				c.JSON(http.StatusForbidden, gin.H{"error": "invalid player token"})
-				return
-			}
-
-			state := poolGame.GetGameStateForPlayer(resolvedPlayerID)
-			state["game_type"] = "pool"
-			c.JSON(http.StatusOK, state)
-			return
-		}
-
-		// Fallback to legacy card game
 		gameState, err := game.Manager.GetGameByToken(token)
 		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Game not found"})
@@ -872,6 +839,7 @@ func GetGameState(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handle
 				"status":       gameState.Status,
 				"stake_amount": gameState.StakeAmount,
 				"created_at":   gameState.CreatedAt,
+				"game_type":    "pool",
 			})
 			return
 		}
@@ -889,6 +857,7 @@ func GetGameState(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handle
 		}
 
 		state := gameState.GetGameStateForPlayer(resolvedPlayerID)
+		state["game_type"] = "pool"
 		c.JSON(http.StatusOK, state)
 	}
 }
@@ -1018,41 +987,6 @@ func CreateTestGame(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Hand
 	}
 }
 
-// CreateTestDrawGame creates a game that will end in a draw (for testing)
-func CreateTestDrawGame(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		var req struct {
-			StakeAmount int `json:"stake_amount"`
-		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			req.StakeAmount = 1000 // default
-		}
-
-		// Create a test game with equal point hands
-		gameState, err := game.Manager.CreateTestDrawGame(
-			"+256788674758",
-			"+256752327022",
-			req.StakeAmount,
-		)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"game_id":       gameState.ID,
-			"game_token":    gameState.Token,
-			"player1_id":    gameState.Player1.ID,
-			"player1_token": gameState.Player1.PlayerToken,
-			"player2_id":    gameState.Player2.ID,
-			"player2_token": gameState.Player2.PlayerToken,
-			"stake":         gameState.StakeAmount,
-			"target_suit":   gameState.TargetSuit,
-			"message":       "Test draw game created. Player 1 has the 7 of target suit. When played, game will end in a draw (both players have 17 points).",
-			"instructions":  "Connect both players via WebSocket, then have Player 1 play the 7 of Hearts to trigger the draw.",
-		})
-	}
-}
 
 // DeclineMatchInvite handles declining a match invitation
 // POST /api/v1/match/decline
@@ -1112,7 +1046,7 @@ func DeclineMatchInvite(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.
 		// Notify the inviter about the decline via SMS
 		go func() {
 			ctx := context.Background()
-			message := fmt.Sprintf("Your PlayMatatu match invite (Code: %s) was declined. You can create a new match anytime!", matchCode)
+			message := fmt.Sprintf("Your PlayPool match invite (Code: %s) was declined. You can create a new match anytime!", matchCode)
 
 			if _, err := sms.SendSMS(ctx, queue.InviterPhone, message); err != nil {
 				log.Printf("Failed to send decline SMS to %s: %v", queue.InviterPhone, err)

@@ -15,7 +15,7 @@ const version = "2.0.0-game-links" // Updated with game link changes
 func HealthCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status":  "ok",
-		"service": "playmatatu-api",
+		"service": "playpool-api",
 		"version": version,
 		"uptime":  time.Since(startTime).String(),
 	})

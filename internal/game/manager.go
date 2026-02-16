@@ -876,7 +876,7 @@ func (gm *GameManager) ExpireQueuedEntries() (int, error) {
 }
 
 // RecordMove records a single move in game_moves (synchronous). It's best-effort and logs errors.
-func (gm *GameManager) RecordMove(sessionID int, playerID int, moveType, cardPlayed, suitDeclared string) {
+func (gm *GameManager) RecordMove(sessionID int, playerID int, moveType string) {
 	if gm == nil || gm.db == nil || sessionID == 0 || playerID == 0 {
 		return
 	}
@@ -889,8 +889,8 @@ func (gm *GameManager) RecordMove(sessionID int, playerID int, moveType, cardPla
 	}
 	moveNumber := maxMove + 1
 
-	_, err := gm.db.Exec(`INSERT INTO game_moves (session_id, player_id, move_number, move_type, card_played, suit_declared, created_at) VALUES ($1,$2,$3,$4,$5,$6,NOW())`,
-		sessionID, playerID, moveNumber, moveType, cardPlayed, suitDeclared)
+	_, err := gm.db.Exec(`INSERT INTO game_moves (session_id, player_id, move_number, move_type, created_at) VALUES ($1,$2,$3,$4,NOW())`,
+		sessionID, playerID, moveNumber, moveType)
 	if err != nil {
 		log.Printf("[DB] Failed to record move for session %d: %v", sessionID, err)
 	}

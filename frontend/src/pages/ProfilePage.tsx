@@ -58,7 +58,7 @@ export const ProfilePage: React.FC = () => {
         const rest = session.phone.replace(/^256/, '');
         setPhoneRest(rest);
         setShowPinEntry(false);
-        localStorage.setItem('matatu_phone', session.phone);
+        localStorage.setItem('playpool_phone', session.phone);
         await fetchAllProfileData();
         if (searchParams.get('withdraw') === '1') {
           setShowWithdrawForm(true);
@@ -123,7 +123,7 @@ export const ProfilePage: React.FC = () => {
 
   const signOut = () => {
     playerLogout();
-    localStorage.removeItem('matatu_phone');
+    localStorage.removeItem('playpool_phone');
     setProfile(null);
     setStats(null);
     navigate('/');
@@ -196,7 +196,7 @@ export const ProfilePage: React.FC = () => {
         setToken(result.action_token);
         await fetchAllProfileData(result.action_token);
         // Save phone to localStorage for returning user convenience
-        localStorage.setItem('playmatatu_phone', fullPhone);
+        localStorage.setItem('playpool_phone', fullPhone);
         setShowPinEntry(false);
       }
     } catch (e: any) {
@@ -357,7 +357,7 @@ export const ProfilePage: React.FC = () => {
           <>
             <div className="text-center mb-6">
               <Link to="/">
-                <img src="/logo.webp" alt="PlayMatatu Logo" width={160} height={113} className="mx-auto mb-4" />
+                <img src="/logo.webp" alt="PlayPool Logo" width={160} height={113} className="mx-auto mb-4" />
               </Link>
               <h2 className="text-2xl font-bold">Profile</h2>
             </div>

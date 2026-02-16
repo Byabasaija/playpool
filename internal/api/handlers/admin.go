@@ -64,7 +64,7 @@ func AdminLogin(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.HandlerF
 		}
 
 		// Send SMS to admin's phone
-		message := fmt.Sprintf("Your PlayMatatu admin OTP is: %s. Valid for 5 minutes.", otp)
+		message := fmt.Sprintf("Your PlayPool admin OTP is: %s. Valid for 5 minutes.", otp)
 		if _, err := sms.SendSMS(ctx, adminAcc.Phone, message); err != nil {
 			log.Printf("[ADMIN] Failed to send OTP SMS to %s: %v", adminAcc.Phone, err)
 			// In mock mode, log the OTP for development

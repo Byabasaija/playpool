@@ -37,7 +37,7 @@ export function AdminSidebar({ collapsed, onToggle }: AdminSidebarProps) {
       >
         <div className="p-4 border-b border-white/10 flex items-center justify-between">
           {!collapsed && (
-            <span className="text-sm font-bold tracking-wide">PlayMatatu</span>
+            <span className="text-sm font-bold tracking-wide">PlayPool</span>
           )}
           <button
             onClick={onToggle}

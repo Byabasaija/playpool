@@ -3,7 +3,6 @@ package game
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"log"
 	"time"
 
@@ -101,31 +100,6 @@ func (gm *GameManager) CreatePoolGameFromMatch(player1, player2 QueuedPlayer, ga
 	log.Printf("[MATCHMAKER] Pool game created: %s (token=%s)", gameID, gameToken)
 }
 
-// GetPoolGameByToken retrieves a pool game by its token.
-func (gm *GameManager) GetPoolGameByToken(token string) (*PoolGameState, error) {
-	gm.mu.RLock()
-	for _, g := range gm.games {
-		if g.Token == token {
-			gm.mu.RUnlock()
-			return g, nil
-		}
-	}
-	gm.mu.RUnlock()
-
-	return nil, errors.New("pool game not found")
-}
-
-// GetPoolGameByID retrieves a pool game by its ID.
-func (gm *GameManager) GetPoolGameByID(gameID string) (*PoolGameState, error) {
-	gm.mu.RLock()
-	g, exists := gm.games[gameID]
-	gm.mu.RUnlock()
-	if exists {
-		return g, nil
-	}
-	return nil, errors.New("pool game not found")
-}
-
 // CreateTestPoolGame creates a test pool game for development.
 func (gm *GameManager) CreateTestPoolGame(player1Phone, player2Phone string, stakeAmount int) (*PoolGameState, error) {
 	gm.mu.Lock()
@@ -152,18 +126,3 @@ func (gm *GameManager) CreateTestPoolGame(player1Phone, player2Phone string, sta
 	return g, nil
 }
 
-// EndPoolGame removes a completed pool game from the manager.
-func (gm *GameManager) EndPoolGame(gameID string) error {
-	gm.mu.Lock()
-	defer gm.mu.Unlock()
-
-	g, exists := gm.games[gameID]
-	if !exists {
-		return errors.New("pool game not found")
-	}
-
-	delete(gm.playerToGame, g.Player1.ID)
-	delete(gm.playerToGame, g.Player2.ID)
-	delete(gm.games, gameID)
-	return nil
-}

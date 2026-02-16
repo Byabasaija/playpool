@@ -685,7 +685,7 @@ func (g *PoolGameState) ForfeitByDisconnect(disconnectedPlayerID string) {
 	if Manager != nil {
 		dbID := g.getDBPlayerIDLocked(disconnectedPlayerID)
 		if dbID > 0 {
-			Manager.RecordMove(g.SessionID, dbID, "FORFEIT", "", "")
+			Manager.RecordMove(g.SessionID, dbID, "FORFEIT")
 		}
 		Manager.SaveFinalGameState(g)
 	}
@@ -709,7 +709,7 @@ func (g *PoolGameState) ForfeitByConcede(concedingPlayerID string) {
 	if Manager != nil {
 		dbID := g.getDBPlayerIDLocked(concedingPlayerID)
 		if dbID > 0 {
-			Manager.RecordMove(g.SessionID, dbID, "CONCEDE", "", "")
+			Manager.RecordMove(g.SessionID, dbID, "CONCEDE")
 		}
 		Manager.SaveFinalGameState(g)
 	}

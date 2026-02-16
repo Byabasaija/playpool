@@ -1,17 +1,17 @@
 #!/bin/bash
 
-# PlayMatatu Deployment Script
-# This script handles deployment of the PlayMatatu backend service
+# PlayPool Deployment Script
+# This script handles deployment of the PlayPool backend service
 
 set -e
 
 # Configuration
-APP_NAME="playmatatu"
-APP_USER="playmatatu"
-APP_DIR="/opt/playmatatu"
-BINARY_NAME="playmatatu"
-SERVICE_NAME="playmatatu.service"
-NGINX_SITE="playmatatu"
+APP_NAME="playpool"
+APP_USER="playpool"
+APP_DIR="/opt/playpool"
+BINARY_NAME="playpool"
+SERVICE_NAME="playpool.service"
+NGINX_SITE="playpool"
 
 # Colors for output
 RED='\033[0;31m'
@@ -118,10 +118,10 @@ deploy_supervisor_service() {
     fi
 
     # Copy supervisor config
-    if [[ -f "scripts/playmatatu.supervisor.conf" ]]; then
+    if [[ -f "scripts/playpool.supervisor.conf" ]]; then
         log_info "Copying supervisor config"
-        sudo cp scripts/playmatatu.supervisor.conf /etc/supervisor/conf.d/playmatatu.conf
-        sudo chown root:root /etc/supervisor/conf.d/playmatatu.conf
+        sudo cp scripts/playpool.supervisor.conf /etc/supervisor/conf.d/playpool.conf
+        sudo chown root:root /etc/supervisor/conf.d/playpool.conf
 
         # Ensure logs directory exists and is writable by app user
         sudo mkdir -p $APP_DIR/logs
@@ -131,7 +131,7 @@ deploy_supervisor_service() {
         sudo supervisorctl reread || true
         sudo supervisorctl update || true
         # Start the program if not started
-        sudo supervisorctl start playmatatu || true
+        sudo supervisorctl start playpool || true
     else
         log_warn "Supervisor config not found in scripts/, skipping supervisor deployment"
     fi
@@ -171,7 +171,7 @@ run_migrations() {
 
 # Function to restart service via supervisor
 restart_service() {
-    log_info "Restarting playmatatu via supervisor..."
+    log_info "Restarting playpool via supervisor..."
 
     if ! command -v supervisorctl >/dev/null 2>&1; then
         log_error "supervisorctl not available"
@@ -179,15 +179,15 @@ restart_service() {
     fi
 
     # Attempt restart
-    sudo supervisorctl stop playmatatu || true
+    sudo supervisorctl stop playpool || true
     sleep 2
-    sudo supervisorctl start playmatatu || true
+    sudo supervisorctl start playpool || true
 
     # Wait and check status
     sleep 3
 
     local status
-    status=$(sudo supervisorctl status playmatatu 2>/dev/null || true)
+    status=$(sudo supervisorctl status playpool 2>/dev/null || true)
     if echo "$status" | grep -q "RUNNING"; then
         log_info "Service started successfully"
         echo "$status"
@@ -262,7 +262,7 @@ rollback() {
     if [[ -f "$APP_DIR/backups/${BINARY_NAME}.previous" ]]; then
         # Stop via supervisor if available, else try systemctl
         if command -v supervisorctl >/dev/null 2>&1; then
-            sudo supervisorctl stop playmatatu || true
+            sudo supervisorctl stop playpool || true
         else
             sudo systemctl stop $SERVICE_NAME || true
         fi
@@ -271,7 +271,7 @@ rollback() {
 
         # Start via supervisor if available, else systemctl
         if command -v supervisorctl >/dev/null 2>&1; then
-            sudo supervisorctl start playmatatu || true
+            sudo supervisorctl start playpool || true
         else
             sudo systemctl start $SERVICE_NAME || true
         fi
@@ -301,17 +301,17 @@ case "${1:-deploy}" in
         ;;
     "status")
         if command -v supervisorctl >/dev/null 2>&1; then
-            sudo supervisorctl status playmatatu
+            sudo supervisorctl status playpool
         else
             echo "supervisorctl not available"
         fi
         ;;
     "logs")
         if command -v supervisorctl >/dev/null 2>&1; then
-            sudo supervisorctl tail -f playmatatu stdout || sudo tail -n 200 -f /opt/playmatatu/logs/playmatatu.log
+            sudo supervisorctl tail -f playpool stdout || sudo tail -n 200 -f /opt/playpool/logs/playpool.log
         else
-            echo "supervisorctl not available; tailing logs from /opt/playmatatu/logs/"
-            sudo tail -n 200 -f /opt/playmatatu/logs/playmatatu.log
+            echo "supervisorctl not available; tailing logs from /opt/playpool/logs/"
+            sudo tail -n 200 -f /opt/playpool/logs/playpool.log
         fi
         ;;
     "health")
