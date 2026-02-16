@@ -5,8 +5,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
-	"github.com/playmatatu/backend/internal/api/handlers"
-	"github.com/playmatatu/backend/internal/config"
+	"github.com/playpool/backend/internal/api/handlers"
+	"github.com/playpool/backend/internal/config"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -48,6 +48,7 @@ func SetupRoutes(router *gin.Engine, db *sqlx.DB, rdb *redis.Client, cfg *config
 			game.POST("/test/draw", handlers.CreateTestDrawGame(db, rdb, cfg)) // Dev only - test draw scenario
 			game.GET("/:token", handlers.GetGameState(db, rdb, cfg))
 			game.GET("/:token/ws", handlers.HandleGameWebSocket(db, rdb, cfg))
+			game.GET("/:token/pool-ws", handlers.HandlePoolWebSocket(db, rdb, cfg))
 		}
 
 		// Player endpoints

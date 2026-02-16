@@ -13,7 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
-	"github.com/playmatatu/backend/internal/game"
+	"github.com/playpool/backend/internal/game"
 )
 
 var upgrader = websocket.Upgrader{

@@ -7,8 +7,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
-	"github.com/playmatatu/backend/internal/config"
-	"github.com/playmatatu/backend/internal/payment"
+	"github.com/playpool/backend/internal/config"
+	"github.com/playpool/backend/internal/payment"
 	"github.com/redis/go-redis/v9"
 )
 

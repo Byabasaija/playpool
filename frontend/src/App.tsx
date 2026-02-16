@@ -1,9 +1,8 @@
 import { Routes, Route } from 'react-router-dom';
 import { LandingPage } from './pages/LandingPage';
-import { GamePage } from './pages/GamePage';
+import { PoolGamePage } from './pages/PoolGamePage';
 import { JoinPage } from './pages/JoinPage';
 import { ProfilePage } from './pages/ProfilePage';
-import { TestPage } from './pages/TestPage';
 import { RematchPage } from './pages/RematchPage';
 import { RequeuePage } from './pages/RequeuePage';
 import { RulesPage } from './pages/RulesPage';
@@ -32,11 +31,10 @@ function App() {
         <Route path="/requeue" element={<RequeuePage />} />
         <Route path="/join" element={<JoinPage />} />
         <Route path="/profile" element={<ProfilePage />} />
-        <Route path="/test" element={<TestPage />} />
         <Route path="/rematch" element={<RematchPage />} />
         <Route path="/rules" element={<RulesPage />} />
         <Route path="/terms" element={<TermsPage />} />
-        <Route path="/g/:token" element={<GamePage />} />
+        <Route path="/g/:token" element={<PoolGamePage />} />
 
         {/* Admin login (no layout) */}
         <Route path="/pm-admin" element={<AdminLoginPage />} />

@@ -8,7 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
-	"github.com/playmatatu/backend/internal/admin"
+	"github.com/playpool/backend/internal/admin"
 )
 
 // GetAdminPlayers returns a paginated list of players with search

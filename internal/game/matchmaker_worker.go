@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
-	"github.com/playmatatu/backend/internal/config"
-	"github.com/playmatatu/backend/internal/sms"
+	"github.com/playpool/backend/internal/config"
+	"github.com/playpool/backend/internal/sms"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -154,8 +154,8 @@ func tryMatchPair(ctx context.Context, db *sqlx.DB, rdb *redis.Client, cfg *conf
 	log.Printf("[MATCHMAKER] ✓ Match created: session=%d token=%s players=[%d,%d]",
 		sessionID, gameToken, players[0].PlayerID, players[1].PlayerID)
 
-	// Create in-memory game for WebSocket play
-	Manager.CreateGameFromMatch(players[0], players[1], gameToken, stake, cfg)
+	// Create in-memory pool game for WebSocket play
+	Manager.CreatePoolGameFromMatch(players[0], players[1], gameToken, stake, cfg)
 
 	// Send SMS to both players
 	go sendMatchSMS(cfg, gameToken, players[0], players[1])

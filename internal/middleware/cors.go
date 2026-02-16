@@ -7,7 +7,7 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	"github.com/playmatatu/backend/internal/config"
+	"github.com/playpool/backend/internal/config"
 )
 
 // CORSMiddleware returns a CORS middleware configured for the environment

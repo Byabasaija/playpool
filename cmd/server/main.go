@@ -7,17 +7,17 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
-	"github.com/playmatatu/backend/internal/admin"
-	"github.com/playmatatu/backend/internal/api"
-	"github.com/playmatatu/backend/internal/config"
-	"github.com/playmatatu/backend/internal/database"
-	"github.com/playmatatu/backend/internal/game"
-	"github.com/playmatatu/backend/internal/middleware"
-	"github.com/playmatatu/backend/internal/migrations"
-	"github.com/playmatatu/backend/internal/payment"
-	"github.com/playmatatu/backend/internal/redis"
-	"github.com/playmatatu/backend/internal/sms"
-	"github.com/playmatatu/backend/internal/ws"
+	"github.com/playpool/backend/internal/admin"
+	"github.com/playpool/backend/internal/api"
+	"github.com/playpool/backend/internal/config"
+	"github.com/playpool/backend/internal/database"
+	"github.com/playpool/backend/internal/game"
+	"github.com/playpool/backend/internal/middleware"
+	"github.com/playpool/backend/internal/migrations"
+	"github.com/playpool/backend/internal/payment"
+	"github.com/playpool/backend/internal/redis"
+	"github.com/playpool/backend/internal/sms"
+	"github.com/playpool/backend/internal/ws"
 )
 
 func main() {

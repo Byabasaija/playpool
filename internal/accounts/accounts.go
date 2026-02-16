@@ -6,7 +6,7 @@ import (
 	"log"
 
 	"github.com/jmoiron/sqlx"
-	"github.com/playmatatu/backend/internal/models"
+	"github.com/playpool/backend/internal/models"
 )
 
 // account types constants

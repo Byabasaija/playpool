@@ -7,7 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
-	"github.com/playmatatu/backend/internal/admin"
+	"github.com/playpool/backend/internal/admin"
 )
 
 // GetAdminWithdrawals returns a paginated list of withdrawal requests

@@ -553,6 +553,9 @@ export const LandingPage: React.FC = () => {
     if (pendingGameData) {
       const { full, stake, displayNameInput, opts } = pendingGameData;
 
+      // Store phone in localStorage so future visits work properly
+      localStorage.setItem('matatu_phone', full);
+
       // Add match code if specified
       if (matchCodeInput) opts.matchcode = matchCodeInput.trim().toUpperCase();
 

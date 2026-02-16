@@ -22,13 +22,16 @@ export const ProfilePage: React.FC = () => {
 
   // PIN-related state
   const [hasPin, setHasPin] = useState<boolean>(false);
-  const [showPinEntry, setShowPinEntry] = useState<boolean>(true);
+  const [showPinEntry, setShowPinEntry] = useState<boolean>(false); // Start false, set true after auth check
   const [pinError, setPinError] = useState<string | undefined>(undefined);
   const [pinLoading, setPinLoading] = useState<boolean>(false);
   const [pinLockoutUntil, setPinLockoutUntil] = useState<string | null>(null);
   const [showForgotPin, setShowForgotPin] = useState<boolean>(false);
   const [forgotPinStep, setForgotPinStep] = useState<'otp' | 'new_pin' | 'confirm_pin'>('otp');
   const [newPin, setNewPin] = useState<string>('');
+
+  // Authentication checking state (prevents flicker)
+  const [authChecking, setAuthChecking] = useState(true);
   
   // Session-only token (not persisted)
   const [token, setToken] = useState<string | null>(null);
@@ -60,6 +63,7 @@ export const ProfilePage: React.FC = () => {
         if (searchParams.get('withdraw') === '1') {
           setShowWithdrawForm(true);
         }
+        setAuthChecking(false);
         return;
       }
 
@@ -68,7 +72,11 @@ export const ProfilePage: React.FC = () => {
         const rest = phoneParam.startsWith('256') ? phoneParam.slice(3) : phoneParam;
         setPhoneRest(rest);
         checkPlayerAndPin(rest);
+      } else {
+        setAuthChecking(false);
       }
+    }).catch(() => {
+      setAuthChecking(false);
     });
   }, [searchParams]);
 
@@ -143,6 +151,8 @@ export const ProfilePage: React.FC = () => {
       }
     } catch (e) {
       setPlayerExists(false);
+    } finally {
+      setAuthChecking(false);
     }
   };
 
@@ -337,14 +347,22 @@ export const ProfilePage: React.FC = () => {
   return (
     <div className="min-h-screen flex items-center justify-center">
       <div className="max-w-md mx-auto rounded-2xl p-8">
-        <div className="text-center mb-6">
-          <Link to="/">
-            <img src="/logo.webp" alt="PlayMatatu Logo" width={160} height={113} className="mx-auto mb-4" />
-          </Link>
-          <h2 className="text-2xl font-bold">Profile</h2>
-        </div>
+        {/* Show loading while checking authentication */}
+        {authChecking ? (
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#D4A574] mx-auto mb-4"></div>
+            <p className="text-gray-600">Loading...</p>
+          </div>
+        ) : (
+          <>
+            <div className="text-center mb-6">
+              <Link to="/">
+                <img src="/logo.webp" alt="PlayMatatu Logo" width={160} height={113} className="mx-auto mb-4" />
+              </Link>
+              <h2 className="text-2xl font-bold">Profile</h2>
+            </div>
 
-        {showPinEntry ? (
+            {showPinEntry ? (
           <div className="space-y-4">
             {/* Forgot PIN flow */}
             {showForgotPin ? (
@@ -595,6 +613,8 @@ export const ProfilePage: React.FC = () => {
               </button>
             </div>
           </div>
+        )}
+          </>
         )}
       </div>
     </div>

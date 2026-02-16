@@ -14,21 +14,21 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
-	"github.com/playmatatu/backend/internal/accounts"
-	"github.com/playmatatu/backend/internal/config"
-	"github.com/playmatatu/backend/internal/models"
-	"github.com/playmatatu/backend/internal/sms"
+	"github.com/playpool/backend/internal/accounts"
+	"github.com/playpool/backend/internal/config"
+	"github.com/playpool/backend/internal/models"
+	"github.com/playpool/backend/internal/sms"
 	"github.com/redis/go-redis/v9"
 )
 
 // GameManager manages all active games and matchmaking
 type GameManager struct {
-	games            map[string]*GameState // keyed by game ID
-	playerToGame     map[string]string     // player ID -> game ID
-	matchmakingQueue map[int][]QueueEntry  // stake amount -> queue of players
-	rdb              *redis.Client         // Redis client for persistence
-	db               *sqlx.DB              // SQL DB for persistent records
-	config           *config.Config        // Application config
+	games            map[string]*PoolGameState // keyed by game ID
+	playerToGame     map[string]string         // player ID -> game ID
+	matchmakingQueue map[int][]QueueEntry      // stake amount -> queue of players
+	rdb              *redis.Client             // Redis client for persistence
+	db               *sqlx.DB                  // SQL DB for persistent records
+	config           *config.Config            // Application config
 	mu               sync.RWMutex
 }
 
@@ -86,7 +86,7 @@ func InitializeManager(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) {
 // NewGameManager creates a new game manager
 func NewGameManager(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) *GameManager {
 	return &GameManager{
-		games:            make(map[string]*GameState),
+		games:            make(map[string]*PoolGameState),
 		playerToGame:     make(map[string]string),
 		matchmakingQueue: make(map[int][]QueueEntry),
 		rdb:              rdb,
@@ -143,7 +143,7 @@ func (gm *GameManager) JoinQueue(playerID, phoneNumber string, stakeAmount int, 
 				player1Token := generateToken(16)
 				player2Token := generateToken(16)
 
-				game := NewGame(
+				game := NewPoolGame(
 					gameID,
 					gameToken,
 					opponent.QueueToken,
@@ -169,11 +169,11 @@ func (gm *GameManager) JoinQueue(playerID, phoneNumber string, stakeAmount int, 
 
 				// Log the mapping for debugging
 				log.Printf("[MATCHMAKING] Game created: %s", gameID)
-				log.Printf("[MATCHMAKING] Player1: %s → Game: %s", opponent.QueueToken, gameID)
-				log.Printf("[MATCHMAKING] Player2: %s → Game: %s", playerID, gameID)
+				log.Printf("[MATCHMAKING] Player1: %s -> Game: %s", opponent.QueueToken, gameID)
+				log.Printf("[MATCHMAKING] Player2: %s -> Game: %s", playerID, gameID)
 
 				// Save to Redis
-				gm.saveGameToRedis(game)
+				gm.savePoolGameToRedis(game)
 
 				// Persist a game_sessions row if we have DB player ids
 				var sessionID int
@@ -198,7 +198,7 @@ func (gm *GameManager) JoinQueue(playerID, phoneNumber string, stakeAmount int, 
 							}
 						}
 						// Save game to redis (already set)
-						gm.saveGameToRedis(game)
+						gm.savePoolGameToRedis(game)
 					}
 				}
 
@@ -260,77 +260,20 @@ func (gm *GameManager) LeaveQueue(queueToken string) bool {
 	return false
 }
 
-// CreateGameFromMatch creates an in-memory game from a DB-matched pair (called by matchmaker worker)
-func (gm *GameManager) CreateGameFromMatch(player1, player2 QueuedPlayer, gameToken string, stake float64, cfg *config.Config) {
-	gm.mu.Lock()
-	defer gm.mu.Unlock()
-
-	// Generate game ID and player tokens
-	gameID := generateGameID()
-	player1Token := generateToken(16)
-	player2Token := generateToken(16)
-
-	// Create the game
-	game := NewGame(
-		gameID,
-		gameToken,
-		player1.QueueToken,
-		player1.PhoneNumber,
-		player1Token,
-		player1.PlayerID,
-		player1.DisplayName,
-		player2.QueueToken,
-		player2.PhoneNumber,
-		player2Token,
-		player2.PlayerID,
-		player2.DisplayName,
-		int(stake),
-	)
-
-	// Store the game
-	gm.games[gameID] = game
-	gm.playerToGame[player1.QueueToken] = gameID
-	gm.playerToGame[player2.QueueToken] = gameID
-
-	log.Printf("[MATCHMAKER] Game created in memory: %s (token=%s)", gameID, gameToken)
-	log.Printf("[MATCHMAKER] Player1: %s (db_id=%d) → Game: %s", player1.QueueToken, player1.PlayerID, gameID)
-	log.Printf("[MATCHMAKER] Player2: %s (db_id=%d) → Game: %s", player2.QueueToken, player2.PlayerID, gameID)
-
-	// Save to Redis for persistence
-	gm.saveGameToRedis(game)
-}
-
 // GetGame retrieves a game by ID
-func (gm *GameManager) GetGame(gameID string) (*GameState, error) {
+func (gm *GameManager) GetGame(gameID string) (*PoolGameState, error) {
 	gm.mu.RLock()
-	// Check in memory first
 	game, exists := gm.games[gameID]
+	gm.mu.RUnlock()
 	if exists {
-		gm.mu.RUnlock()
 		return game, nil
 	}
-	gm.mu.RUnlock()
-
-	// Not found in memory - need to find token to check Redis
-	// Look through all games in Redis to find one with this ID
-	// This is less efficient but handles the reconnect case
-	gm.mu.RLock()
-	for _, memGame := range gm.games {
-		if memGame.ID == gameID {
-			gm.mu.RUnlock()
-			return memGame, nil
-		}
-	}
-	gm.mu.RUnlock()
-
-	// Game not found in memory at all
 	return nil, errors.New("game not found")
 }
 
 // GetGameByToken retrieves a game by its token
-func (gm *GameManager) GetGameByToken(token string) (*GameState, error) {
+func (gm *GameManager) GetGameByToken(token string) (*PoolGameState, error) {
 	gm.mu.RLock()
-	// Check in memory first
 	for _, game := range gm.games {
 		if game.Token == token {
 			gm.mu.RUnlock()
@@ -340,27 +283,12 @@ func (gm *GameManager) GetGameByToken(token string) (*GameState, error) {
 	}
 	gm.mu.RUnlock()
 
-	log.Printf("[DEBUG] Game %s not found in memory, checking Redis", token)
-	// Not found in memory, try Redis
-	game, err := gm.loadGameFromRedis(token)
-	if err != nil {
-		log.Printf("[DEBUG] Game %s not found in Redis: %v", token, err)
-		return nil, errors.New("game not found")
-	}
-
-	log.Printf("[DEBUG] Loaded game %s from Redis", token)
-	// Load into memory and return
-	gm.mu.Lock()
-	gm.games[game.ID] = game
-	gm.playerToGame[game.Player1.ID] = game.ID
-	gm.playerToGame[game.Player2.ID] = game.ID
-	gm.mu.Unlock()
-
-	return game, nil
+	log.Printf("[DEBUG] Game %s not found in memory", token)
+	return nil, errors.New("game not found")
 }
 
 // GetGameForPlayer retrieves the active game for a player
-func (gm *GameManager) GetGameForPlayer(playerID string) (*GameState, error) {
+func (gm *GameManager) GetGameForPlayer(playerID string) (*PoolGameState, error) {
 	gm.mu.RLock()
 	defer gm.mu.RUnlock()
 
@@ -474,284 +402,6 @@ func (gm *GameManager) CleanupExpiredEntries(maxAge time.Duration) int {
 	return removed
 }
 
-// CreateTestGame creates a game for testing (bypasses matchmaking)
-func (gm *GameManager) CreateTestGame(player1Phone, player2Phone string, stakeAmount int) (*GameState, error) {
-	gm.mu.Lock()
-	defer gm.mu.Unlock()
-
-	gameID := generateGameID()
-	gameToken := generateToken(16)
-	player1ID := "p1_" + generateToken(4)
-	player2ID := "p2_" + generateToken(4)
-
-	// Generate test player tokens
-	player1Token := generateToken(16)
-	player2Token := generateToken(16)
-
-	game := NewGame(
-		gameID,
-		gameToken,
-		player1ID,
-		player1Phone,
-		player1Token,
-		0,             // player1 DB id (test)
-		"TestPlayer1", // player1 display name
-		player2ID,
-		player2Phone,
-		player2Token,
-		0,             // player2 DB id (test)
-		"TestPlayer2", // player2 display name
-		stakeAmount,
-	)
-
-	if err := game.Initialize(); err != nil {
-		return nil, err
-	}
-
-	gm.games[gameID] = game
-	gm.playerToGame[player1ID] = gameID
-	gm.playerToGame[player2ID] = gameID
-
-	return game, nil
-}
-
-// CreateTestDrawGame creates a game that will end in a draw (for testing draw functionality)
-func (gm *GameManager) CreateTestDrawGame(player1Phone, player2Phone string, stakeAmount int) (*GameState, error) {
-	gm.mu.Lock()
-	defer gm.mu.Unlock()
-
-	gameID := generateGameID()
-	gameToken := generateToken(16)
-	player1ID := "p1_" + generateToken(4)
-	player2ID := "p2_" + generateToken(4)
-
-	// Generate test player tokens
-	player1Token := generateToken(16)
-	player2Token := generateToken(16)
-
-	game := NewGame(
-		gameID,
-		gameToken,
-		player1ID,
-		player1Phone,
-		player1Token,
-		0,             // player1 DB id (test)
-		"TestPlayer1", // player1 display name
-		player2ID,
-		player2Phone,
-		player2Token,
-		0,             // player2 DB id (test)
-		"TestPlayer2", // player2 display name
-		stakeAmount,
-	)
-
-	// Don't call Initialize() - we'll set up the game state manually
-	// Set the target suit to Hearts
-	game.TargetSuit = Hearts
-	game.TargetCard = Card{Suit: Hearts, Rank: King} // The target card (not the 7)
-
-	// Create hands with equal point values
-	// Player 1: 7♥ (chop card), 5♠, 5♦, 7♣ = 5 + 5 + 7 = 17 points after playing 7♥
-	// Player 2: 8♣, 9♦ = 8 + 9 = 17 points
-	// Both players have 17 points when 7♥ is played → DRAW!
-	game.Player1.Hand = []Card{
-		{Suit: Hearts, Rank: Seven},  // Chop card - will trigger draw
-		{Suit: Spades, Rank: Five},   // 5 points
-		{Suit: Diamonds, Rank: Five}, // 5 points
-		{Suit: Clubs, Rank: Seven},   // 7 points (total 17 when 7♥ is played)
-	}
-
-	game.Player2.Hand = []Card{
-		{Suit: Clubs, Rank: Eight},   // 8 points
-		{Suit: Diamonds, Rank: Nine}, // 9 points (total 17)
-	}
-
-	// Set up the deck with remaining cards (excluding the ones in hands)
-	game.Deck = NewDeck()
-	// Remove cards that are in player hands
-	cardsInHands := append(game.Player1.Hand, game.Player2.Hand...)
-	newCards := []Card{}
-	for _, card := range game.Deck.Cards {
-		found := false
-		for _, handCard := range cardsInHands {
-			if card.Suit == handCard.Suit && card.Rank == handCard.Rank {
-				found = true
-				break
-			}
-		}
-		if !found {
-			newCards = append(newCards, card)
-		}
-	}
-	game.Deck.Cards = newCards
-
-	// Set the first card in discard pile to a Heart so Player 1 can play 7♥ immediately
-	game.DiscardPile = []Card{{Suit: Hearts, Rank: Three}}
-	game.CurrentSuit = Hearts
-
-	// Player 1 starts (they have the chop card)
-	game.CurrentTurn = player1ID
-
-	// Mark game as in progress
-	game.Status = StatusInProgress
-	now := time.Now()
-	game.StartedAt = &now
-
-	gm.games[gameID] = game
-	gm.playerToGame[player1ID] = gameID
-	gm.playerToGame[player2ID] = gameID
-
-	return game, nil
-}
-
-// parseCardsFromData reconstructs cards from JSON data
-func parseCardsFromData(data []interface{}) []Card {
-	var cards []Card
-	for _, cardData := range data {
-		if cardMap, ok := cardData.(map[string]interface{}); ok {
-			var card Card
-			if suit, ok := cardMap["suit"].(string); ok {
-				card.Suit = Suit(suit)
-			}
-			if rank, ok := cardMap["rank"].(string); ok {
-				card.Rank = Rank(rank)
-			}
-			cards = append(cards, card)
-		}
-	}
-	return cards
-}
-
-// saveGameToRedis persists game state to Redis
-func (gm *GameManager) saveGameToRedis(game *GameState) error {
-	if gm.rdb == nil {
-		return nil // No Redis client, skip
-	}
-
-	ctx := context.Background()
-	key := "game:" + game.Token + ":state"
-
-	// Create serializable game data
-	gameData := map[string]interface{}{
-		"id":            game.ID,
-		"token":         game.Token,
-		"player1":       game.Player1,
-		"player2":       game.Player2,
-		"deck_cards":    game.Deck.GetCards(),
-		"discard_pile":  game.DiscardPile,
-		"current_turn":  game.CurrentTurn,
-		"current_suit":  game.CurrentSuit,
-		"draw_stack":    game.DrawStack,
-		"status":        game.Status,
-		"winner":        game.Winner,
-		"stake_amount":  game.StakeAmount,
-		"created_at":    game.CreatedAt,
-		"started_at":    game.StartedAt,
-		"completed_at":  game.CompletedAt,
-		"last_activity": game.LastActivity,
-		"session_id":    game.SessionID,
-	}
-
-	data, err := json.Marshal(gameData)
-	if err != nil {
-		return err
-	}
-
-	// Save with 1 hour expiration
-	return gm.rdb.SetEx(ctx, key, data, time.Hour).Err()
-}
-
-// loadGameFromRedis restores game state from Redis
-func (gm *GameManager) loadGameFromRedis(token string) (*GameState, error) {
-	if gm.rdb == nil {
-		return nil, errors.New("no redis client")
-	}
-
-	ctx := context.Background()
-	key := "game:" + token + ":state"
-
-	data, err := gm.rdb.Get(ctx, key).Result()
-	if err == redis.Nil {
-		return nil, errors.New("game not found in redis")
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	var gameData map[string]interface{}
-	if err := json.Unmarshal([]byte(data), &gameData); err != nil {
-		return nil, err
-	}
-
-	// Reconstruct game state with safe type assertions
-	game := &GameState{
-		LastActivity: time.Now(), // Update last activity
-	}
-
-	// Safe string parsing
-	if id, ok := gameData["id"].(string); ok {
-		game.ID = id
-	}
-	if token, ok := gameData["token"].(string); ok {
-		game.Token = token
-	}
-	if currentTurn, ok := gameData["current_turn"].(string); ok {
-		game.CurrentTurn = currentTurn
-	}
-	if currentSuit, ok := gameData["current_suit"].(string); ok {
-		game.CurrentSuit = Suit(currentSuit)
-	}
-	if status, ok := gameData["status"].(string); ok {
-		game.Status = GameStatus(status)
-	}
-	if winner, ok := gameData["winner"].(string); ok {
-		game.Winner = winner
-	}
-
-	// Safe numeric parsing
-	if drawStack, ok := gameData["draw_stack"].(float64); ok {
-		game.DrawStack = int(drawStack)
-	}
-	if stakeAmount, ok := gameData["stake_amount"].(float64); ok {
-		game.StakeAmount = int(stakeAmount)
-	}
-
-	// Parse timestamps
-	if createdAt, ok := gameData["created_at"].(string); ok {
-		if t, err := time.Parse(time.RFC3339, createdAt); err == nil {
-			game.CreatedAt = t
-		}
-	}
-	if startedAt, ok := gameData["started_at"]; ok && startedAt != nil {
-		if startedAtStr, ok := startedAt.(string); ok {
-			if t, err := time.Parse(time.RFC3339, startedAtStr); err == nil {
-				game.StartedAt = &t
-			}
-		}
-	}
-
-	// Parse players
-	if p1Data, ok := gameData["player1"].(map[string]interface{}); ok {
-		game.Player1 = parsePlayerFromData(p1Data)
-	}
-	if p2Data, ok := gameData["player2"].(map[string]interface{}); ok {
-		game.Player2 = parsePlayerFromData(p2Data)
-	}
-
-	// Parse deck
-	if deckData, ok := gameData["deck_cards"].([]interface{}); ok {
-		game.Deck = NewDeck()
-		game.Deck.SetCards(parseCardsFromData(deckData))
-	}
-
-	// Parse discard pile
-	if discardData, ok := gameData["discard_pile"].([]interface{}); ok {
-		game.DiscardPile = parseCardsFromData(discardData)
-	}
-
-	return game, nil
-}
-
 // RecoverGamesFromRedis scans Redis for active game states and preloads them into memory.
 // This allows in-progress games to survive a server restart as long as Redis still has them.
 func (gm *GameManager) RecoverGamesFromRedis() error {
@@ -776,26 +426,99 @@ func (gm *GameManager) RecoverGamesFromRedis() error {
 			}
 			token := key[len("game:") : len(key)-len(":state")]
 
-			game, err := gm.loadGameFromRedis(token)
+			data, err := gm.rdb.Get(ctx, key).Result()
 			if err != nil {
-				log.Printf("[RECOVERY] Failed to load game %s: %v", token, err)
+				log.Printf("[RECOVERY] Failed to get key %s: %v", key, err)
 				continue
 			}
 
-			// Only recover non-completed games
-			if game.Status == StatusCompleted {
+			var gameData map[string]interface{}
+			if err := json.Unmarshal([]byte(data), &gameData); err != nil {
+				log.Printf("[RECOVERY] Failed to unmarshal game %s: %v", token, err)
+				continue
+			}
+
+			// Only recover pool games
+			gameType, _ := gameData["game_type"].(string)
+			if gameType != "pool" {
+				continue
+			}
+
+			status, _ := gameData["status"].(string)
+			if GameStatus(status) == StatusCompleted {
+				continue
+			}
+
+			// Reconstruct pool game state from Redis data
+			game := &PoolGameState{
+				LastActivity: time.Now(),
+			}
+			if id, ok := gameData["id"].(string); ok {
+				game.ID = id
+			}
+			if tok, ok := gameData["token"].(string); ok {
+				game.Token = tok
+			}
+			if ct, ok := gameData["current_turn"].(string); ok {
+				game.CurrentTurn = ct
+			}
+			if s, ok := gameData["status"].(string); ok {
+				game.Status = GameStatus(s)
+			}
+			if w, ok := gameData["winner"].(string); ok {
+				game.Winner = w
+			}
+			if wt, ok := gameData["win_type"].(string); ok {
+				game.WinType = wt
+			}
+			if sa, ok := gameData["stake_amount"].(float64); ok {
+				game.StakeAmount = int(sa)
+			}
+			if sn, ok := gameData["shot_number"].(float64); ok {
+				game.ShotNumber = int(sn)
+			}
+			if ib, ok := gameData["is_break_shot"].(bool); ok {
+				game.IsBreakShot = ib
+			}
+			if bih, ok := gameData["ball_in_hand"].(bool); ok {
+				game.BallInHand = bih
+			}
+			if bihp, ok := gameData["ball_in_hand_player"].(string); ok {
+				game.BallInHandPlayer = bihp
+			}
+			if sid, ok := gameData["session_id"].(float64); ok {
+				game.SessionID = int(sid)
+			}
+			if ca, ok := gameData["created_at"].(string); ok {
+				if t, err := time.Parse(time.RFC3339, ca); err == nil {
+					game.CreatedAt = t
+				}
+			}
+			if sa, ok := gameData["started_at"]; ok && sa != nil {
+				if saStr, ok := sa.(string); ok {
+					if t, err := time.Parse(time.RFC3339, saStr); err == nil {
+						game.StartedAt = &t
+					}
+				}
+			}
+			// Parse players from JSON
+			if p1Data, ok := gameData["player1"].(map[string]interface{}); ok {
+				game.Player1 = parsePoolPlayerFromData(p1Data)
+			}
+			if p2Data, ok := gameData["player2"].(map[string]interface{}); ok {
+				game.Player2 = parsePoolPlayerFromData(p2Data)
+			}
+
+			if game.ID == "" || game.Player1 == nil || game.Player2 == nil {
+				log.Printf("[RECOVERY] Skipping incomplete game %s", token)
 				continue
 			}
 
 			gm.mu.Lock()
 			if _, exists := gm.games[game.ID]; !exists {
 				gm.games[game.ID] = game
-				if game.Player1 != nil {
-					gm.playerToGame[game.Player1.ID] = game.ID
-				}
-				if game.Player2 != nil {
-					gm.playerToGame[game.Player2.ID] = game.ID
-				}
+				gm.playerToGame[game.Player1.ID] = game.ID
+				gm.playerToGame[game.Player2.ID] = game.ID
 				recovered++
 			}
 			gm.mu.Unlock()
@@ -811,10 +534,11 @@ func (gm *GameManager) RecoverGamesFromRedis() error {
 	return nil
 }
 
-// parsePlayerFromData reconstructs a Player from JSON data
-func parsePlayerFromData(data map[string]interface{}) *Player {
-	player := &Player{
+// parsePoolPlayerFromData reconstructs a PoolPlayer from JSON data
+func parsePoolPlayerFromData(data map[string]interface{}) *PoolPlayer {
+	player := &PoolPlayer{
 		Connected: false, // Reset connection status
+		BallGroup: GroupAny,
 	}
 
 	if id, ok := data["id"].(string); ok {
@@ -829,9 +553,8 @@ func parsePlayerFromData(data map[string]interface{}) *Player {
 	if dbID, ok := data["db_player_id"].(float64); ok {
 		player.DBPlayerID = int(dbID)
 	}
-
-	if handData, ok := data["hand"].([]interface{}); ok {
-		player.Hand = parseCardsFromData(handData)
+	if bg, ok := data["ball_group"].(string); ok {
+		player.BallGroup = BallGroup(bg)
 	}
 
 	return player
@@ -852,7 +575,7 @@ func (gm *GameManager) checkExpiredGames() {
 	// Collect candidates under read lock
 	gm.mu.RLock()
 	now := time.Now()
-	var expiredGames []*GameState
+	var expiredGames []*PoolGameState
 	for _, game := range gm.games {
 		if game.Status == StatusWaiting && now.After(game.ExpiresAt) {
 			expiredGames = append(expiredGames, game)
@@ -998,7 +721,7 @@ func (gm *GameManager) StartDisconnectChecker() {
 // checkDisconnectForfeits checks for players who disconnected >grace period
 func (gm *GameManager) checkDisconnectForfeits() {
 	gm.mu.RLock()
-	gamesToCheck := make([]*GameState, 0)
+	gamesToCheck := make([]*PoolGameState, 0)
 	for _, game := range gm.games {
 		if game.Status == StatusInProgress {
 			gamesToCheck = append(gamesToCheck, game)
@@ -1024,7 +747,6 @@ func (gm *GameManager) checkDisconnectForfeits() {
 
 		if forfeitPlayerID != "" {
 			game.ForfeitByDisconnect(forfeitPlayerID)
-			// log.Printf("[DISCONNECT FORFEIT] Player %s forfeited game %s", forfeitPlayerID, game.ID)
 		}
 	}
 }
@@ -1141,7 +863,7 @@ func (gm *GameManager) ExpireQueuedEntries() (int, error) {
 					return
 				}
 				requeueLink := fmt.Sprintf("%s/requeue?phone=%s", gm.config.FrontendURL, phone)
-				msg := fmt.Sprintf("PlayMatatu: No match found for your %.0f UGX stake. Click to try again: %s", stake, requeueLink)
+				msg := fmt.Sprintf("PlayPool: No match found for your %.0f UGX stake. Click to try again: %s", stake, requeueLink)
 				if _, err := sms.SendSMS(ctx, phone, msg); err != nil {
 					log.Printf("[QUEUE EXPIRY] Failed to send expiry SMS to %s: %v", phone, err)
 				} else {
@@ -1175,7 +897,7 @@ func (gm *GameManager) RecordMove(sessionID int, playerID int, moveType, cardPla
 }
 
 // SaveFinalGameState persists the final game state JSON and updates the session row
-func (gm *GameManager) SaveFinalGameState(g *GameState) {
+func (gm *GameManager) SaveFinalGameState(g *PoolGameState) {
 	if gm == nil || gm.db == nil || g == nil || g.SessionID == 0 {
 		return
 	}
@@ -1196,15 +918,13 @@ func (gm *GameManager) SaveFinalGameState(g *GameState) {
 
 	// Update session status and winner if available
 	if g.Status == StatusCompleted {
-		// Resolve winner DB id: prefer direct access to the player objects to avoid nil/lock races
+		// Resolve winner DB id
 		var winnerDBID int
 		if g.Winner != "" {
 			if g.Player1 != nil && g.Player1.ID == g.Winner {
 				winnerDBID = g.Player1.DBPlayerID
 			} else if g.Player2 != nil && g.Player2.ID == g.Winner {
 				winnerDBID = g.Player2.DBPlayerID
-			} else if p := g.GetPlayerByID(g.Winner); p != nil {
-				winnerDBID = p.DBPlayerID
 			}
 		}
 		log.Printf("[DB] Resolved winnerDBID=%d for winnerToken=%s (session=%d)", winnerDBID, g.Winner, g.SessionID)
@@ -1571,12 +1291,12 @@ func (gm *GameManager) TryMatchFromRedis(stakeAmount int, myQueueID int, myPhone
 			myEphemeral = myQueueTok.QueueToken.String
 		}
 
-		// Create GameState (Player1 is opponent to preserve previous ordering)
+		// Create PoolGameState (Player1 is opponent to preserve previous ordering)
 		oppDBID := 0
 		if oppQueue.PlayerID.Valid {
 			oppDBID = int(oppQueue.PlayerID.Int64)
 		}
-		game := NewGame(
+		game := NewPoolGame(
 			gameID,
 			gameToken,
 			opponentEphemeral,
@@ -1602,7 +1322,7 @@ func (gm *GameManager) TryMatchFromRedis(stakeAmount int, myQueueID int, myPhone
 		// Persist a game_sessions row if we have DB player ids
 		var sessionID int
 		if gm.db != nil && (!oppQueue.PlayerID.Valid || myDBPlayerID <= 0) {
-			log.Printf("[DB] Skipping DB session creation for in-memory match (oppPlayerID.Valid=%v, myDBPlayerID=%d) — game will remain in-memory", oppQueue.PlayerID.Valid, myDBPlayerID)
+			log.Printf("[DB] Skipping DB session creation for in-memory match (oppPlayerID.Valid=%v, myDBPlayerID=%d) -- game will remain in-memory", oppQueue.PlayerID.Valid, myDBPlayerID)
 		}
 		if gm.db != nil && oppQueue.PlayerID.Valid && myDBPlayerID > 0 {
 			tx, err := gm.db.Beginx()
@@ -1695,13 +1415,13 @@ func (gm *GameManager) TryMatchFromRedis(stakeAmount int, myQueueID int, myPhone
 
 									go func(oppPhone, joinerPhone, link1, link2, oppName, joinerName string, stake int) {
 										ctx := context.Background()
-										msgOpp := fmt.Sprintf("Matched on PlayMatatu vs %s! Stake %d UGX. Join: %s", joinerName, stake, link1)
+										msgOpp := fmt.Sprintf("Matched on PlayPool vs %s! Stake %d UGX. Join: %s", joinerName, stake, link1)
 										if msgID, err := sms.SendSMS(ctx, oppPhone, msgOpp); err != nil {
 											log.Printf("[SMS] Failed to send match SMS to %s: %v", oppPhone, err)
 										} else {
 											log.Printf("[SMS] Match SMS sent to %s msg_id=%s", oppPhone, msgID)
 										}
-										msgMe := fmt.Sprintf("Matched on PlayMatatu vs %s! Stake %d UGX. Join: %s", oppName, stake, link2)
+										msgMe := fmt.Sprintf("Matched on PlayPool vs %s! Stake %d UGX. Join: %s", oppName, stake, link2)
 										if msgID, err := sms.SendSMS(ctx, joinerPhone, msgMe); err != nil {
 											log.Printf("[SMS] Failed to send match SMS to %s: %v", joinerPhone, err)
 										} else {
@@ -1738,7 +1458,7 @@ func (gm *GameManager) TryMatchFromRedis(stakeAmount int, myQueueID int, myPhone
 		}
 	}
 
-	// Nothing matched after attempts — push own id and return
+	// Nothing matched after attempts -- push own id and return
 	if err := gm.rdb.LPush(ctx, key, myQueueID).Err(); err != nil {
 		log.Printf("[MATCH] Final push of own queue id %d to Redis key %s failed: %v", myQueueID, key, err)
 	}
@@ -1983,8 +1703,8 @@ func (gm *GameManager) JoinPrivateMatch(matchCode string, myQueueID int, myPhone
 		myEphemeral = myQueueTok.QueueToken.String
 	}
 
-	// Create GameState (opponent is player1 to preserve existing ordering)
-	game := NewGame(
+	// Create PoolGameState (opponent is player1 to preserve existing ordering)
+	game := NewPoolGame(
 		gameID,
 		gameToken,
 		opponentEphemeral,
@@ -2132,7 +1852,7 @@ func (gm *GameManager) JoinPrivateMatch(matchCode string, myQueueID int, myPhone
 	}, nil
 }
 
-// ProcessWinnerPayout handles the escrow → winnings payout with tax deduction
+// ProcessWinnerPayout handles the escrow -> winnings payout with tax deduction
 func (gm *GameManager) ProcessWinnerPayout(sessionID, winnerPlayerID, stakeAmount int) error {
 	if gm.db == nil {
 		return fmt.Errorf("db not available")
@@ -2175,12 +1895,12 @@ func (gm *GameManager) ProcessWinnerPayout(sessionID, winnerPlayerID, stakeAmoun
 		return fmt.Errorf("failed to get player winnings account: %w", err)
 	}
 
-	// Transfer: ESCROW → TAX (15%)
+	// Transfer: ESCROW -> TAX (15%)
 	if err := accounts.Transfer(tx, escrowAcc.ID, taxAcc.ID, taxAmount, "SESSION", sql.NullInt64{Int64: int64(sessionID), Valid: true}, "Payout tax"); err != nil {
 		return fmt.Errorf("failed to transfer tax: %w", err)
 	}
 
-	// Transfer: ESCROW → PLAYER_WINNINGS (85% after tax)
+	// Transfer: ESCROW -> PLAYER_WINNINGS (85% after tax)
 	if err := accounts.Transfer(tx, escrowAcc.ID, winningsAcc.ID, winningsNet, "SESSION", sql.NullInt64{Int64: int64(sessionID), Valid: true}, "Winner payout (after tax)"); err != nil {
 		return fmt.Errorf("failed to transfer winnings: %w", err)
 	}

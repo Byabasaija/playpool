@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
-	"github.com/playmatatu/backend/internal/accounts"
-	"github.com/playmatatu/backend/internal/config"
-	"github.com/playmatatu/backend/internal/sms"
+	"github.com/playpool/backend/internal/accounts"
+	"github.com/playpool/backend/internal/config"
+	"github.com/playpool/backend/internal/sms"
 	"github.com/redis/go-redis/v9"
 )
 

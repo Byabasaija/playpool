@@ -17,11 +17,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
-	"github.com/playmatatu/backend/internal/accounts"
-	"github.com/playmatatu/backend/internal/config"
-	"github.com/playmatatu/backend/internal/game"
-	"github.com/playmatatu/backend/internal/payment"
-	"github.com/playmatatu/backend/internal/sms"
+	"github.com/playpool/backend/internal/accounts"
+	"github.com/playpool/backend/internal/config"
+	"github.com/playpool/backend/internal/game"
+	"github.com/playpool/backend/internal/payment"
+	"github.com/playpool/backend/internal/sms"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -827,17 +827,46 @@ func GetGameState(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handle
 		token := c.Param("token")
 		pt := c.Query("pt") // pt is either a player token (preferred) or a player id
 
-		// Get game by token
+		// Try pool game first, then legacy card game
+		poolGame, poolErr := game.Manager.GetPoolGameByToken(token)
+		if poolErr == nil {
+			if pt == "" {
+				c.JSON(http.StatusOK, gin.H{
+					"game_id":      poolGame.ID,
+					"status":       poolGame.Status,
+					"stake_amount": poolGame.StakeAmount,
+					"created_at":   poolGame.CreatedAt,
+					"game_type":    "pool",
+				})
+				return
+			}
+
+			var resolvedPlayerID string
+			if pt == poolGame.Player1.ID || pt == poolGame.Player2.ID {
+				resolvedPlayerID = pt
+			} else if pt == poolGame.Player1.PlayerToken {
+				resolvedPlayerID = poolGame.Player1.ID
+			} else if pt == poolGame.Player2.PlayerToken {
+				resolvedPlayerID = poolGame.Player2.ID
+			} else {
+				c.JSON(http.StatusForbidden, gin.H{"error": "invalid player token"})
+				return
+			}
+
+			state := poolGame.GetGameStateForPlayer(resolvedPlayerID)
+			state["game_type"] = "pool"
+			c.JSON(http.StatusOK, state)
+			return
+		}
+
+		// Fallback to legacy card game
 		gameState, err := game.Manager.GetGameByToken(token)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{
-				"error": "Game not found",
-			})
+			c.JSON(http.StatusNotFound, gin.H{"error": "Game not found"})
 			return
 		}
 
 		if pt == "" {
-			// Return basic game info without player-specific data
 			c.JSON(http.StatusOK, gin.H{
 				"game_id":      gameState.ID,
 				"status":       gameState.Status,
@@ -847,7 +876,6 @@ func GetGameState(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handle
 			return
 		}
 
-		// Resolve pt to a player ID. 'pt' may be either a player ID already or a player token.
 		var resolvedPlayerID string
 		if pt == gameState.Player1.ID || pt == gameState.Player2.ID {
 			resolvedPlayerID = pt
@@ -860,7 +888,6 @@ func GetGameState(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Handle
 			return
 		}
 
-		// Return player-specific game state
 		state := gameState.GetGameStateForPlayer(resolvedPlayerID)
 		c.JSON(http.StatusOK, state)
 	}
@@ -965,8 +992,8 @@ func CreateTestGame(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Hand
 			req.StakeAmount = 1000 // default
 		}
 
-		// Create a test game with two dummy players
-		gameState, err := game.Manager.CreateTestGame(
+		// Create a test pool game with two dummy players
+		poolGame, err := game.Manager.CreateTestPoolGame(
 			"+256700111111",
 			"+256700222222",
 			req.StakeAmount,
@@ -977,12 +1004,16 @@ func CreateTestGame(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) gin.Hand
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"game_id":    gameState.ID,
-			"game_token": gameState.Token,
-			"player1_id": gameState.Player1.ID,
-			"player2_id": gameState.Player2.ID,
-			"stake":      gameState.StakeAmount,
-			"message":    "Test game created",
+			"game_id":       poolGame.ID,
+			"game_token":    poolGame.Token,
+			"player1_id":    poolGame.Player1.ID,
+			"player1_token": poolGame.Player1.PlayerToken,
+			"player2_id":    poolGame.Player2.ID,
+			"player2_token": poolGame.Player2.PlayerToken,
+			"stake":         poolGame.StakeAmount,
+			"message":       "Test pool game created",
+			"player1_url":   "/g/" + poolGame.Token + "?pt=" + poolGame.Player1.PlayerToken,
+			"player2_url":   "/g/" + poolGame.Token + "?pt=" + poolGame.Player2.PlayerToken,
 		})
 	}
 }

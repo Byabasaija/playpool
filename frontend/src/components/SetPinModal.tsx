@@ -120,7 +120,6 @@ export default function SetPinModal({ phone, onComplete, onCancel }: SetPinModal
         {/* Step: Done */}
         {step === 'done' && (
           <div className="text-center">
-            <div className="text-4xl mb-4">✅</div>
             <h2 className="text-xl font-bold text-[#373536] mb-2">PIN Set Successfully!</h2>
             <p className="text-gray-600 text-sm">
               You can now use your PIN to quickly access your account.

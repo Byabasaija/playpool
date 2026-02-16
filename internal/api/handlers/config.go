@@ -4,7 +4,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/playmatatu/backend/internal/config"
+	"github.com/playpool/backend/internal/config"
 )
 
 // GetConfig returns minimal config values required by frontend

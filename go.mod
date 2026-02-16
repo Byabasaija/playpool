@@ -1,4 +1,4 @@
-module github.com/playmatatu/backend
+module github.com/playpool/backend
 
 go 1.24.0
 

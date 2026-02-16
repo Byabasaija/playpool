@@ -6,8 +6,8 @@ import (
 	"strconv"
 
 	"github.com/jmoiron/sqlx"
-	"github.com/playmatatu/backend/internal/config"
-	"github.com/playmatatu/backend/internal/models"
+	"github.com/playpool/backend/internal/config"
+	"github.com/playpool/backend/internal/models"
 )
 
 // GetAllRuntimeConfig returns all runtime config entries

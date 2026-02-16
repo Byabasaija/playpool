@@ -8,7 +8,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq"
-	"github.com/playmatatu/backend/internal/models"
+	"github.com/playpool/backend/internal/models"
 	"golang.org/x/crypto/bcrypt"
 )
 
