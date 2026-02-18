@@ -59,7 +59,7 @@ export default function BallRack({ balls, myGroup }: BallRackProps) {
   const stripesLabel = myGroup === 'STRIPES' ? 'You' : myGroup === 'SOLIDS' ? 'Opp' : 'Stripes';
 
   return (
-    <div className="flex flex-col items-center gap-1 w-full max-w-[900px] mx-auto py-1">
+    <div className="flex flex-col items-center gap-1 w-full max-w-[990px] mx-auto py-1">
       <MiniBar ids={SOLIDS} balls={balls} label={solidsLabel} />
       <div className="flex items-center gap-1">
         <span className="text-[10px] text-gray-400 w-12 text-right mr-1">8</span>

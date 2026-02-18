@@ -1,8 +1,7 @@
 import { StakeRequest, StakeResponse, QueueStatusResponse } from '../types/api.types';
 import { formatPhone } from './phoneUtils';
 
-//@ts-ignore
-const API_BASE = import.meta.env.VITE_BACKEND_URL + '/api/v1';
+const API_BASE = ((import.meta as any).env?.VITE_BACKEND_URL || '') + '/api/v1';
 
 // Common fetch options for cookie auth
 const withCredentials: RequestInit = { credentials: 'include' };

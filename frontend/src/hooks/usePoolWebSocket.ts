@@ -21,7 +21,19 @@ export function usePoolWebSocket({
   const [connected, setConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptsRef = useRef(0);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const MAX_RECONNECT_ATTEMPTS = 5;
+
+  // Store callbacks in refs so connect() doesn't depend on them
+  const onMessageRef = useRef(onMessage);
+  const onOpenRef = useRef(onOpen);
+  const onCloseRef = useRef(onClose);
+  const onErrorRef = useRef(onError);
+
+  useEffect(() => { onMessageRef.current = onMessage; }, [onMessage]);
+  useEffect(() => { onOpenRef.current = onOpen; }, [onOpen]);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
+  useEffect(() => { onErrorRef.current = onError; }, [onError]);
 
   const connect = useCallback(() => {
     if (!gameToken || !playerToken) return;
@@ -61,13 +73,13 @@ export function usePoolWebSocket({
       console.log('[Pool WS] Connected');
       setConnected(true);
       reconnectAttemptsRef.current = 0;
-      onOpen?.();
+      onOpenRef.current?.();
     };
 
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data) as PoolWSMessage;
-        onMessage(data);
+        onMessageRef.current(data);
       } catch (error) {
         console.error('[Pool WS] Parse error:', error);
       }
@@ -76,28 +88,37 @@ export function usePoolWebSocket({
     ws.onclose = (event) => {
       inProgressConnects.delete(key);
       setConnected(false);
-      onClose?.();
+      onCloseRef.current?.();
 
       if (event.reason?.includes('replaced by new connection')) return;
       if (!autoReconnect) return;
 
       if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
         reconnectAttemptsRef.current++;
-        setTimeout(connect, 1000 * reconnectAttemptsRef.current);
+        const delay = 1000 * reconnectAttemptsRef.current;
+        console.log(`[Pool WS] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current})`);
+        reconnectTimerRef.current = setTimeout(connect, delay);
       }
     };
 
     ws.onerror = (error) => {
       console.error('[Pool WS] Error:', error);
-      onError?.(error);
+      onErrorRef.current?.(error);
     };
 
     wsRef.current = ws;
-  }, [gameToken, playerToken, onMessage, onOpen, onClose, onError, autoReconnect]);
+  }, [gameToken, playerToken, autoReconnect]); // callbacks removed from deps
 
   useEffect(() => {
     connect();
-    return () => { wsRef.current?.close(); };
+    return () => {
+      // Clear any pending reconnect timer
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      wsRef.current?.close();
+    };
   }, [connect]);
 
   const send = useCallback((message: PoolOutgoingMessage) => {

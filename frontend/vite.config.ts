@@ -17,8 +17,9 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       workbox: {
-        globPatterns: ['**/*.{js,css,html,webp,png,mp3,woff2}'],
+        globPatterns: ['**/*.{js,css,html,webp,png,mp3,wav,woff2}'],
         navigateFallback: '/index.html',
+        navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
           {
             urlPattern: /\/api\//,
@@ -37,7 +38,7 @@ export default defineConfig({
         theme_color: '#373536',
         background_color: '#ffffff',
         display: 'standalone',
-        orientation: 'portrait',
+        orientation: 'any',
         start_url: '/',
         icons: [
           {

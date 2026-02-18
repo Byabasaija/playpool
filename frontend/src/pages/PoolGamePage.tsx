@@ -1,22 +1,23 @@
-// Pool game page — replaces the card game page for pool matches.
+// Pool game page with sprite-based rendering.
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { usePoolGameState } from '../hooks/usePoolGameState';
 import { usePoolWebSocket } from '../hooks/usePoolWebSocket';
 import { PoolWSMessage } from '../types/pool.types';
-import { ShotAnimator, type BallFrame, type ServerBallPosition } from '../game/pool/ShotAnimator';
-import PoolCanvas, { type ShotParams } from '../game/pool/PoolCanvas';
+import { ShotAnimator, type BallFrame, type ServerBallPosition, type PocketEvent } from '../game/pool/ShotAnimator';
+import { loadPoolAssets, PoolAssets } from '../game/pool/AssetLoader';
+import { SoundManager } from '../game/pool/SoundManager';
+import { updateBallRotation } from '../game/pool/BallRenderer';
+import PoolCanvas, { type ShotParams, type PocketingAnim, physToCanvas } from '../game/pool/PoolCanvas';
 import PlayerBar from '../game/pool/PlayerBar';
-import BallRack from '../game/pool/BallRack';
 import SpinSetter from '../game/pool/SpinSetter';
 import FoulNotification from '../game/pool/FoulNotification';
 
-//@ts-ignore
-const API_BASE = import.meta.env.VITE_BACKEND_URL + '/api/v1';
-
 export const PoolGamePage: React.FC = () => {
   const navigate = useNavigate();
+  const [assets, setAssets] = useState<PoolAssets | null>(null);
+  const [assetsError, setAssetsError] = useState(false);
   const [tokensReady, setTokensReady] = useState(false);
   const [resolvedGameToken, setResolvedGameToken] = useState('');
   const [resolvedPlayerToken, setResolvedPlayerToken] = useState('');
@@ -26,6 +27,9 @@ export const PoolGamePage: React.FC = () => {
   const [isFoul, setIsFoul] = useState(false);
   const [screw, setScrew] = useState(0);
   const [english, setEnglish] = useState(0);
+  const [showGuideLine, setShowGuideLine] = useState(true);
+  const [pocketingBalls, setPocketingBalls] = useState<PocketingAnim[]>([]);
+  const [isPortrait, setIsPortrait] = useState(window.innerHeight > window.innerWidth);
 
   // Idle/disconnect state
   const [idleRemaining, setIdleRemaining] = useState<number | null>(null);
@@ -39,21 +43,76 @@ export const PoolGamePage: React.FC = () => {
 
   const { gameState, gameOver, updateFromWSMessage, applyShotResult, setBallPositions, setTokens } = usePoolGameState();
 
+  // Load assets on mount
+  useEffect(() => {
+    loadPoolAssets().then(setAssets).catch(() => setAssetsError(true));
+  }, []);
+
+  // Force landscape orientation on game screen
+  useEffect(() => {
+    try { (screen.orientation as any)?.lock?.('landscape').catch(() => {}); } catch {}
+    const handler = () => setIsPortrait(window.innerHeight > window.innerWidth);
+    window.addEventListener('resize', handler);
+    window.addEventListener('orientationchange', handler);
+    return () => {
+      try { (screen.orientation as any)?.unlock?.(); } catch {}
+      window.removeEventListener('resize', handler);
+      window.removeEventListener('orientationchange', handler);
+    };
+  }, []);
+
+  // Sound manager (created once assets load)
+  const soundRef = useRef<SoundManager | null>(null);
+  const firstHitRef = useRef(false);
+
   // Shot animator ref
   const animatorRef = useRef<ShotAnimator | null>(null);
   if (!animatorRef.current) {
     animatorRef.current = new ShotAnimator(
       (balls: BallFrame[]) => {
-        // Update ball positions during animation
+        // Update ball rotation from velocity data
+        for (const b of balls) {
+          updateBallRotation(b.id, b.vx, b.vy);
+        }
         setBallPositions(balls.map(b => ({ id: b.id, x: b.x, y: b.y, active: b.active })));
       },
       (serverPositions: ServerBallPosition[]) => {
-        // Snap to server positions after animation
         setBallPositions(serverPositions.map(b => ({ id: b.id, x: b.x, y: b.y, active: b.active })));
         setAnimating(false);
       },
+      (event) => {
+        // Sound on collision
+        const isFirst = !firstHitRef.current && event.ballId === 0;
+        if (isFirst) firstHitRef.current = true;
+        soundRef.current?.playCollision(event, isFirst);
+      },
     );
+    animatorRef.current.setOnPocket((evt: PocketEvent) => {
+      // Find ball's current canvas position from current state
+      const ball = gameState.balls.find(b => b.id === evt.ballId);
+      if (!ball) return;
+      const [startX, startY] = physToCanvas(ball.x, ball.y);
+      const [targetX, targetY] = physToCanvas(evt.pocketX, evt.pocketY);
+      setPocketingBalls(prev => [...prev, {
+        ballId: evt.ballId,
+        startX, startY,
+        targetX, targetY,
+        startTime: performance.now(),
+        duration: 350,
+      }]);
+      // Auto-clean after animation completes
+      setTimeout(() => {
+        setPocketingBalls(prev => prev.filter(p => p.ballId !== evt.ballId));
+      }, 400);
+    });
   }
+
+  // Initialize sound manager when assets load
+  useEffect(() => {
+    if (assets && !soundRef.current) {
+      soundRef.current = new SoundManager(assets);
+    }
+  }, [assets]);
 
   // Resolve tokens from URL
   useEffect(() => {
@@ -89,12 +148,12 @@ export const PoolGamePage: React.FC = () => {
         break;
 
       case 'shot_result': {
-        // Start client-side animation
         const shotParams = message.shot_params;
         const serverBalls = message.ball_positions;
         if (shotParams && serverBalls) {
           setAnimating(true);
-          // Use current ball positions as starting state
+          firstHitRef.current = false;
+          soundRef.current?.resumeAudioContext();
           animatorRef.current?.start(
             gameState.balls,
             { angle: shotParams.angle, power: shotParams.power, screw: shotParams.screw, english: shotParams.english },
@@ -102,7 +161,6 @@ export const PoolGamePage: React.FC = () => {
           );
         }
 
-        // Show foul notification
         if (message.foul) {
           setFoulMessage(message.foul.message);
           setIsFoul(true);
@@ -114,14 +172,12 @@ export const PoolGamePage: React.FC = () => {
           }
         }
 
-        // Apply state from shot result (groups, turn, etc.)
         applyShotResult(message);
         break;
       }
 
       case 'ball_placed':
         if (message.x !== undefined && message.y !== undefined) {
-          // Update cue ball position
           const newBalls = gameState.balls.map(b =>
             b.id === 0 ? { ...b, x: message.x!, y: message.y!, active: true } : b
           );
@@ -216,10 +272,29 @@ export const PoolGamePage: React.FC = () => {
     return () => clearInterval(t);
   }, [disconnectRemaining]);
 
-  // Loading
+  // Loading assets
+  if (!assets) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#0e1628]">
+        {assetsError ? (
+          <div className="text-center text-red-400">
+            <p className="mb-2">Failed to load game assets</p>
+            <button onClick={() => window.location.reload()} className="text-sm text-white underline">Retry</button>
+          </div>
+        ) : (
+          <div className="text-center text-white">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-400 mx-auto mb-3"></div>
+            <p className="text-sm text-gray-400">Loading game...</p>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Connecting to WS
   if (!connected) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#1a1a2e]">
+      <div className="min-h-screen flex items-center justify-center bg-[#0e1628]">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-400"></div>
       </div>
     );
@@ -228,11 +303,11 @@ export const PoolGamePage: React.FC = () => {
   // Waiting for opponent
   if (!gameStarted) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#1a1a2e]">
+      <div className="min-h-screen flex items-center justify-center bg-[#0e1628]">
         <div className="text-center text-white">
           <div className="animate-pulse mb-4">
             <div className="h-16 w-16 bg-green-600 rounded-full mx-auto flex items-center justify-center text-2xl">
-              🎱
+              8
             </div>
           </div>
           <h2 className="text-xl font-bold mb-2">Waiting for Opponent</h2>
@@ -246,13 +321,13 @@ export const PoolGamePage: React.FC = () => {
   if (gameOver) {
     const youWon = gameOver.isWinner;
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#1a1a2e]">
+      <div className="min-h-screen flex items-center justify-center bg-[#0e1628]">
         <div className="p-8 text-center max-w-md mx-auto">
           <div className="mb-6">
             <div className={`h-24 w-24 rounded-full mx-auto flex items-center justify-center text-5xl ${
               youWon ? 'bg-green-900 animate-bounce' : 'bg-red-900'
             }`}>
-              {youWon ? '🏆' : '😢'}
+              {youWon ? '!' : '..'}
             </div>
           </div>
 
@@ -304,10 +379,22 @@ export const PoolGamePage: React.FC = () => {
     );
   }
 
-  // Main game view
+  // Portrait rotation styles — rotate entire game view when phone is held upright
+  const portraitStyle: React.CSSProperties = isPortrait ? {
+    position: 'fixed',
+    top: '50%',
+    left: '50%',
+    width: '100vh',
+    height: '100vw',
+    transform: 'translate(-50%, -50%) rotate(90deg)',
+    transformOrigin: 'center center',
+    overflow: 'hidden',
+  } : {};
+
+  // Main game view: PlayerBar on top, table centered, controls overlaid on right
   return (
-    <div className="min-h-screen bg-[#1a1a2e] flex flex-col items-center">
-      {/* Player bar */}
+    <div style={portraitStyle} className="h-screen bg-[#0e1628] flex flex-col overflow-hidden">
+      {/* Player bar — compact, with ball indicators inline */}
       <PlayerBar
         myName={gameState.myDisplayName || 'You'}
         opponentName={gameState.opponentDisplayName || 'Opponent'}
@@ -319,10 +406,11 @@ export const PoolGamePage: React.FC = () => {
         opponentConnected={gameState.opponentConnected}
         idleRemaining={idleRemaining}
         idleIsMe={idlePlayer === gameState.playerId}
+        balls={gameState.balls}
       />
 
-      {/* Game canvas + spin setter */}
-      <div className="relative flex items-start gap-2">
+      {/* Table area — fills remaining space, centered */}
+      <div className="flex-1 relative flex items-center justify-center min-h-0">
         <PoolCanvas
           balls={gameState.balls}
           myTurn={gameState.myTurn}
@@ -333,10 +421,13 @@ export const PoolGamePage: React.FC = () => {
           animating={animating}
           onTakeShot={handleTakeShot}
           onPlaceCueBall={handlePlaceCueBall}
+          assets={assets}
+          showGuideLine={showGuideLine}
+          pocketingBalls={pocketingBalls}
         />
 
-        {/* Spin setter — positioned beside the canvas */}
-        <div className="flex flex-col items-center gap-2 pt-4">
+        {/* Right-side controls — overlaid on top of canvas area */}
+        <div className="absolute right-1 top-1/2 -translate-y-1/2 flex flex-col items-center gap-1.5 z-10">
           <SpinSetter
             screw={screw}
             english={english}
@@ -344,26 +435,31 @@ export const PoolGamePage: React.FC = () => {
             disabled={!gameState.myTurn || animating}
           />
 
-          {/* Concede button */}
+          <button
+            onClick={() => setShowGuideLine(prev => !prev)}
+            className={`text-[9px] px-1.5 py-0.5 rounded transition-colors ${
+              showGuideLine ? 'text-green-400 bg-green-900/40' : 'text-gray-500 bg-gray-800/40'
+            }`}
+          >
+            Guide
+          </button>
+
           <button
             onClick={handleConcede}
-            className="text-[10px] text-gray-500 hover:text-red-400 mt-4 transition-colors"
+            className="text-[9px] text-gray-600 hover:text-red-400 transition-colors"
           >
             Concede
           </button>
         </div>
       </div>
 
-      {/* Ball rack */}
-      <BallRack balls={gameState.balls} myGroup={gameState.myGroup} />
-
       {/* Foul notification */}
       <FoulNotification message={foulMessage} isFoul={isFoul} />
 
       {/* Disconnect countdown */}
       {disconnectRemaining !== null && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-40">
-          <div className={`px-4 py-3 rounded-lg shadow-lg text-center font-semibold text-sm ${
+        <div className="fixed top-8 left-1/2 -translate-x-1/2 z-40">
+          <div className={`px-3 py-2 rounded-lg shadow-lg text-center font-semibold text-xs ${
             disconnectRemaining <= 10 ? 'bg-red-500 text-white animate-pulse' :
             'bg-blue-400 text-white'
           }`}>

@@ -116,9 +116,9 @@ func (c *Client) writePump() {
 		case message, ok := <-c.send:
 			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if !ok {
-				if err := c.conn.WriteMessage(websocket.CloseMessage, []byte{}); err != nil {
-					log.Printf("Error writing close message for player %s: %v", c.playerID, err)
-				}
+				// Channel closed — connection is being replaced or cleaned up.
+				// Best-effort close frame; ignore errors (conn may already be closed).
+				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
 

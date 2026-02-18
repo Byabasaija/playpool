@@ -1,9 +1,20 @@
-// Main pool table canvas component — Miniclip 8 Ball Pool style.
-// Renders table, balls, cue stick, aiming guide, and handles input.
+// Main pool table canvas — sprite-based rendering with 8Ball-Pool-HTML5 assets.
 
 import { useRef, useEffect, useCallback, useState } from 'react';
-import { BALL_RADIUS, N, MAX_POWER, POCKET_RADIUS } from './constants';
+import { BALL_RADIUS, N, MAX_POWER } from './constants';
 import { createStandard8BallTable, type Table } from './TableGeometry';
+import { PoolAssets } from './AssetLoader';
+import { drawBall, drawPocketingBall } from './BallRenderer';
+
+interface PocketingAnim {
+  ballId: number;
+  startX: number; // canvas coords
+  startY: number;
+  targetX: number; // canvas coords
+  targetY: number;
+  startTime: number;
+  duration: number; // ms
+}
 
 export interface BallState {
   id: number;
@@ -31,49 +42,30 @@ interface PoolCanvasProps {
   animating: boolean;
   onTakeShot: (params: ShotParams) => void;
   onPlaceCueBall: (x: number, y: number) => void;
+  assets: PoolAssets;
+  showGuideLine?: boolean;
+  pocketingBalls?: PocketingAnim[];
 }
 
-// Ball colors matching standard 8-ball set
-const BALL_COLORS: Record<number, string> = {
-  0: '#FFFFFF',  // cue
-  1: '#FFD700',  // yellow
-  2: '#0000FF',  // blue
-  3: '#FF0000',  // red
-  4: '#800080',  // purple
-  5: '#FF6600',  // orange
-  6: '#008000',  // green
-  7: '#800000',  // maroon
-  8: '#000000',  // eight ball
-  9: '#FFD700',  // stripe yellow
-  10: '#0000FF', // stripe blue
-  11: '#FF0000', // stripe red
-  12: '#800080', // stripe purple
-  13: '#FF6600', // stripe orange
-  14: '#008000', // stripe green
-  15: '#800000', // stripe maroon
-};
+// Canvas dimensions (wider to accommodate wooden rail frame)
+const CANVAS_WIDTH = 990;
+const CANVAS_HEIGHT = 560;
 
-// Canvas dimensions
-const CANVAS_WIDTH = 900;
-const CANVAS_HEIGHT = 500;
-
-// Table rendering bounds (in canvas pixels)
-const TABLE_LEFT = 50;
-const TABLE_TOP = 50;
-const TABLE_RIGHT = CANVAS_WIDTH - 50;
-const TABLE_BOTTOM = CANVAS_HEIGHT - 50;
-const TABLE_W = TABLE_RIGHT - TABLE_LEFT;
-const TABLE_H = TABLE_BOTTOM - TABLE_TOP;
+// Table play area (inside the rails)
+const RAIL_MARGIN = 55;
+const TABLE_LEFT = RAIL_MARGIN + 40;
+const TABLE_TOP = RAIL_MARGIN + 30;
+const TABLE_W = CANVAS_WIDTH - TABLE_LEFT * 2;
+const TABLE_H = CANVAS_HEIGHT - TABLE_TOP * 2;
 
 // Physics-to-canvas conversion
-const TABLE_PHYS_W = 100 * N; // total width in physics units
+const TABLE_PHYS_W = 100 * N;
 const TABLE_PHYS_H = 50 * N;
 const SCALE_X = TABLE_W / TABLE_PHYS_W;
 const SCALE_Y = TABLE_H / TABLE_PHYS_H;
 const BALL_R_PX = BALL_RADIUS * SCALE_X;
-const POCKET_R_PX = POCKET_RADIUS * SCALE_X;
 
-function physToCanvas(px: number, py: number): [number, number] {
+export function physToCanvas(px: number, py: number): [number, number] {
   const cx = TABLE_LEFT + TABLE_W / 2 + px * SCALE_X;
   const cy = TABLE_TOP + TABLE_H / 2 + py * SCALE_Y;
   return [cx, cy];
@@ -85,9 +77,11 @@ function canvasToPhys(cx: number, cy: number): [number, number] {
   return [px, py];
 }
 
+export { type PocketingAnim };
+
 export default function PoolCanvas({
   balls, myTurn, ballInHand, isBreakShot, myGroup: _myGroup, opponentGroup: _opponentGroup,
-  animating, onTakeShot, onPlaceCueBall,
+  animating, onTakeShot, onPlaceCueBall, assets, showGuideLine = true, pocketingBalls = [],
 }: PoolCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [aimAngle, setAimAngle] = useState(0);
@@ -101,7 +95,6 @@ export default function PoolCanvas({
     tableRef.current = createStandard8BallTable();
   }
 
-  // Draw everything
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -110,41 +103,32 @@ export default function PoolCanvas({
 
     ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-    // Background
-    ctx.fillStyle = '#1a1a2e';
+    // Dark background
+    ctx.fillStyle = '#0e1628';
     ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-    // Table felt
-    ctx.fillStyle = '#0e6b0e';
-    ctx.beginPath();
-    ctx.roundRect(TABLE_LEFT, TABLE_TOP, TABLE_W, TABLE_H, 8);
-    ctx.fill();
+    // === TABLE LAYERS ===
+    // Layer 1: Pockets (bottom — dark holes visible through cloth)
+    ctx.drawImage(
+      assets.images.pockets,
+      TABLE_LEFT - RAIL_MARGIN, TABLE_TOP - RAIL_MARGIN,
+      TABLE_W + RAIL_MARGIN * 2, TABLE_H + RAIL_MARGIN * 2,
+    );
 
-    // Cushion rails
-    ctx.strokeStyle = '#5c3a1e';
-    ctx.lineWidth = 12;
-    ctx.beginPath();
-    ctx.roundRect(TABLE_LEFT - 6, TABLE_TOP - 6, TABLE_W + 12, TABLE_H + 12, 12);
-    ctx.stroke();
+    // Layer 2: Cloth texture (felt surface)
+    ctx.drawImage(
+      assets.images.cloth,
+      TABLE_LEFT, TABLE_TOP, TABLE_W, TABLE_H,
+    );
 
-    // Outer rail
-    ctx.strokeStyle = '#3d2510';
-    ctx.lineWidth = 6;
-    ctx.beginPath();
-    ctx.roundRect(TABLE_LEFT - 12, TABLE_TOP - 12, TABLE_W + 24, TABLE_H + 24, 16);
-    ctx.stroke();
+    // Layer 3: Table top frame (wooden rails — transparent center)
+    ctx.drawImage(
+      assets.images.tableTop,
+      TABLE_LEFT - RAIL_MARGIN, TABLE_TOP - RAIL_MARGIN,
+      TABLE_W + RAIL_MARGIN * 2, TABLE_H + RAIL_MARGIN * 2,
+    );
 
-    // Pockets
-    const table = tableRef.current!;
-    for (const pocket of table.pockets) {
-      const [px, py] = physToCanvas(pocket.position.x, pocket.position.y);
-      ctx.beginPath();
-      ctx.arc(px, py, POCKET_R_PX * 1.2, 0, Math.PI * 2);
-      ctx.fillStyle = '#000000';
-      ctx.fill();
-    }
-
-    // Head string line (for break)
+    // Head string line (for break shot ball placement)
     if (isBreakShot && ballInHand) {
       const [lx] = physToCanvas(-15000 * 2.3, 0);
       ctx.strokeStyle = 'rgba(255,255,255,0.15)';
@@ -152,160 +136,127 @@ export default function PoolCanvas({
       ctx.setLineDash([5, 5]);
       ctx.beginPath();
       ctx.moveTo(lx, TABLE_TOP);
-      ctx.lineTo(lx, TABLE_BOTTOM);
+      ctx.lineTo(lx, TABLE_TOP + TABLE_H);
       ctx.stroke();
       ctx.setLineDash([]);
     }
 
-    // Ball shadows
-    for (const ball of balls) {
+    // === BALLS ===
+    const sortedBalls = [...balls].sort((a, b) => {
+      if (a.id === 0) return 1;
+      if (b.id === 0) return -1;
+      return 0;
+    });
+
+    for (const ball of sortedBalls) {
       if (!ball.active) continue;
       const [bx, by] = physToCanvas(ball.x, ball.y);
-      ctx.beginPath();
-      ctx.ellipse(bx + 2, by + 3, BALL_R_PX, BALL_R_PX * 0.85, 0, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(0,0,0,0.3)';
-      ctx.fill();
+      drawBall(ctx, assets, ball.id, bx, by, BALL_R_PX);
     }
 
-    // Balls
-    for (const ball of balls) {
-      if (!ball.active) continue;
-      const [bx, by] = physToCanvas(ball.x, ball.y);
-      const isStripe = ball.id >= 9 && ball.id <= 15;
-      const color = BALL_COLORS[ball.id] || '#FFFFFF';
+    // === POCKETING ANIMATIONS ===
+    const now = performance.now();
+    for (const pa of pocketingBalls) {
+      const elapsed = now - pa.startTime;
+      const progress = Math.min(1, elapsed / pa.duration);
+      if (progress >= 1) continue;
 
-      // Ball body
-      ctx.beginPath();
-      ctx.arc(bx, by, BALL_R_PX, 0, Math.PI * 2);
+      // Ease out: decelerating toward pocket
+      const ease = 1 - (1 - progress) * (1 - progress);
+      const cx = pa.startX + (pa.targetX - pa.startX) * ease;
+      const cy = pa.startY + (pa.targetY - pa.startY) * ease;
+      const scale = 1 - ease;
 
-      if (isStripe) {
-        // Stripe: white base with colored band
-        ctx.fillStyle = '#FFFFFF';
-        ctx.fill();
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(bx, by, BALL_R_PX, 0, Math.PI * 2);
-        ctx.clip();
-        ctx.fillStyle = color;
-        ctx.fillRect(bx - BALL_R_PX, by - BALL_R_PX * 0.45, BALL_R_PX * 2, BALL_R_PX * 0.9);
-        ctx.restore();
-      } else {
-        ctx.fillStyle = color;
-        ctx.fill();
-      }
-
-      // Ball outline
-      ctx.strokeStyle = 'rgba(0,0,0,0.3)';
-      ctx.lineWidth = 0.5;
-      ctx.stroke();
-
-      // Ball number
-      if (ball.id > 0) {
-        // White circle for number
-        ctx.beginPath();
-        ctx.arc(bx, by, BALL_R_PX * 0.4, 0, Math.PI * 2);
-        ctx.fillStyle = '#FFFFFF';
-        ctx.fill();
-
-        ctx.fillStyle = '#000000';
-        ctx.font = `bold ${Math.round(BALL_R_PX * 0.55)}px Arial`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(String(ball.id), bx, by + 0.5);
-      }
-
-      // Highlight/sheen
-      ctx.beginPath();
-      ctx.arc(bx - BALL_R_PX * 0.25, by - BALL_R_PX * 0.25, BALL_R_PX * 0.3, 0, Math.PI * 2);
-      const grad = ctx.createRadialGradient(
-        bx - BALL_R_PX * 0.25, by - BALL_R_PX * 0.25, 0,
-        bx - BALL_R_PX * 0.25, by - BALL_R_PX * 0.25, BALL_R_PX * 0.3,
-      );
-      grad.addColorStop(0, 'rgba(255,255,255,0.5)');
-      grad.addColorStop(1, 'rgba(255,255,255,0)');
-      ctx.fillStyle = grad;
-      ctx.fill();
+      drawPocketingBall(ctx, assets, pa.ballId, cx, cy, BALL_R_PX, scale);
     }
 
-    // Aiming guide + cue stick (when it's my turn and not animating)
+    // === AIMING GUIDE + CUE STICK ===
     const cueBall = balls.find((b) => b.id === 0 && b.active);
     if (myTurn && !animating && !ballInHand && cueBall) {
       const [cx, cy] = physToCanvas(cueBall.x, cueBall.y);
-      const dirX = Math.cos(aimAngle);
-      const dirY = Math.sin(aimAngle);
 
-      // Aiming guide line (dotted)
+      // Guide line (configurable)
+      if (showGuideLine) {
+        const guideLen = 300;
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(aimAngle);
+
+        const dImg = assets.images.dottedLine;
+        const segLen = dImg.naturalWidth * 0.5;
+        for (let d = BALL_R_PX * 1.5; d < guideLen; d += segLen) {
+          ctx.globalAlpha = 0.6 * (1 - d / guideLen);
+          ctx.drawImage(dImg, d, -dImg.naturalHeight / 2);
+        }
+        ctx.globalAlpha = 1;
+
+        // Ghost target circle
+        ctx.beginPath();
+        ctx.arc(guideLen, 0, BALL_R_PX, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // Cue stick (sprite-based)
+      // Sprite: tip at left (x=0), butt at right. We draw behind the cue ball.
+      const cueGap = BALL_R_PX * 1.5 + (settingPower ? power * 0.025 : 0);
+      const cueDrawLen = BALL_R_PX * 16;
+      const cueDrawThick = BALL_R_PX * 0.9;
+
       ctx.save();
-      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 6]);
-      ctx.beginPath();
-      ctx.moveTo(cx, cy);
-      const guideLen = 300;
-      ctx.lineTo(cx + dirX * guideLen, cy + dirY * guideLen);
-      ctx.stroke();
-      ctx.setLineDash([]);
+      ctx.translate(cx, cy);
+      ctx.rotate(aimAngle + Math.PI); // point away from aim (behind ball)
 
-      // Ghost cue ball at aim target
-      ctx.beginPath();
-      ctx.arc(cx + dirX * guideLen, cy + dirY * guideLen, BALL_R_PX, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
+      // Draw cue with tip closest to ball — sprite has tip at left (x=0),
+      // so we flip horizontally to point tip toward the ball.
+
+      // Shadow (flipped to match cue body)
+      ctx.save();
+      ctx.translate(3, 4);
+      ctx.globalAlpha = 0.4;
+      ctx.scale(-1, 1);
+      ctx.drawImage(assets.images.cueShadow, -(cueGap + cueDrawLen), -cueDrawThick / 2, cueDrawLen, cueDrawThick);
+      ctx.globalAlpha = 1;
       ctx.restore();
 
-      // Cue stick
-      const cueOffset = BALL_R_PX * 1.5 + (settingPower ? power * 0.02 : 0);
-      const cueLen = 200;
-      const cueX1 = cx - dirX * cueOffset;
-      const cueY1 = cy - dirY * cueOffset;
-      const cueX2 = cx - dirX * (cueOffset + cueLen);
-      const cueY2 = cy - dirY * (cueOffset + cueLen);
-
-      // Cue shadow
-      ctx.beginPath();
-      ctx.moveTo(cueX1 + 2, cueY1 + 2);
-      ctx.lineTo(cueX2 + 2, cueY2 + 2);
-      ctx.strokeStyle = 'rgba(0,0,0,0.3)';
-      ctx.lineWidth = 5;
-      ctx.stroke();
-
       // Cue body
-      const cueGrad = ctx.createLinearGradient(cueX1, cueY1, cueX2, cueY2);
-      cueGrad.addColorStop(0, '#f5e6c8');  // tip
-      cueGrad.addColorStop(0.15, '#d4a74a'); // ferrule
-      cueGrad.addColorStop(0.2, '#5c3a1e');  // shaft
-      cueGrad.addColorStop(1, '#2a1a0a');    // butt
-      ctx.beginPath();
-      ctx.moveTo(cueX1, cueY1);
-      ctx.lineTo(cueX2, cueY2);
-      ctx.strokeStyle = cueGrad;
-      ctx.lineWidth = 4;
-      ctx.stroke();
+      ctx.save();
+      ctx.scale(-1, 1);
+      ctx.drawImage(assets.images.cue, -(cueGap + cueDrawLen), -cueDrawThick / 2, cueDrawLen, cueDrawThick);
+      ctx.restore();
 
-      // Power indicator
+      ctx.restore();
+
+      // Power indicator bar
       if (settingPower && power > 0) {
+        const barX = CANVAS_WIDTH - 28;
+        const barH = TABLE_H;
+        const barW = 12;
         const powerPct = power / MAX_POWER;
-        ctx.fillStyle = `rgba(255, ${Math.round(255 * (1 - powerPct))}, 0, 0.8)`;
-        ctx.fillRect(CANVAS_WIDTH - 30, TABLE_TOP, 15, TABLE_H);
-        ctx.fillStyle = `rgba(255, ${Math.round(255 * (1 - powerPct))}, 0, 1)`;
-        ctx.fillRect(CANVAS_WIDTH - 30, TABLE_BOTTOM - TABLE_H * powerPct, 15, TABLE_H * powerPct);
 
-        // Border
-        ctx.strokeStyle = '#FFFFFF';
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        ctx.fillRect(barX, TABLE_TOP, barW, barH);
+
+        const g = Math.round(255 * (1 - powerPct));
+        ctx.fillStyle = `rgb(255, ${g}, 0)`;
+        ctx.fillRect(barX, TABLE_TOP + barH * (1 - powerPct), barW, barH * powerPct);
+
+        ctx.strokeStyle = 'rgba(255,255,255,0.5)';
         ctx.lineWidth = 1;
-        ctx.strokeRect(CANVAS_WIDTH - 30, TABLE_TOP, 15, TABLE_H);
+        ctx.strokeRect(barX, TABLE_TOP, barW, barH);
       }
     }
 
-    // Ball-in-hand indicator
+    // Ball-in-hand text
     if (myTurn && ballInHand && !animating) {
-      ctx.fillStyle = 'rgba(255,255,255,0.5)';
-      ctx.font = '14px Arial';
+      ctx.fillStyle = 'rgba(255,255,255,0.6)';
+      ctx.font = '13px Arial';
       ctx.textAlign = 'center';
-      ctx.fillText('Click to place cue ball', CANVAS_WIDTH / 2, TABLE_TOP - 15);
+      ctx.fillText('Tap to place cue ball', CANVAS_WIDTH / 2, TABLE_TOP - 10);
     }
-  }, [balls, myTurn, animating, ballInHand, isBreakShot, aimAngle, power, settingPower]);
+  }, [balls, myTurn, animating, ballInHand, isBreakShot, aimAngle, power, settingPower, showGuideLine, assets, pocketingBalls]);
 
   // Render loop
   useEffect(() => {
@@ -318,44 +269,47 @@ export default function PoolCanvas({
     return () => cancelAnimationFrame(animId);
   }, [draw]);
 
-  // Mouse handlers
-  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+  // Convert client pixel coords to canvas coords
+  const clientToCanvas = useCallback((clientX: number, clientY: number) => {
     const canvas = canvasRef.current;
-    if (!canvas || animating) return;
+    if (!canvas) return { mx: 0, my: 0 };
     const rect = canvas.getBoundingClientRect();
-    const mx = (e.clientX - rect.left) * (CANVAS_WIDTH / rect.width);
-    const my = (e.clientY - rect.top) * (CANVAS_HEIGHT / rect.height);
+    return {
+      mx: ((clientX - rect.left) / rect.width) * CANVAS_WIDTH,
+      my: ((clientY - rect.top) / rect.height) * CANVAS_HEIGHT,
+    };
+  }, []);
+
+  // Mouse handlers
+  const getCanvasCoords = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    return clientToCanvas(e.clientX, e.clientY);
+  }, [clientToCanvas]);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (animating || !myTurn) return;
+    const { mx, my } = getCanvasCoords(e);
 
     const cueBall = balls.find((b) => b.id === 0 && b.active);
-    if (!cueBall || !myTurn) return;
+    if (!cueBall) return;
     const [cx, cy] = physToCanvas(cueBall.x, cueBall.y);
 
-    if (ballInHand && draggingCueBall) {
-      // Just track — placement happens on mouseUp
-      return;
-    }
+    if (ballInHand && draggingCueBall) return;
 
     if (settingPower && mouseStart) {
-      // Calculate power from drag distance
+      // While holding down, drag distance = power
       const dx = mx - mouseStart.x;
       const dy = my - mouseStart.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      const pwr = Math.min(MAX_POWER, dist * 25);
-      setPower(pwr);
+      setPower(Math.min(MAX_POWER, Math.sqrt(dx * dx + dy * dy) * 25));
       return;
     }
 
-    // Update aim angle
-    const angle = Math.atan2(my - cy, mx - cx);
-    setAimAngle(angle);
-  }, [balls, myTurn, animating, ballInHand, settingPower, mouseStart, draggingCueBall]);
+    // Free hover: cue follows cursor direction
+    setAimAngle(Math.atan2(my - cy, mx - cx));
+  }, [balls, myTurn, animating, ballInHand, settingPower, mouseStart, draggingCueBall, getCanvasCoords]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas || !myTurn || animating) return;
-    const rect = canvas.getBoundingClientRect();
-    const mx = (e.clientX - rect.left) * (CANVAS_WIDTH / rect.width);
-    const my = (e.clientY - rect.top) * (CANVAS_HEIGHT / rect.height);
+    if (!myTurn || animating) return;
+    const { mx, my } = getCanvasCoords(e);
 
     if (ballInHand) {
       setDraggingCueBall(true);
@@ -365,14 +319,11 @@ export default function PoolCanvas({
     setSettingPower(true);
     setMouseStart({ x: mx, y: my });
     setPower(0);
-  }, [myTurn, animating, ballInHand]);
+  }, [myTurn, animating, ballInHand, getCanvasCoords]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas || !myTurn || animating) return;
-    const rect = canvas.getBoundingClientRect();
-    const mx = (e.clientX - rect.left) * (CANVAS_WIDTH / rect.width);
-    const my = (e.clientY - rect.top) * (CANVAS_HEIGHT / rect.height);
+    if (!myTurn || animating) return;
+    const { mx, my } = getCanvasCoords(e);
 
     if (ballInHand && draggingCueBall) {
       const [px, py] = canvasToPhys(mx, my);
@@ -388,14 +339,84 @@ export default function PoolCanvas({
     setSettingPower(false);
     setPower(0);
     setMouseStart(null);
-  }, [myTurn, animating, ballInHand, draggingCueBall, settingPower, power, aimAngle, onTakeShot, onPlaceCueBall]);
+  }, [myTurn, animating, ballInHand, draggingCueBall, settingPower, power, aimAngle, onTakeShot, onPlaceCueBall, getCanvasCoords]);
+
+  // Touch handlers for mobile
+  const getTouchCoords = useCallback((touch: React.Touch) => {
+    return clientToCanvas(touch.clientX, touch.clientY);
+  }, [clientToCanvas]);
+
+  const handleTouchStart = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    if (!myTurn || animating || !e.touches[0]) return;
+    const { mx, my } = getTouchCoords(e.touches[0]);
+
+    if (ballInHand) {
+      setDraggingCueBall(true);
+      return;
+    }
+
+    // Set aim angle on touch start
+    const cueBall = balls.find((b) => b.id === 0 && b.active);
+    if (cueBall) {
+      const [cx, cy] = physToCanvas(cueBall.x, cueBall.y);
+      setAimAngle(Math.atan2(my - cy, mx - cx));
+    }
+
+    setSettingPower(true);
+    setMouseStart({ x: mx, y: my });
+    setPower(0);
+  }, [myTurn, animating, ballInHand, balls, getTouchCoords]);
+
+  const handleTouchMove = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    if (animating || !myTurn || !e.touches[0]) return;
+    const { mx, my } = getTouchCoords(e.touches[0]);
+
+    const cueBall = balls.find((b) => b.id === 0 && b.active);
+    if (!cueBall) return;
+    const [cx, cy] = physToCanvas(cueBall.x, cueBall.y);
+
+    if (settingPower && mouseStart) {
+      const dx = mx - mouseStart.x;
+      const dy = my - mouseStart.y;
+      setPower(Math.min(MAX_POWER, Math.sqrt(dx * dx + dy * dy) * 25));
+      return;
+    }
+
+    setAimAngle(Math.atan2(my - cy, mx - cx));
+  }, [balls, myTurn, animating, settingPower, mouseStart, getTouchCoords]);
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    if (!myTurn || animating) return;
+
+    if (ballInHand && draggingCueBall) {
+      const touch = e.changedTouches[0];
+      if (touch) {
+        const { mx, my } = getTouchCoords(touch);
+        const [px, py] = canvasToPhys(mx, my);
+        onPlaceCueBall(px, py);
+      }
+      setDraggingCueBall(false);
+      return;
+    }
+
+    if (settingPower && power > 40) {
+      onTakeShot({ angle: aimAngle, power, screw: 0, english: 0 });
+    }
+
+    setSettingPower(false);
+    setPower(0);
+    setMouseStart(null);
+  }, [myTurn, animating, ballInHand, draggingCueBall, settingPower, power, aimAngle, onTakeShot, onPlaceCueBall, getTouchCoords]);
 
   return (
     <canvas
       ref={canvasRef}
       width={CANVAS_WIDTH}
       height={CANVAS_HEIGHT}
-      style={{ width: '100%', maxWidth: '900px', touchAction: 'none', cursor: myTurn && !animating ? 'crosshair' : 'default' }}
+      style={{ width: '100%', maxWidth: '990px', touchAction: 'none', cursor: myTurn && !animating ? 'crosshair' : 'default' }}
       onMouseMove={handleMouseMove}
       onMouseDown={handleMouseDown}
       onMouseUp={handleMouseUp}
@@ -406,6 +427,9 @@ export default function PoolCanvas({
           setMouseStart(null);
         }
       }}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
     />
   );
 }
