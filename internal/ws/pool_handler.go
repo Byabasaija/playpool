@@ -335,6 +335,14 @@ func (c *Client) handleTakeShot(g *game.PoolGameState, data TakeShotData) {
 		English: data.English,
 	}
 
+	// Relay shot params to opponent immediately (before physics simulation)
+	// so they can start client-side animation while server computes the result
+	GameHub.SendToPlayer(c.opponentID, map[string]interface{}{
+		"type":        "shot_relay",
+		"player":      c.playerID,
+		"shot_params": params,
+	})
+
 	result, err := g.TakeShot(c.playerID, params)
 	if err != nil {
 		c.sendError(err.Error())

@@ -1,6 +1,6 @@
 // Types for pool game WebSocket protocol and game state.
 
-import { type BallGroup, type BallState, type ShotParams } from '../game/pool/PoolCanvas';
+import { type BallGroup, type BallState, type ShotParams } from '../game/pool/types';
 
 export type { BallGroup, BallState, ShotParams };
 
@@ -65,6 +65,7 @@ export type PoolWSMessageType =
   | 'game_state'
   | 'game_update'
   | 'shot_result'
+  | 'shot_relay'
   | 'ball_placed'
   | 'player_connected'
   | 'player_disconnected'

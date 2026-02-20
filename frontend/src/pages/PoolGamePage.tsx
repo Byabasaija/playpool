@@ -1,21 +1,22 @@
 // Pool game page with sprite-based rendering.
 
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { usePoolGameState } from '../hooks/usePoolGameState';
 import { usePoolWebSocket } from '../hooks/usePoolWebSocket';
 import { PoolWSMessage } from '../types/pool.types';
-import { ShotAnimator, type BallFrame, type ServerBallPosition, type PocketEvent } from '../game/pool/ShotAnimator';
+import { ShotAnimator, type BallFrame, type PocketEvent } from '../game/pool/ShotAnimator';
 import { loadPoolAssets, PoolAssets } from '../game/pool/AssetLoader';
 import { SoundManager } from '../game/pool/SoundManager';
 import { updateBallRotation } from '../game/pool/BallRenderer';
-import PoolCanvas, { type ShotParams, type PocketingAnim, physToCanvas } from '../game/pool/PoolCanvas';
+import PoolCanvas from '../game/pool/PoolCanvas';
+import { type ShotParams, type PocketingAnim } from '../game/pool/types';
+import { physToCanvas } from '../game/pool/canvasLayout';
 import PlayerBar from '../game/pool/PlayerBar';
 import SpinSetter from '../game/pool/SpinSetter';
 import FoulNotification from '../game/pool/FoulNotification';
+import GameOverScreen from '../game/pool/ui/GameOverScreen';
 
 export const PoolGamePage: React.FC = () => {
-  const navigate = useNavigate();
   const [assets, setAssets] = useState<PoolAssets | null>(null);
   const [assetsError, setAssetsError] = useState(false);
   const [tokensReady, setTokensReady] = useState(false);
@@ -76,8 +77,8 @@ export const PoolGamePage: React.FC = () => {
         }
         setBallPositions(balls.map(b => ({ id: b.id, x: b.x, y: b.y, active: b.active })));
       },
-      (serverPositions: ServerBallPosition[]) => {
-        setBallPositions(serverPositions.map(b => ({ id: b.id, x: b.x, y: b.y, active: b.active })));
+      (finalPositions: BallFrame[]) => {
+        setBallPositions(finalPositions.map(b => ({ id: b.id, x: b.x, y: b.y, active: b.active })));
         setAnimating(false);
       },
       (event) => {
@@ -147,19 +148,37 @@ export const PoolGamePage: React.FC = () => {
         }
         break;
 
-      case 'shot_result': {
-        const shotParams = message.shot_params;
-        const serverBalls = message.ball_positions;
-        if (shotParams && serverBalls) {
+      case 'shot_relay': {
+        // Opponent's shot relayed before server physics — start animation immediately
+        const relayParams = message.shot_params;
+        if (relayParams) {
           setAnimating(true);
           firstHitRef.current = false;
           soundRef.current?.resumeAudioContext();
           animatorRef.current?.start(
             gameState.balls,
-            { angle: shotParams.angle, power: shotParams.power, screw: shotParams.screw, english: shotParams.english },
-            serverBalls,
+            { angle: relayParams.angle, power: relayParams.power, screw: relayParams.screw, english: relayParams.english },
           );
         }
+        break;
+      }
+
+      case 'shot_result': {
+        // Animation is already running from local shot or shot_relay.
+        // If somehow not animating yet (e.g. missed relay), start from shot_params.
+        if (!animating && !animatorRef.current?.isRunning()) {
+          const shotParams = message.shot_params;
+          if (shotParams) {
+            setAnimating(true);
+            firstHitRef.current = false;
+            soundRef.current?.resumeAudioContext();
+            animatorRef.current?.start(
+              gameState.balls,
+              { angle: shotParams.angle, power: shotParams.power, screw: shotParams.screw, english: shotParams.english },
+            );
+          }
+        }
+        // Game logic only — ball positions come from local PhysicsEngine
 
         if (message.foul) {
           setFoulMessage(message.foul.message);
@@ -215,7 +234,7 @@ export const PoolGamePage: React.FC = () => {
         console.error('[Pool] Error:', message.message);
         break;
     }
-  }, [updateFromWSMessage, applyShotResult, setBallPositions, gameState.balls]);
+  }, [updateFromWSMessage, applyShotResult, setBallPositions, gameState.balls, animating]);
 
   const { connected, send: sendWSMessage } = usePoolWebSocket({
     gameToken: tokensReady ? resolvedGameToken : '',
@@ -227,11 +246,18 @@ export const PoolGamePage: React.FC = () => {
   });
 
   const handleTakeShot = useCallback((params: ShotParams) => {
-    sendWSMessage({
-      type: 'take_shot',
-      data: { angle: params.angle, power: params.power, screw, english },
-    });
-  }, [sendWSMessage, screw, english]);
+    const fullParams = { angle: params.angle, power: params.power, screw, english };
+    sendWSMessage({ type: 'take_shot', data: fullParams });
+
+    // Start local animation immediately (don't wait for server response)
+    setAnimating(true);
+    firstHitRef.current = false;
+    soundRef.current?.resumeAudioContext();
+    animatorRef.current?.start(
+      gameState.balls,
+      fullParams,
+    );
+  }, [sendWSMessage, screw, english, gameState.balls]);
 
   const handlePlaceCueBall = useCallback((x: number, y: number) => {
     sendWSMessage({
@@ -319,64 +345,7 @@ export const PoolGamePage: React.FC = () => {
 
   // Game over
   if (gameOver) {
-    const youWon = gameOver.isWinner;
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-[#0e1628]">
-        <div className="p-8 text-center max-w-md mx-auto">
-          <div className="mb-6">
-            <div className={`h-24 w-24 rounded-full mx-auto flex items-center justify-center text-5xl ${
-              youWon ? 'bg-green-900 animate-bounce' : 'bg-red-900'
-            }`}>
-              {youWon ? '!' : '..'}
-            </div>
-          </div>
-
-          <h2 className={`text-3xl font-bold mb-4 ${youWon ? 'text-green-400' : 'text-red-400'}`}>
-            {youWon ? 'You Won!' : 'You Lost'}
-          </h2>
-
-          <div className="mb-4">
-            <span className="inline-block px-4 py-1 rounded-full text-sm font-semibold bg-gray-700 text-white">
-              {gameOver.winType === 'pocket_8' ? '8-Ball Victory' :
-               gameOver.winType === 'illegal_8ball' ? 'Illegal 8-Ball' :
-               gameOver.winType === 'scratch_on_8' ? 'Scratch on 8-Ball' :
-               gameOver.winType === 'concede' ? 'Conceded' :
-               gameOver.winType === 'forfeit' ? 'Forfeit' : gameOver.winType}
-            </span>
-          </div>
-
-          <div className="space-y-3 mb-6">
-            {youWon ? (
-              <div className="bg-green-900/50 border border-green-600 rounded-lg p-4">
-                <p className="text-2xl font-bold text-green-400 mb-1">
-                  +{((gameState.stakeAmount || 1000) * 2 * 0.85).toLocaleString()} UGX
-                </p>
-                <p className="text-sm text-gray-400">After 15% tax</p>
-              </div>
-            ) : (
-              <div className="bg-red-900/50 border border-red-600 rounded-lg p-4">
-                <p className="font-semibold text-red-300">Better luck next time!</p>
-              </div>
-            )}
-          </div>
-
-          <div className="flex gap-3 justify-center">
-            <button
-              onClick={() => navigate('/')}
-              className="flex-1 bg-gray-700 text-white py-2 px-4 rounded-lg text-sm font-semibold hover:bg-gray-600"
-            >
-              New Game
-            </button>
-            <button
-              onClick={() => navigate('/')}
-              className="flex-1 bg-green-600 text-white py-2 px-4 rounded-lg text-sm font-semibold hover:bg-green-500"
-            >
-              Rematch
-            </button>
-          </div>
-        </div>
-      </div>
-    );
+    return <GameOverScreen gameOver={gameOver} stakeAmount={gameState.stakeAmount} />;
   }
 
   // Portrait rotation styles — rotate entire game view when phone is held upright

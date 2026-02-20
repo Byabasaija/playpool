@@ -76,6 +76,16 @@ export class PhysicsEngine {
     this.updateFriction();
   }
 
+  /** Run collision detection + movement only (no friction). */
+  stepCollisions(): void {
+    this.predictCollisions();
+  }
+
+  /** Apply friction to all balls (call once per visual frame). */
+  stepFriction(): void {
+    this.updateFriction();
+  }
+
   private predictCollisions(): void {
     let t = 0;
     let iterations = 0;

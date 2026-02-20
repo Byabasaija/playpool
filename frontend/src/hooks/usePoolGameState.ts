@@ -89,7 +89,8 @@ function reducer(state: PoolGameState, action: Action): PoolGameState {
         // We'll update from the game_update that follows
       }
 
-      if (d.ball_positions) next.balls = d.ball_positions;
+      // Ball positions come from local PhysicsEngine animation, not from server.
+      // Do NOT overwrite: if (d.ball_positions) next.balls = d.ball_positions;
       if (d.next_turn !== undefined) {
         next.currentTurn = d.next_turn || null;
         next.myTurn = d.next_turn === state.playerId;

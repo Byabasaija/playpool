@@ -1,35 +1,36 @@
 // Main pool table canvas — sprite-based rendering with 8Ball-Pool-HTML5 assets.
+// Includes animated cue stick with pull-back, strike, and follow-through.
 
 import { useRef, useEffect, useCallback, useState } from 'react';
-import { BALL_RADIUS, N, MAX_POWER } from './constants';
+import { MAX_POWER } from './constants';
 import { createStandard8BallTable, type Table } from './TableGeometry';
 import { PoolAssets } from './AssetLoader';
 import { drawBall, drawPocketingBall } from './BallRenderer';
+import {
+  CANVAS_WIDTH, CANVAS_HEIGHT, RAIL_MARGIN, TABLE_LEFT, TABLE_TOP,
+  TABLE_W, TABLE_H, BALL_R_PX, physToCanvas, canvasToPhys,
+} from './canvasLayout';
+import { type BallState, type BallGroup, type ShotParams, type PocketingAnim } from './types';
 
-interface PocketingAnim {
-  ballId: number;
-  startX: number; // canvas coords
-  startY: number;
-  targetX: number; // canvas coords
-  targetY: number;
-  startTime: number;
-  duration: number; // ms
-}
+// Re-export types for backward compatibility
+export { type BallState, type BallGroup, type ShotParams, type PocketingAnim } from './types';
 
-export interface BallState {
-  id: number;
-  x: number;
-  y: number;
-  active: boolean;
-}
+// Cue animation state machine
+type CuePhase = 'aiming' | 'striking' | 'followThrough' | 'hidden';
 
-export type BallGroup = 'SOLIDS' | 'STRIPES' | 'ANY' | '8BALL';
-
-export interface ShotParams {
-  angle: number;
-  power: number;
-  screw: number;
-  english: number;
+interface CueStrikeState {
+  phase: CuePhase;
+  // Strike animation
+  strikeStartTime: number;    // performance.now() when strike began
+  strikeDuration: number;     // ms for cue to reach ball
+  // The power/angle at time of shot
+  shotPower: number;
+  shotAngle: number;
+  // Pull-back distance at moment of release (start of strike)
+  pullbackPx: number;
+  // Follow-through
+  followStartTime: number;    // when follow-through + fade begins
+  fadeDuration: number;       // ms for cue to fade out
 }
 
 interface PoolCanvasProps {
@@ -47,38 +48,6 @@ interface PoolCanvasProps {
   pocketingBalls?: PocketingAnim[];
 }
 
-// Canvas dimensions (wider to accommodate wooden rail frame)
-const CANVAS_WIDTH = 990;
-const CANVAS_HEIGHT = 560;
-
-// Table play area (inside the rails)
-const RAIL_MARGIN = 55;
-const TABLE_LEFT = RAIL_MARGIN + 40;
-const TABLE_TOP = RAIL_MARGIN + 30;
-const TABLE_W = CANVAS_WIDTH - TABLE_LEFT * 2;
-const TABLE_H = CANVAS_HEIGHT - TABLE_TOP * 2;
-
-// Physics-to-canvas conversion
-const TABLE_PHYS_W = 100 * N;
-const TABLE_PHYS_H = 50 * N;
-const SCALE_X = TABLE_W / TABLE_PHYS_W;
-const SCALE_Y = TABLE_H / TABLE_PHYS_H;
-const BALL_R_PX = BALL_RADIUS * SCALE_X;
-
-export function physToCanvas(px: number, py: number): [number, number] {
-  const cx = TABLE_LEFT + TABLE_W / 2 + px * SCALE_X;
-  const cy = TABLE_TOP + TABLE_H / 2 + py * SCALE_Y;
-  return [cx, cy];
-}
-
-function canvasToPhys(cx: number, cy: number): [number, number] {
-  const px = (cx - TABLE_LEFT - TABLE_W / 2) / SCALE_X;
-  const py = (cy - TABLE_TOP - TABLE_H / 2) / SCALE_Y;
-  return [px, py];
-}
-
-export { type PocketingAnim };
-
 export default function PoolCanvas({
   balls, myTurn, ballInHand, isBreakShot, myGroup: _myGroup, opponentGroup: _opponentGroup,
   animating, onTakeShot, onPlaceCueBall, assets, showGuideLine = true, pocketingBalls = [],
@@ -91,9 +60,42 @@ export default function PoolCanvas({
   const [draggingCueBall, setDraggingCueBall] = useState(false);
   const tableRef = useRef<Table | null>(null);
 
+  // Cue animation state
+  const cueStateRef = useRef<CueStrikeState>({
+    phase: 'aiming',
+    strikeStartTime: 0,
+    strikeDuration: 0,
+    shotPower: 0,
+    shotAngle: 0,
+    pullbackPx: 0,
+    followStartTime: 0,
+    fadeDuration: 1000,
+  });
+  // Track whether shot has been fired (to avoid double-fire)
+  const shotFiredRef = useRef(false);
+
   if (!tableRef.current) {
     tableRef.current = createStandard8BallTable();
   }
+
+  // Reset cue to aiming when it becomes our turn and we're not animating
+  useEffect(() => {
+    if (myTurn && !animating && !ballInHand) {
+      cueStateRef.current.phase = 'aiming';
+      shotFiredRef.current = false;
+    }
+  }, [myTurn, animating, ballInHand]);
+
+  // When external animation starts (from shot result), hide cue
+  useEffect(() => {
+    if (animating) {
+      // If we're in follow-through or striking, let it continue
+      // The cue will naturally be hidden or fading
+      if (cueStateRef.current.phase === 'aiming') {
+        cueStateRef.current.phase = 'hidden';
+      }
+    }
+  }, [animating]);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -108,20 +110,15 @@ export default function PoolCanvas({
     ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
     // === TABLE LAYERS ===
-    // Layer 1: Pockets (bottom — dark holes visible through cloth)
     ctx.drawImage(
       assets.images.pockets,
       TABLE_LEFT - RAIL_MARGIN, TABLE_TOP - RAIL_MARGIN,
       TABLE_W + RAIL_MARGIN * 2, TABLE_H + RAIL_MARGIN * 2,
     );
-
-    // Layer 2: Cloth texture (felt surface)
     ctx.drawImage(
       assets.images.cloth,
       TABLE_LEFT, TABLE_TOP, TABLE_W, TABLE_H,
     );
-
-    // Layer 3: Table top frame (wooden rails — transparent center)
     ctx.drawImage(
       assets.images.tableTop,
       TABLE_LEFT - RAIL_MARGIN, TABLE_TOP - RAIL_MARGIN,
@@ -148,6 +145,18 @@ export default function PoolCanvas({
       return 0;
     });
 
+    // Draw shadows first (under all balls)
+    const shadowSize = BALL_R_PX * 4;
+    for (const ball of sortedBalls) {
+      if (!ball.active) continue;
+      const [bx, by] = physToCanvas(ball.x, ball.y);
+      ctx.save();
+      ctx.globalAlpha = 0.7;
+      ctx.drawImage(assets.images.shadow, bx - shadowSize / 2, by - shadowSize / 2, shadowSize, shadowSize);
+      ctx.restore();
+    }
+
+    // Draw balls on top
     for (const ball of sortedBalls) {
       if (!ball.active) continue;
       const [bx, by] = physToCanvas(ball.x, ball.y);
@@ -160,27 +169,89 @@ export default function PoolCanvas({
       const elapsed = now - pa.startTime;
       const progress = Math.min(1, elapsed / pa.duration);
       if (progress >= 1) continue;
-
-      // Ease out: decelerating toward pocket
       const ease = 1 - (1 - progress) * (1 - progress);
-      const cx = pa.startX + (pa.targetX - pa.startX) * ease;
-      const cy = pa.startY + (pa.targetY - pa.startY) * ease;
+      const px = pa.startX + (pa.targetX - pa.startX) * ease;
+      const py = pa.startY + (pa.targetY - pa.startY) * ease;
       const scale = 1 - ease;
-
-      drawPocketingBall(ctx, assets, pa.ballId, cx, cy, BALL_R_PX, scale);
+      drawPocketingBall(ctx, assets, pa.ballId, px, py, BALL_R_PX, scale);
     }
 
-    // === AIMING GUIDE + CUE STICK ===
+    // === CUE STICK + AIMING GUIDE ===
     const cueBall = balls.find((b) => b.id === 0 && b.active);
-    if (myTurn && !animating && !ballInHand && cueBall) {
-      const [cx, cy] = physToCanvas(cueBall.x, cueBall.y);
+    const cue = cueStateRef.current;
+    // Show cue: during my turn while aiming, or during strike/follow-through animation
+    const showCue = cueBall && !ballInHand && cue.phase !== 'hidden' && (
+      (myTurn && !animating && cue.phase === 'aiming') ||
+      cue.phase === 'striking' ||
+      cue.phase === 'followThrough'
+    );
 
-      // Guide line (configurable)
-      if (showGuideLine) {
+    if (showCue) {
+      const [cx, cy] = physToCanvas(cueBall.x, cueBall.y);
+      const cueDrawLen = BALL_R_PX * 18;
+      const cueDrawThick = BALL_R_PX * 0.8;
+      const baseGap = BALL_R_PX * 1.5;
+
+      // Determine cue position based on animation phase
+      let cueOffset = baseGap; // distance from ball center to cue tip
+      let cueAlpha = 1;
+      let showGuide = showGuideLine && cue.phase === 'aiming';
+      const drawAngle = cue.phase === 'aiming' ? aimAngle : cue.shotAngle;
+
+      if (cue.phase === 'aiming') {
+        // Pull back proportional to power while charging
+        if (settingPower) {
+          cueOffset = baseGap + power * 0.025;
+        }
+      } else if (cue.phase === 'striking') {
+        // Tween from pulled-back position toward ball
+        const elapsed = now - cue.strikeStartTime;
+        const t = Math.min(1, elapsed / cue.strikeDuration);
+        // Ease out (decelerating toward ball)
+        const easeT = 1 - (1 - t) * (1 - t);
+
+        // Start position: baseGap + pullback; End position: -BALL_R_PX (past center slightly)
+        const startOffset = baseGap + cue.pullbackPx;
+        const endOffset = -BALL_R_PX * 0.3; // tip goes slightly past ball center
+        cueOffset = startOffset + (endOffset - startOffset) * easeT;
+
+        // Fire the shot when tip reaches the ball (offset reaches baseGap going down)
+        if (cueOffset <= baseGap && !shotFiredRef.current) {
+          shotFiredRef.current = true;
+          onTakeShot({ angle: cue.shotAngle, power: cue.shotPower, screw: 0, english: 0 });
+        }
+
+        // Transition to follow-through when strike completes
+        if (t >= 1) {
+          cue.phase = 'followThrough';
+          cue.followStartTime = now;
+          cue.fadeDuration = 800;
+        }
+      } else if (cue.phase === 'followThrough') {
+        // Cue stays at forward position and fades out
+        const elapsed = now - cue.followStartTime;
+        const fadeDelay = 200; // brief pause before fading
+
+        cueOffset = -BALL_R_PX * 0.3;
+
+        if (elapsed > fadeDelay) {
+          const fadeT = Math.min(1, (elapsed - fadeDelay) / cue.fadeDuration);
+          cueAlpha = 1 - fadeT;
+        }
+
+        // When fully faded, transition to hidden
+        if (elapsed > fadeDelay + cue.fadeDuration) {
+          cue.phase = 'hidden';
+          cueAlpha = 0;
+        }
+      }
+
+      // Draw guide line (only during aiming)
+      if (showGuide && cueBall) {
         const guideLen = 300;
         ctx.save();
         ctx.translate(cx, cy);
-        ctx.rotate(aimAngle);
+        ctx.rotate(drawAngle);
 
         const dImg = assets.images.dottedLine;
         const segLen = dImg.naturalWidth * 0.5;
@@ -199,38 +270,36 @@ export default function PoolCanvas({
         ctx.restore();
       }
 
-      // Cue stick (sprite-based)
-      // Sprite: tip at left (x=0), butt at right. We draw behind the cue ball.
-      const cueGap = BALL_R_PX * 1.5 + (settingPower ? power * 0.025 : 0);
-      const cueDrawLen = BALL_R_PX * 16;
-      const cueDrawThick = BALL_R_PX * 0.9;
+      // Draw cue stick
+      // cue.png: left=butt, right=tip (the hitting end).
+      // We rotate to aimAngle so positive X = aim direction.
+      // The cue is drawn at negative X (behind ball), with its right edge (tip)
+      // at -cueOffset from center (closest to ball).
+      if (cueAlpha > 0) {
+        ctx.save();
+        ctx.globalAlpha = cueAlpha;
+        ctx.translate(cx, cy);
+        ctx.rotate(drawAngle);
 
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.rotate(aimAngle + Math.PI); // point away from aim (behind ball)
+        // Right edge (tip) at -cueOffset, left edge (butt) at -(cueOffset + cueDrawLen)
+        const cueX = -(cueOffset + cueDrawLen);
+        const cueY = -cueDrawThick / 2;
 
-      // Draw cue with tip closest to ball — sprite has tip at left (x=0),
-      // so we flip horizontally to point tip toward the ball.
+        // Shadow
+        ctx.save();
+        ctx.translate(3, 4);
+        ctx.globalAlpha = cueAlpha * 0.35;
+        ctx.drawImage(assets.images.cueShadow, cueX, cueY, cueDrawLen, cueDrawThick);
+        ctx.restore();
 
-      // Shadow (flipped to match cue body)
-      ctx.save();
-      ctx.translate(3, 4);
-      ctx.globalAlpha = 0.4;
-      ctx.scale(-1, 1);
-      ctx.drawImage(assets.images.cueShadow, -(cueGap + cueDrawLen), -cueDrawThick / 2, cueDrawLen, cueDrawThick);
-      ctx.globalAlpha = 1;
-      ctx.restore();
+        // Cue body
+        ctx.globalAlpha = cueAlpha;
+        ctx.drawImage(assets.images.cue, cueX, cueY, cueDrawLen, cueDrawThick);
+        ctx.restore();
+      }
 
-      // Cue body
-      ctx.save();
-      ctx.scale(-1, 1);
-      ctx.drawImage(assets.images.cue, -(cueGap + cueDrawLen), -cueDrawThick / 2, cueDrawLen, cueDrawThick);
-      ctx.restore();
-
-      ctx.restore();
-
-      // Power indicator bar
-      if (settingPower && power > 0) {
+      // Power indicator bar (only during aiming + charging)
+      if (cue.phase === 'aiming' && settingPower && power > 0) {
         const barX = CANVAS_WIDTH - 28;
         const barH = TABLE_H;
         const barW = 12;
@@ -256,7 +325,7 @@ export default function PoolCanvas({
       ctx.textAlign = 'center';
       ctx.fillText('Tap to place cue ball', CANVAS_WIDTH / 2, TABLE_TOP - 10);
     }
-  }, [balls, myTurn, animating, ballInHand, isBreakShot, aimAngle, power, settingPower, showGuideLine, assets, pocketingBalls]);
+  }, [balls, myTurn, animating, ballInHand, isBreakShot, aimAngle, power, settingPower, showGuideLine, assets, pocketingBalls, onTakeShot]);
 
   // Render loop
   useEffect(() => {
@@ -268,6 +337,23 @@ export default function PoolCanvas({
     loop();
     return () => cancelAnimationFrame(animId);
   }, [draw]);
+
+  // Initiate the cue strike animation
+  const startStrike = useCallback((shotAngle: number, shotPower: number) => {
+    const cue = cueStateRef.current;
+    // Calculate strike duration: faster for stronger shots
+    // Reference game: duration = 1/power seconds, clamped 0.1s to 0.8s
+    let duration = 1 / (shotPower / 1000); // 1000ms at power=1000, 200ms at power=5000
+    duration = Math.max(80, Math.min(600, duration * 1000)); // clamp 80ms-600ms
+
+    cue.phase = 'striking';
+    cue.strikeStartTime = performance.now();
+    cue.strikeDuration = duration;
+    cue.shotPower = shotPower;
+    cue.shotAngle = shotAngle;
+    cue.pullbackPx = shotPower * 0.025; // matches the charging pullback
+    shotFiredRef.current = false;
+  }, []);
 
   // Convert client pixel coords to canvas coords
   const clientToCanvas = useCallback((clientX: number, clientY: number) => {
@@ -287,6 +373,9 @@ export default function PoolCanvas({
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (animating || !myTurn) return;
+    const cue = cueStateRef.current;
+    if (cue.phase !== 'aiming') return; // Don't update aim during strike/follow-through
+
     const { mx, my } = getCanvasCoords(e);
 
     const cueBall = balls.find((b) => b.id === 0 && b.active);
@@ -296,19 +385,20 @@ export default function PoolCanvas({
     if (ballInHand && draggingCueBall) return;
 
     if (settingPower && mouseStart) {
-      // While holding down, drag distance = power
       const dx = mx - mouseStart.x;
       const dy = my - mouseStart.y;
       setPower(Math.min(MAX_POWER, Math.sqrt(dx * dx + dy * dy) * 25));
       return;
     }
 
-    // Free hover: cue follows cursor direction
     setAimAngle(Math.atan2(my - cy, mx - cx));
   }, [balls, myTurn, animating, ballInHand, settingPower, mouseStart, draggingCueBall, getCanvasCoords]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!myTurn || animating) return;
+    const cue = cueStateRef.current;
+    if (cue.phase !== 'aiming') return;
+
     const { mx, my } = getCanvasCoords(e);
 
     if (ballInHand) {
@@ -333,13 +423,14 @@ export default function PoolCanvas({
     }
 
     if (settingPower && power > 40) {
-      onTakeShot({ angle: aimAngle, power, screw: 0, english: 0 });
+      // Start cue strike animation instead of immediately firing
+      startStrike(aimAngle, power);
     }
 
     setSettingPower(false);
     setPower(0);
     setMouseStart(null);
-  }, [myTurn, animating, ballInHand, draggingCueBall, settingPower, power, aimAngle, onTakeShot, onPlaceCueBall, getCanvasCoords]);
+  }, [myTurn, animating, ballInHand, draggingCueBall, settingPower, power, aimAngle, startStrike, onPlaceCueBall, getCanvasCoords]);
 
   // Touch handlers for mobile
   const getTouchCoords = useCallback((touch: React.Touch) => {
@@ -349,6 +440,9 @@ export default function PoolCanvas({
   const handleTouchStart = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
     e.preventDefault();
     if (!myTurn || animating || !e.touches[0]) return;
+    const cue = cueStateRef.current;
+    if (cue.phase !== 'aiming') return;
+
     const { mx, my } = getTouchCoords(e.touches[0]);
 
     if (ballInHand) {
@@ -356,7 +450,6 @@ export default function PoolCanvas({
       return;
     }
 
-    // Set aim angle on touch start
     const cueBall = balls.find((b) => b.id === 0 && b.active);
     if (cueBall) {
       const [cx, cy] = physToCanvas(cueBall.x, cueBall.y);
@@ -371,6 +464,9 @@ export default function PoolCanvas({
   const handleTouchMove = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
     e.preventDefault();
     if (animating || !myTurn || !e.touches[0]) return;
+    const cue = cueStateRef.current;
+    if (cue.phase !== 'aiming') return;
+
     const { mx, my } = getTouchCoords(e.touches[0]);
 
     const cueBall = balls.find((b) => b.id === 0 && b.active);
@@ -403,13 +499,14 @@ export default function PoolCanvas({
     }
 
     if (settingPower && power > 40) {
-      onTakeShot({ angle: aimAngle, power, screw: 0, english: 0 });
+      // Start cue strike animation instead of immediately firing
+      startStrike(aimAngle, power);
     }
 
     setSettingPower(false);
     setPower(0);
     setMouseStart(null);
-  }, [myTurn, animating, ballInHand, draggingCueBall, settingPower, power, aimAngle, onTakeShot, onPlaceCueBall, getTouchCoords]);
+  }, [myTurn, animating, ballInHand, draggingCueBall, settingPower, power, aimAngle, startStrike, onPlaceCueBall, getTouchCoords]);
 
   return (
     <canvas

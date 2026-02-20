@@ -1,9 +1,10 @@
-// Animates a pool shot by stepping through client-side physics frame by frame.
-// After animation, smoothly interpolates to the server's authoritative final positions.
+// Animates a pool shot using the deterministic PhysicsEngine.
+// Steps physics frame by frame (3x collisions + 1x friction per rAF).
+// No snap-to-server — PhysicsEngine mirrors Go server exactly.
 
-import { Vec2, fix } from './Vec2';
-import { PhysicsEngine, createBallsFromState, CollisionEvent } from './PhysicsEngine';
+import { PhysicsEngine, createBallsFromState, type CollisionEvent } from './PhysicsEngine';
 import { createStandard8BallTable } from './TableGeometry';
+import { Vec2 } from './Vec2';
 
 export interface BallFrame {
   id: number;
@@ -21,13 +22,6 @@ export interface ShotAnimationParams {
   english: number;
 }
 
-export interface ServerBallPosition {
-  id: number;
-  x: number;
-  y: number;
-  active: boolean;
-}
-
 export interface PocketEvent {
   ballId: number;
   pocketX: number; // physics coords
@@ -35,19 +29,17 @@ export interface PocketEvent {
 }
 
 export class ShotAnimator {
-  private engine: PhysicsEngine | null = null;
+  private physics: PhysicsEngine | null = null;
   private animFrameId: number | null = null;
   private onFrame: (balls: BallFrame[]) => void;
-  private onComplete: (serverPositions: ServerBallPosition[]) => void;
+  private onComplete: (finalPositions: BallFrame[]) => void;
   private onCollision: ((event: CollisionEvent) => void) | null = null;
   private onPocket: ((event: PocketEvent) => void) | null = null;
-  private serverPositions: ServerBallPosition[] = [];
   private running = false;
-  private lastEventIndex = 0;
 
   constructor(
     onFrame: (balls: BallFrame[]) => void,
-    onComplete: (serverPositions: ServerBallPosition[]) => void,
+    onComplete: (finalPositions: BallFrame[]) => void,
     onCollision?: (event: CollisionEvent) => void,
   ) {
     this.onFrame = onFrame;
@@ -55,38 +47,36 @@ export class ShotAnimator {
     this.onCollision = onCollision || null;
   }
 
-  /** Update the collision callback (e.g. when sound manager changes). */
   setOnCollision(cb: (event: CollisionEvent) => void): void {
     this.onCollision = cb;
   }
 
-  /** Set callback for pocket events (ball entering pocket). */
   setOnPocket(cb: (event: PocketEvent) => void): void {
     this.onPocket = cb;
   }
 
-  /** Start animating a shot. */
+  /** Start animating a shot using deterministic PhysicsEngine. */
   start(
     currentBalls: { id: number; x: number; y: number; active: boolean }[],
     shotParams: ShotAnimationParams,
-    serverFinalPositions: ServerBallPosition[],
   ): void {
     this.stop();
-    this.serverPositions = serverFinalPositions;
     this.running = true;
-    this.lastEventIndex = 0;
 
     const table = createStandard8BallTable();
     const balls = createBallsFromState(currentBalls);
 
     // Apply shot to cue ball
-    const vx = fix(Math.cos(shotParams.angle) * shotParams.power);
-    const vy = fix(Math.sin(shotParams.angle) * shotParams.power);
-    balls[0].velocity = new Vec2(vx, vy);
-    balls[0].screw = shotParams.screw;
-    balls[0].english = shotParams.english;
+    const cueBall = balls[0];
+    if (cueBall && cueBall.active) {
+      const vx = Math.cos(shotParams.angle) * shotParams.power;
+      const vy = Math.sin(shotParams.angle) * shotParams.power;
+      cueBall.velocity = new Vec2(vx, vy);
+      cueBall.screw = shotParams.screw;
+      cueBall.english = shotParams.english;
+    }
 
-    this.engine = new PhysicsEngine(balls, table);
+    this.physics = new PhysicsEngine(balls, table);
     this.tick();
   }
 
@@ -97,41 +87,55 @@ export class ShotAnimator {
       cancelAnimationFrame(this.animFrameId);
       this.animFrameId = null;
     }
-    this.engine = null;
+    this.physics = null;
   }
 
   private tick = (): void => {
-    if (!this.running || !this.engine) return;
+    if (!this.running || !this.physics) return;
 
-    // Sub-step: run 3 physics steps per visual frame for smoother motion
-    for (let i = 0; i < 3; i++) {
-      if (this.engine.allStopped()) {
-        this.snapToServer();
-        return;
-      }
-      this.engine['updatePhysics']();
+    // Check if all balls stopped
+    if (this.physics.allStopped()) {
+      const finalFrame = this.buildFrame();
+      this.onFrame(finalFrame);
+      this.onComplete(finalFrame);
+      this.physics = null;
+      this.running = false;
+      return;
+    }
 
-      // Emit collision events for sound + pocket animation
-      const newEvents = this.engine.events.slice(this.lastEventIndex);
-      this.lastEventIndex = this.engine.events.length;
-      for (const evt of newEvents) {
-        if (this.onCollision) this.onCollision(evt);
-        if (evt.type === 'pocket' && this.onPocket) {
-          // Find the pocket position from the table
-          const pocket = this.engine.table.pockets.find(p => p.id === evt.targetId);
-          if (pocket) {
-            this.onPocket({
-              ballId: evt.ballId,
-              pocketX: pocket.dropPosition.x,
-              pocketY: pocket.dropPosition.y,
-            });
-          }
+    // Clear events before stepping
+    this.physics.events = [];
+
+    // Step physics: 3x collision substeps + 1x friction (smooth 60fps)
+    this.physics.stepCollisions();
+    this.physics.stepCollisions();
+    this.physics.stepCollisions();
+    this.physics.stepFriction();
+
+    // Process collision events
+    for (const evt of this.physics.events) {
+      if (this.onCollision) this.onCollision(evt);
+      if (evt.type === 'pocket' && this.onPocket) {
+        const pocket = this.physics.table.pockets.find(p => p.id === evt.targetId);
+        if (pocket) {
+          this.onPocket({
+            ballId: evt.ballId,
+            pocketX: pocket.dropPosition.x,
+            pocketY: pocket.dropPosition.y,
+          });
         }
       }
     }
 
-    // Emit current ball positions with velocity for rotation tracking
-    const frame: BallFrame[] = this.engine.balls.map((b) => ({
+    // Emit current ball positions
+    this.onFrame(this.buildFrame());
+
+    this.animFrameId = requestAnimationFrame(this.tick);
+  };
+
+  private buildFrame(): BallFrame[] {
+    if (!this.physics) return [];
+    return this.physics.balls.map(b => ({
       id: b.id,
       x: b.position.x,
       y: b.position.y,
@@ -139,58 +143,6 @@ export class ShotAnimator {
       vy: b.velocity.y,
       active: b.active,
     }));
-    this.onFrame(frame);
-
-    this.animFrameId = requestAnimationFrame(this.tick);
-  };
-
-  /** Smoothly interpolate from client prediction to server positions over ~200ms. */
-  private snapToServer(): void {
-    this.running = false;
-    if (!this.engine) {
-      this.onComplete(this.serverPositions);
-      return;
-    }
-
-    const clientPos = this.engine.balls.map(b => ({
-      id: b.id, x: b.position.x, y: b.position.y, active: b.active,
-    }));
-
-    // Build a map for quick server position lookup
-    const serverMap = new Map<number, ServerBallPosition>();
-    for (const sp of this.serverPositions) serverMap.set(sp.id, sp);
-
-    let t = 0;
-    const STEPS = 8; // ~8 frames at 60fps = ~133ms
-
-    const lerpTick = () => {
-      t++;
-      const frac = t / STEPS;
-
-      if (frac >= 1) {
-        // Final snap
-        this.onFrame(this.serverPositions.map(sp => ({ ...sp, vx: 0, vy: 0 })));
-        this.onComplete(this.serverPositions);
-        return;
-      }
-
-      const interpolated: BallFrame[] = clientPos.map(cp => {
-        const sp = serverMap.get(cp.id);
-        if (!sp) return { ...cp, vx: 0, vy: 0 };
-        return {
-          id: cp.id,
-          x: cp.x + (sp.x - cp.x) * frac,
-          y: cp.y + (sp.y - cp.y) * frac,
-          vx: 0,
-          vy: 0,
-          active: sp.active,
-        };
-      });
-      this.onFrame(interpolated);
-      requestAnimationFrame(lerpTick);
-    };
-
-    requestAnimationFrame(lerpTick);
   }
 
   isRunning(): boolean {
