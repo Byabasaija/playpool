@@ -66,6 +66,17 @@ export const PoolGamePage: React.FC = () => {
   const soundRef = useRef<SoundManager | null>(null);
   const firstHitRef = useRef(false);
 
+  // Collision tracking for shot_complete (client-authoritative physics)
+  const isMyShotRef = useRef(false);
+  const sendWSMessageRef = useRef<typeof sendWSMessage>(null as any);
+  const collisionDataRef = useRef({
+    pocketedBalls: [] as number[],
+    firstContactBallId: -1,
+    cushionAfterContact: false,
+    breakCushionBallIds: new Set<number>(),
+    ballContactMade: false,
+  });
+
   // Shot animator ref
   const animatorRef = useRef<ShotAnimator | null>(null);
   if (!animatorRef.current) {
@@ -73,19 +84,57 @@ export const PoolGamePage: React.FC = () => {
       (balls: BallFrame[]) => {
         // Update ball rotation from velocity data
         for (const b of balls) {
-          updateBallRotation(b.id, b.vx, b.vy);
+          updateBallRotation(b.id, b.vx, b.vy, b.grip, b.ySpin);
         }
         setBallPositions(balls.map(b => ({ id: b.id, x: b.x, y: b.y, active: b.active })));
       },
       (finalPositions: BallFrame[]) => {
         setBallPositions(finalPositions.map(b => ({ id: b.id, x: b.x, y: b.y, active: b.active })));
         setAnimating(false);
+
+        // If this was my shot, send shot_complete to server
+        if (isMyShotRef.current) {
+          isMyShotRef.current = false;
+          const cd = collisionDataRef.current;
+          sendWSMessageRef.current({
+            type: 'shot_complete',
+            data: {
+              ball_positions: finalPositions.map(b => ({ id: b.id, x: b.x, y: b.y, active: b.active })),
+              pocketed_balls: cd.pocketedBalls,
+              first_contact_ball_id: cd.firstContactBallId,
+              cushion_after_contact: cd.cushionAfterContact,
+              break_cushion_count: cd.breakCushionBallIds.size,
+            },
+          });
+        }
       },
       (event) => {
         // Sound on collision
         const isFirst = !firstHitRef.current && event.ballId === 0;
         if (isFirst) firstHitRef.current = true;
         soundRef.current?.playCollision(event, isFirst);
+
+        // Track collision data for shot_complete
+        if (isMyShotRef.current) {
+          const cd = collisionDataRef.current;
+          if (event.type === 'pocket') {
+            cd.pocketedBalls.push(event.ballId);
+          } else if (event.type === 'ball' && event.ballId === 0 && !cd.ballContactMade) {
+            // First ball the cue ball contacts
+            cd.firstContactBallId = event.targetId;
+            cd.ballContactMade = true;
+          } else if ((event.type === 'line' || event.type === 'vertex') && cd.ballContactMade) {
+            // Cushion hit after first ball contact
+            cd.cushionAfterContact = true;
+            // Track non-cue balls hitting cushions (for break foul)
+            if (event.ballId !== 0) {
+              cd.breakCushionBallIds.add(event.ballId);
+            }
+          } else if ((event.type === 'line' || event.type === 'vertex') && !cd.ballContactMade && event.ballId !== 0) {
+            // Non-cue ball hitting cushion before cue ball contact (e.g. break)
+            cd.breakCushionBallIds.add(event.ballId);
+          }
+        }
       },
     );
     animatorRef.current.setOnPocket((evt: PocketEvent) => {
@@ -165,20 +214,7 @@ export const PoolGamePage: React.FC = () => {
 
       case 'shot_result': {
         // Animation is already running from local shot or shot_relay.
-        // If somehow not animating yet (e.g. missed relay), start from shot_params.
-        if (!animating && !animatorRef.current?.isRunning()) {
-          const shotParams = message.shot_params;
-          if (shotParams) {
-            setAnimating(true);
-            firstHitRef.current = false;
-            soundRef.current?.resumeAudioContext();
-            animatorRef.current?.start(
-              gameState.balls,
-              { angle: shotParams.angle, power: shotParams.power, screw: shotParams.screw, english: shotParams.english },
-            );
-          }
-        }
-        // Game logic only — ball positions come from local PhysicsEngine
+        // Server no longer sends shot_params — client physics is authoritative.
 
         if (message.foul) {
           setFoulMessage(message.foul.message);
@@ -245,9 +281,24 @@ export const PoolGamePage: React.FC = () => {
     autoReconnect: true,
   });
 
+  // Keep sendWSMessage ref current for ShotAnimator onComplete callback
+  useEffect(() => {
+    sendWSMessageRef.current = sendWSMessage;
+  }, [sendWSMessage]);
+
   const handleTakeShot = useCallback((params: ShotParams) => {
     const fullParams = { angle: params.angle, power: params.power, screw, english };
     sendWSMessage({ type: 'take_shot', data: fullParams });
+
+    // Reset collision tracking for this shot
+    isMyShotRef.current = true;
+    collisionDataRef.current = {
+      pocketedBalls: [],
+      firstContactBallId: -1,
+      cushionAfterContact: false,
+      breakCushionBallIds: new Set(),
+      ballContactMade: false,
+    };
 
     // Start local animation immediately (don't wait for server response)
     setAnimating(true);

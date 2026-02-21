@@ -13,6 +13,8 @@ export interface BallFrame {
   vx: number;
   vy: number;
   active: boolean;
+  grip: number;
+  ySpin: number;
 }
 
 export interface ShotAnimationParams {
@@ -106,9 +108,7 @@ export class ShotAnimator {
     // Clear events before stepping
     this.physics.events = [];
 
-    // Step physics: 3x collision substeps + 1x friction (smooth 60fps)
-    this.physics.stepCollisions();
-    this.physics.stepCollisions();
+    // Step physics: 1x collisions + 1x friction per frame (matches original game exactly)
     this.physics.stepCollisions();
     this.physics.stepFriction();
 
@@ -142,6 +142,8 @@ export class ShotAnimator {
       vx: b.velocity.x,
       vy: b.velocity.y,
       active: b.active,
+      grip: b.grip,
+      ySpin: b.ySpin,
     }));
   }
 

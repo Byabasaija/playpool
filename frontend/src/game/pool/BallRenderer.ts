@@ -91,17 +91,25 @@ function quatToAngles(q: Quat): { yaw: number; pitch: number; roll: number; gimb
   return { yaw, pitch, roll, gimbalLock: test > 0.499 || test < -0.499 };
 }
 
-/** Update ball rotation based on velocity (call each animation frame). */
-export function updateBallRotation(ballId: number, vx: number, vy: number): void {
-  const speed = Math.sqrt(vx * vx + vy * vy);
-  if (speed < 0.5) return;
+/** Update ball rotation based on velocity (call each animation frame).
+ *  Matches original: updateRotation(vx * physScale * grip, vy * physScale * grip, ySpin)
+ *  where physScale=0.01, circRad = ballRadius * physScale = 23.
+ *  grip=0 after hard hits (ball slides), recovers to 1 at 0.02/frame.
+ *  ySpin from cushion hits adds z-axis rotation component.
+ */
+export function updateBallRotation(ballId: number, vx: number, vy: number, grip: number = 1, ySpin: number = 0): void {
+  // Apply physScale and grip to convert physics velocity to rotation input (matches original)
+  const physScale = 0.01;
+  const dx = vx * physScale * grip;
+  const dy = vy * physScale * grip;
+  const mag = Math.sqrt(dx * dx + dy * dy + ySpin * ySpin);
+  if (mag < 0.01) return;
 
   const state = getOrCreateState(ballId);
-  // Map velocity to rotation: ball rolls in direction of movement
-  // Rotation axis is perpendicular to velocity direction
-  // Amount = distance / radius (rolling without slipping)
+  // Original mapping: input (t,s,h) → remap i=-t, a=h, o=s
+  //   axis = (a/r, i/r, o/r) = (ySpin/r, -dx/r, dy/r), angle = r/circRad
   const circRad = 23; // ballRadius * physScale = 2300 * 0.01
-  state.quat = normalize(rotateQuat(state.quat, vy / speed, -vx / speed, 0, speed / circRad));
+  state.quat = normalize(rotateQuat(state.quat, ySpin / mag, -dx / mag, dy / mag, mag / circRad));
 }
 
 /** Reset all rotation state (e.g. new game). */

@@ -17,6 +17,7 @@ export interface PoolAssets {
     cueBallSpot: HTMLImageElement;
     guiSolids: HTMLImageElement;
     guiStripes: HTMLImageElement;
+    marker: HTMLImageElement;
   };
   audio: {
     ballHit: HTMLAudioElement;
@@ -54,7 +55,7 @@ export async function loadPoolAssets(): Promise<PoolAssets> {
   const [
     cloth, tableTop, pockets, cue, cueShadow, shadow, shade,
     solidsSpriteSheet, spotSpriteSheet, dottedLine,
-    spinSetterLarge, cueBallSpot, guiSolids, guiStripes,
+    spinSetterLarge, cueBallSpot, guiSolids, guiStripes, marker,
     bs9, bs10, bs11, bs12, bs13, bs14, bs15,
     ballHit, cueHit, cushionHit, pocketHit, ding, cheer,
   ] = await Promise.all([
@@ -72,6 +73,7 @@ export async function loadPoolAssets(): Promise<PoolAssets> {
     loadImage(`${IMG}/cueBallSpot.png`),
     loadImage(`${IMG}/guiSolids.png`),
     loadImage(`${IMG}/guiStripes.png`),
+    loadImage(`${IMG}/marker.png`),
     loadImage(`${IMG}/ballSpriteSheet9.png`),
     loadImage(`${IMG}/ballSpriteSheet10.png`),
     loadImage(`${IMG}/ballSpriteSheet11.png`),
@@ -91,7 +93,7 @@ export async function loadPoolAssets(): Promise<PoolAssets> {
     images: {
       cloth, tableTop, pockets, cue, cueShadow, shadow, shade,
       solidsSpriteSheet, spotSpriteSheet, dottedLine,
-      spinSetterLarge, cueBallSpot, guiSolids, guiStripes,
+      spinSetterLarge, cueBallSpot, guiSolids, guiStripes, marker,
       ballSpriteSheets: { 9: bs9, 10: bs10, 11: bs11, 12: bs12, 13: bs13, 14: bs14, 15: bs15 },
     },
     audio: { ballHit, cueHit, cushionHit, pocketHit, ding, cheer },

@@ -12,8 +12,6 @@ export interface FoulInfo {
 export interface ShotResultMessage {
   type: 'shot_result';
   player: string;
-  shot_params: ShotParams;
-  ball_positions: BallState[];
   pocketed_balls: number[];
   foul: FoulInfo | null;
   group_assigned: boolean;
@@ -25,6 +23,7 @@ export interface ShotResultMessage {
   game_over: boolean;
   winner: string;
   win_type: string;
+  timeout?: boolean;
 }
 
 export interface PoolGameState {
@@ -101,11 +100,11 @@ export interface PoolWSMessage {
   status?: string;
   winner?: string;
   win_type?: string;
-  // shot_result fields
+  // shot_result / shot_relay fields
   player?: string;
   shot_params?: ShotParams;
-  ball_positions?: BallState[];
   pocketed_balls?: number[];
+  timeout?: boolean;
   foul?: FoulInfo | null;
   group_assigned?: boolean;
   player1_group?: BallGroup;
@@ -144,4 +143,15 @@ export interface GetStateMessage {
   data: Record<string, never>;
 }
 
-export type PoolOutgoingMessage = TakeShotMessage | PlaceCueBallMessage | ConcedeMessage | GetStateMessage;
+export interface ShotCompleteMessage {
+  type: 'shot_complete';
+  data: {
+    ball_positions: BallState[];
+    pocketed_balls: number[];
+    first_contact_ball_id: number;
+    cushion_after_contact: boolean;
+    break_cushion_count: number;
+  };
+}
+
+export type PoolOutgoingMessage = TakeShotMessage | PlaceCueBallMessage | ConcedeMessage | GetStateMessage | ShotCompleteMessage;

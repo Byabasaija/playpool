@@ -47,29 +47,35 @@ type ShotParams struct {
 	English float64 `json:"english"` // -1 to 1
 }
 
+// ClientShotData is the data the client sends after its physics animation completes.
+type ClientShotData struct {
+	BallPositions       []BallState `json:"ball_positions"`
+	PocketedBalls       []int       `json:"pocketed_balls"`
+	FirstContactBallID  int         `json:"first_contact_ball_id"`  // -1 if no contact
+	CushionAfterContact bool        `json:"cushion_after_contact"`
+	BreakCushionCount   int         `json:"break_cushion_count"`    // count of non-cue balls that hit cushions
+}
+
 // FoulInfo describes a foul that occurred during a shot.
 type FoulInfo struct {
 	Type    string `json:"type"`    // "scratch", "wrong_first_contact", "no_cushion", "illegal_8ball", "break_foul"
 	Message string `json:"message"`
 }
 
-// ShotResult represents the outcome of a shot.
+// ShotResult represents the outcome of a shot (game logic only, no physics).
 type ShotResult struct {
-	Success       bool        `json:"success"`
-	ShotParams    ShotParams  `json:"shot_params"`
-	BallPositions []BallState `json:"ball_positions"`
-	PocketedBalls []int       `json:"pocketed_balls"`
-	Events        []CollisionEvent `json:"events"`
-	Foul          *FoulInfo   `json:"foul,omitempty"`
-	GroupAssigned bool        `json:"group_assigned"`
-	Player1Group  BallGroup   `json:"player1_group"`
-	Player2Group  BallGroup   `json:"player2_group"`
-	TurnChange    bool        `json:"turn_change"`
-	NextTurn      string      `json:"next_turn"`
-	BallInHand    bool        `json:"ball_in_hand"`
-	GameOver      bool        `json:"game_over"`
-	Winner        string      `json:"winner,omitempty"`
-	WinType       string      `json:"win_type,omitempty"`
+	Success       bool      `json:"success"`
+	PocketedBalls []int     `json:"pocketed_balls"`
+	Foul          *FoulInfo `json:"foul,omitempty"`
+	GroupAssigned bool      `json:"group_assigned"`
+	Player1Group  BallGroup `json:"player1_group"`
+	Player2Group  BallGroup `json:"player2_group"`
+	TurnChange    bool      `json:"turn_change"`
+	NextTurn      string    `json:"next_turn"`
+	BallInHand    bool      `json:"ball_in_hand"`
+	GameOver      bool      `json:"game_over"`
+	Winner        string    `json:"winner,omitempty"`
+	WinType       string    `json:"win_type,omitempty"`
 }
 
 // PoolGameState represents the complete state of an 8-ball pool game.
@@ -94,6 +100,9 @@ type PoolGameState struct {
 	CompletedAt      *time.Time   `json:"completed_at,omitempty"`
 	LastActivity     time.Time    `json:"last_activity"`
 	SessionID        int          `json:"session_id,omitempty"`
+	ShotInProgress   bool         `json:"-"`
+	ShotPlayerID     string       `json:"-"`
+	ShotParams       ShotParams   `json:"-"`
 	mu               sync.RWMutex
 }
 
@@ -168,112 +177,96 @@ func (g *PoolGameState) Initialize() error {
 	return nil
 }
 
-// TakeShot executes a shot by a player.
-func (g *PoolGameState) TakeShot(playerID string, params ShotParams) (*ShotResult, error) {
+// ValidateCanShoot checks if a player can take a shot (turn, status, power).
+func (g *PoolGameState) ValidateCanShoot(playerID string, params ShotParams) error {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	if g.Status != StatusInProgress {
+		return errors.New("game is not in progress")
+	}
+	if g.CurrentTurn != playerID {
+		return errors.New("not your turn")
+	}
+	if params.Power < 40 || params.Power > MaxPower {
+		return errors.New("invalid power")
+	}
+	if !g.Balls[0].Active {
+		return errors.New("cue ball is not on the table")
+	}
+	if g.ShotInProgress {
+		return errors.New("a shot is already in progress")
+	}
+	return nil
+}
+
+// SetShotInProgress marks that a shot is being animated client-side.
+func (g *PoolGameState) SetShotInProgress(playerID string, params ShotParams) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.ShotInProgress = true
+	g.ShotPlayerID = playerID
+	g.ShotParams = params
+}
+
+// IsShotInProgress returns whether a shot is in progress for the given player.
+func (g *PoolGameState) IsShotInProgress(playerID string) bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.ShotInProgress && g.ShotPlayerID == playerID
+}
+
+// GetCurrentBallPositions returns a copy of the current ball positions.
+func (g *PoolGameState) GetCurrentBallPositions() []BallState {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	positions := make([]BallState, NumBalls)
+	for i := 0; i < NumBalls; i++ {
+		positions[i] = g.Balls[i]
+	}
+	return positions
+}
+
+// ApplyShotResult applies client-provided shot results (no server physics).
+// The client sends final ball positions and collision summary after its animation completes.
+func (g *PoolGameState) ApplyShotResult(playerID string, clientData ClientShotData) (*ShotResult, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	if g.Status != StatusInProgress {
-		return nil, errors.New("game is not in progress")
+	if !g.ShotInProgress || g.ShotPlayerID != playerID {
+		return nil, errors.New("no shot in progress for this player")
 	}
-	if g.CurrentTurn != playerID {
-		return nil, errors.New("not your turn")
+	g.ShotInProgress = false
+
+	// Basic validation of client data
+	if len(clientData.BallPositions) != NumBalls {
+		return nil, errors.New("invalid ball count in shot result")
 	}
 
-	// Validate power
-	if params.Power < 40 || params.Power > MaxPower {
-		return nil, errors.New("invalid power")
-	}
-
-	// Clamp spin values
-	if params.Screw < -0.5 {
-		params.Screw = -0.5
-	}
-	if params.Screw > 0.5 {
-		params.Screw = 0.5
-	}
-	if params.English < -1 {
-		params.English = -1
-	}
-	if params.English > 1 {
-		params.English = 1
-	}
-
-	// Cue ball must be active
-	if !g.Balls[0].Active {
-		return nil, errors.New("cue ball is not on the table")
-	}
-
-	// Build physics engine from current ball state
-	table := NewStandard8BallTable()
-	var balls [NumBalls]*Ball
-	for i, bs := range g.Balls {
-		balls[i] = &Ball{
-			ID:         bs.ID,
-			Position:   NewVec2(bs.X, bs.Y),
-			Velocity:   Vec2{},
-			Active:     bs.Active,
-			Grip:       1,
-			DeltaScrew: Vec2{},
-		}
-	}
-
-	// Set cue ball velocity from shot params
-	vx := fix(math.Cos(params.Angle) * params.Power)
-	vy := fix(math.Sin(params.Angle) * params.Power)
-	balls[0].Velocity = NewVec2(vx, vy)
-	balls[0].Screw = params.Screw
-	balls[0].English = params.English
-
-	engine := NewPhysicsEngine(balls, table)
-	events := engine.Simulate()
-
-	// Analyze results
 	g.ShotNumber++
 	result := &ShotResult{
-		Success:    true,
-		ShotParams: params,
-		Events:     events,
+		Success: true,
 	}
 
-	// Determine which balls were pocketed this shot
-	pocketed := make([]int, 0)
+	// Use client-provided collision data
+	pocketed := clientData.PocketedBalls
+	if pocketed == nil {
+		pocketed = []int{}
+	}
 	cueBallPocketed := false
 	eightBallPocketed := false
-	for _, evt := range events {
-		if evt.Type == "pocket" {
-			pocketed = append(pocketed, evt.BallID)
-			if evt.BallID == 0 {
-				cueBallPocketed = true
-			}
-			if evt.BallID == 8 {
-				eightBallPocketed = true
-			}
+	for _, id := range pocketed {
+		if id == 0 {
+			cueBallPocketed = true
+		}
+		if id == 8 {
+			eightBallPocketed = true
 		}
 	}
 	result.PocketedBalls = pocketed
 
-	// Determine first ball contacted by cue ball
-	firstContactBallID := -1
-	for _, evt := range events {
-		if evt.Type == "ball" && evt.BallID == 0 {
-			firstContactBallID = evt.TargetID
-			break
-		}
-	}
-
-	// Check cushion contact after first ball contact
-	cushionAfterContact := false
-	ballContactFound := false
-	for _, evt := range events {
-		if evt.Type == "ball" && (evt.BallID == 0 || evt.TargetID == 0) {
-			ballContactFound = true
-		}
-		if ballContactFound && (evt.Type == "line" || evt.Type == "vertex") {
-			cushionAfterContact = true
-			break
-		}
-	}
+	firstContactBallID := clientData.FirstContactBallID
+	cushionAfterContact := clientData.CushionAfterContact
 
 	// Get player info
 	player, opponent := g.getPlayerAndOpponent(playerID)
@@ -310,14 +303,7 @@ func (g *PoolGameState) TakeShot(playerID string, params ShotParams) (*ShotResul
 
 	// Break-specific fouls
 	if foul == nil && g.IsBreakShot {
-		// Count balls that hit cushions during break
-		cushionBalls := make(map[int]bool)
-		for _, evt := range events {
-			if (evt.Type == "line" || evt.Type == "vertex") && evt.BallID != 0 {
-				cushionBalls[evt.BallID] = true
-			}
-		}
-		if len(cushionBalls)+len(pocketed) < 2 {
+		if clientData.BreakCushionCount+len(pocketed) < 2 {
 			foul = &FoulInfo{Type: "break_foul", Message: "Not enough balls reached cushions on break"}
 		}
 	}
@@ -327,7 +313,6 @@ func (g *PoolGameState) TakeShot(playerID string, params ShotParams) (*ShotResul
 	// === GROUP ASSIGNMENT ===
 	groupAssigned := false
 	if player.BallGroup == GroupAny && opponent.BallGroup == GroupAny && foul == nil && !g.IsBreakShot {
-		// Assign based on first legally pocketed ball (not cue, not 8-ball)
 		for _, ballID := range pocketed {
 			if ballID == 0 || ballID == 8 {
 				continue
@@ -369,14 +354,12 @@ func (g *PoolGameState) TakeShot(playerID string, params ShotParams) (*ShotResul
 	// === 8-BALL GAME OVER CHECK ===
 	if eightBallPocketed {
 		if foul != nil || player.BallGroup != Group8Ball {
-			// Pocketed 8-ball illegally — opponent wins
 			result.GameOver = true
 			result.Winner = opponent.ID
 			result.WinType = "illegal_8ball"
 			foul = &FoulInfo{Type: "illegal_8ball", Message: "8-ball pocketed illegally"}
 			result.Foul = foul
 		} else {
-			// Legal 8-ball pocket — player wins
 			result.GameOver = true
 			result.Winner = playerID
 			result.WinType = "pocket_8"
@@ -390,24 +373,22 @@ func (g *PoolGameState) TakeShot(playerID string, params ShotParams) (*ShotResul
 		result.WinType = "scratch_on_8"
 	}
 
-	// === UPDATE BALL POSITIONS ===
-	for i, b := range engine.Balls {
-		g.Balls[i] = BallState{
-			ID:     b.ID,
-			X:      b.Position.X,
-			Y:      b.Position.Y,
-			Active: b.Active,
+	// === UPDATE BALL POSITIONS from client data ===
+	for _, bp := range clientData.BallPositions {
+		if bp.ID >= 0 && bp.ID < NumBalls {
+			g.Balls[bp.ID] = BallState{
+				ID:     bp.ID,
+				X:      bp.X,
+				Y:      bp.Y,
+				Active: bp.Active,
+			}
 		}
 	}
 
-	// If cue ball was pocketed, restore it (inactive) — it will be placed by opponent
+	// If cue ball was pocketed, mark inactive for ball-in-hand placement
 	if cueBallPocketed {
 		g.Balls[0].Active = false
 	}
-
-	// Build final ball positions for result
-	result.BallPositions = make([]BallState, NumBalls)
-	copy(result.BallPositions, g.Balls[:])
 
 	// === CHECK IF PLAYER CLEARED THEIR GROUP ===
 	g.updateBallGroupStatus(player)
@@ -432,17 +413,14 @@ func (g *PoolGameState) TakeShot(playerID string, params ShotParams) (*ShotResul
 			Manager.SaveFinalGameState(g)
 		}
 	} else if foul != nil {
-		// Foul: opponent gets ball-in-hand
 		g.switchTurn()
 		g.BallInHand = true
 		g.BallInHandPlayer = g.CurrentTurn
-		// Restore cue ball as active for placement
 		g.Balls[0].Active = true
 		result.TurnChange = true
 		result.NextTurn = g.CurrentTurn
 		result.BallInHand = true
 	} else {
-		// Check if player pocketed any of their own balls
 		pottedOwn := false
 		for _, ballID := range pocketed {
 			if ballID == 0 || ballID == 8 {
@@ -455,11 +433,9 @@ func (g *PoolGameState) TakeShot(playerID string, params ShotParams) (*ShotResul
 		}
 
 		if pottedOwn {
-			// Turn continues
 			result.TurnChange = false
 			result.NextTurn = playerID
 		} else {
-			// Turn switches
 			g.switchTurn()
 			result.TurnChange = true
 			result.NextTurn = g.CurrentTurn
@@ -475,7 +451,7 @@ func (g *PoolGameState) TakeShot(playerID string, params ShotParams) (*ShotResul
 	if Manager != nil {
 		dbPlayerID := g.getDBPlayerID(playerID)
 		if dbPlayerID > 0 {
-			Manager.RecordPoolShot(g.SessionID, dbPlayerID, params)
+			Manager.RecordPoolShot(g.SessionID, dbPlayerID, g.ShotParams)
 		}
 	}
 

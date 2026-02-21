@@ -95,7 +95,15 @@ function reducer(state: PoolGameState, action: Action): PoolGameState {
         next.currentTurn = d.next_turn || null;
         next.myTurn = d.next_turn === state.playerId;
       }
-      if (d.ball_in_hand !== undefined) next.ballInHand = d.ball_in_hand;
+      if (d.ball_in_hand !== undefined) {
+        next.ballInHand = d.ball_in_hand;
+        // When ball_in_hand is true, the next_turn player places the cue ball
+        if (d.ball_in_hand && d.next_turn) {
+          next.ballInHandPlayer = d.next_turn;
+        } else if (!d.ball_in_hand) {
+          next.ballInHandPlayer = null;
+        }
+      }
 
       if (d.winner) next.winner = d.winner;
       if (d.win_type) next.winType = d.win_type;

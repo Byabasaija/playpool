@@ -27,6 +27,15 @@ type PlaceCueBallData struct {
 	Y float64 `json:"y"`
 }
 
+// ShotCompleteData is sent by the shooting client after its physics animation finishes.
+type ShotCompleteData struct {
+	BallPositions       []game.BallState `json:"ball_positions"`
+	PocketedBalls       []int            `json:"pocketed_balls"`
+	FirstContactBallID  int              `json:"first_contact_ball_id"`
+	CushionAfterContact bool             `json:"cushion_after_contact"`
+	BreakCushionCount   int              `json:"break_cushion_count"`
+}
+
 // GameHub is the single hub for all games.
 var GameHub *Hub
 
@@ -304,6 +313,14 @@ func (c *Client) handleMessage(msg WSMessage) {
 		}
 		c.handleTakeShot(g, data)
 
+	case "shot_complete":
+		var data ShotCompleteData
+		if err := json.Unmarshal(msg.Data, &data); err != nil {
+			c.sendError("Invalid shot complete data")
+			return
+		}
+		c.handleShotComplete(g, data)
+
 	case "place_cue_ball":
 		var data PlaceCueBallData
 		if err := json.Unmarshal(msg.Data, &data); err != nil {
@@ -326,7 +343,8 @@ func (c *Client) handleMessage(msg WSMessage) {
 	}
 }
 
-// handleTakeShot processes a take_shot message.
+// handleTakeShot validates the shot and relays it to the opponent.
+// The server no longer runs physics — it waits for shot_complete from the shooting client.
 func (c *Client) handleTakeShot(g *game.PoolGameState, data TakeShotData) {
 	params := game.ShotParams{
 		Angle:   data.Angle,
@@ -335,15 +353,88 @@ func (c *Client) handleTakeShot(g *game.PoolGameState, data TakeShotData) {
 		English: data.English,
 	}
 
-	// Relay shot params to opponent immediately (before physics simulation)
-	// so they can start client-side animation while server computes the result
+	if err := g.ValidateCanShoot(c.playerID, params); err != nil {
+		c.sendError(err.Error())
+		return
+	}
+
+	g.SetShotInProgress(c.playerID, params)
+
+	// Relay shot params to opponent so they start client-side animation
 	GameHub.SendToPlayer(c.opponentID, map[string]interface{}{
 		"type":        "shot_relay",
 		"player":      c.playerID,
 		"shot_params": params,
 	})
 
-	result, err := g.TakeShot(c.playerID, params)
+	// Start timeout — if shot_complete doesn't arrive within 30s, treat as foul
+	go func(gameID, gameToken, playerID string) {
+		time.Sleep(30 * time.Second)
+		g2, err := game.Manager.GetGameByToken(gameToken)
+		if err != nil {
+			return
+		}
+		if !g2.IsShotInProgress(playerID) {
+			return // shot already completed
+		}
+		log.Printf("[POOL] Shot timeout for player %s in game %s", playerID, gameID)
+
+		// Build a timeout result: no contact, no pocketed balls — pure foul
+		timeoutData := game.ClientShotData{
+			BallPositions:      g2.GetCurrentBallPositions(),
+			PocketedBalls:      []int{},
+			FirstContactBallID: -1,
+			CushionAfterContact: false,
+			BreakCushionCount:  0,
+		}
+		result, err := g2.ApplyShotResult(playerID, timeoutData)
+		if err != nil {
+			log.Printf("[POOL] Shot timeout apply error: %v", err)
+			return
+		}
+
+		GameHub.BroadcastToGame(gameID, map[string]interface{}{
+			"type":           "shot_result",
+			"player":         playerID,
+			"pocketed_balls": result.PocketedBalls,
+			"foul":           result.Foul,
+			"group_assigned": result.GroupAssigned,
+			"player1_group":  result.Player1Group,
+			"player2_group":  result.Player2Group,
+			"turn_change":    result.TurnChange,
+			"next_turn":      result.NextTurn,
+			"ball_in_hand":   result.BallInHand,
+			"game_over":      result.GameOver,
+			"winner":         result.Winner,
+			"win_type":       result.WinType,
+			"timeout":        true,
+		})
+
+		if g2.Player1 != nil {
+			state := g2.GetGameStateForPlayer(g2.Player1.ID)
+			state["type"] = "game_update"
+			GameHub.SendToPlayer(g2.Player1.ID, state)
+		}
+		if g2.Player2 != nil {
+			state := g2.GetGameStateForPlayer(g2.Player2.ID)
+			state["type"] = "game_update"
+			GameHub.SendToPlayer(g2.Player2.ID, state)
+		}
+		g2.SaveToRedis()
+	}(c.gameID, c.gameToken, c.playerID)
+}
+
+// handleShotComplete processes the shot_complete message from the shooting client.
+func (c *Client) handleShotComplete(g *game.PoolGameState, data ShotCompleteData) {
+	clientData := game.ClientShotData{
+		BallPositions:       data.BallPositions,
+		PocketedBalls:       data.PocketedBalls,
+		FirstContactBallID:  data.FirstContactBallID,
+		CushionAfterContact: data.CushionAfterContact,
+		BreakCushionCount:   data.BreakCushionCount,
+	}
+
+	result, err := g.ApplyShotResult(c.playerID, clientData)
 	if err != nil {
 		c.sendError(err.Error())
 		return
@@ -353,8 +444,6 @@ func (c *Client) handleTakeShot(g *game.PoolGameState, data TakeShotData) {
 	GameHub.BroadcastToGame(c.gameID, map[string]interface{}{
 		"type":           "shot_result",
 		"player":         c.playerID,
-		"shot_params":    result.ShotParams,
-		"ball_positions": result.BallPositions,
 		"pocketed_balls": result.PocketedBalls,
 		"foul":           result.Foul,
 		"group_assigned": result.GroupAssigned,
