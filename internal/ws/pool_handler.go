@@ -338,6 +338,9 @@ func (c *Client) handleMessage(msg WSMessage) {
 	case "concede":
 		c.handleConcede(g)
 
+	case "turn_timeout":
+		c.handleTurnTimeout(g)
+
 	default:
 		c.sendError("Unknown message type")
 	}
@@ -500,6 +503,17 @@ func (c *Client) handleConcede(g *game.PoolGameState) {
 		"message": "Player conceded",
 	})
 
+	c.broadcastGameState(g)
+}
+
+// handleTurnTimeout processes a shot clock expiry — switches turn and gives opponent ball-in-hand.
+func (c *Client) handleTurnTimeout(g *game.PoolGameState) {
+	if err := g.TurnTimeout(c.playerID); err != nil {
+		c.sendError(err.Error())
+		return
+	}
+
+	g.SaveToRedis()
 	c.broadcastGameState(g)
 }
 

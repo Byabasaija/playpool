@@ -1,4 +1,4 @@
-// Top bar with player names, ball indicators inline, and stake — like 8 Ball Pool.
+// Top bar with player avatars, circular shot timer, ball indicators, and stake — 8 Ball Pool style.
 
 import { type BallGroup, type BallState } from './types';
 
@@ -11,16 +11,15 @@ interface PlayerBarProps {
   stakeAmount: number;
   myConnected: boolean;
   opponentConnected: boolean;
-  idleRemaining: number | null;
-  idleIsMe: boolean;
   balls: BallState[];
+  shotTimer: number | null; // seconds remaining (null = no timer active)
 }
 
 const SOLIDS = [1, 2, 3, 4, 5, 6, 7];
 const STRIPES = [9, 10, 11, 12, 13, 14, 15];
+const SHOT_TIMER_MAX = 15;
 
 // guiSolids.png / guiStripes.png: 256x512, 2 columns x 4 rows, 102x102 per frame
-// Frame index 0-6 maps to balls 1-7 (solids) or 9-15 (stripes)
 const GUI_FRAME_W = 102;
 const GUI_FRAME_H = 102;
 const GUI_COLS = 2;
@@ -28,14 +27,12 @@ const GUI_SHEET_W = 256;
 const GUI_SHEET_H = 512;
 
 function BallSprite({ ballId, isSolid, active }: { ballId: number; isSolid: boolean; active: boolean }) {
-  // Frame index: 0-6
   const frame = isSolid ? ballId - 1 : ballId - 9;
   const col = frame % GUI_COLS;
   const row = Math.floor(frame / GUI_COLS);
   const src = isSolid ? '/pool/img/guiSolids.png' : '/pool/img/guiStripes.png';
 
-  // Use background-image with background-position for sprite extraction
-  const DISPLAY_SIZE = 20;
+  const DISPLAY_SIZE = 16;
   const scaleX = DISPLAY_SIZE / GUI_FRAME_W;
   const scaleY = DISPLAY_SIZE / GUI_FRAME_H;
 
@@ -48,7 +45,7 @@ function BallSprite({ ballId, isSolid, active }: { ballId: number; isSolid: bool
         backgroundSize: `${GUI_SHEET_W * scaleX}px ${GUI_SHEET_H * scaleY}px`,
         backgroundPosition: `${-col * GUI_FRAME_W * scaleX}px ${-row * GUI_FRAME_H * scaleY}px`,
         backgroundRepeat: 'no-repeat',
-        opacity: active ? 1 : 0.2,
+        opacity: active ? 1 : 0.15,
         borderRadius: '50%',
         flexShrink: 0,
       }}
@@ -67,58 +64,195 @@ function BallIndicators({ ids, balls, isSolid }: { ids: number[]; balls: BallSta
   );
 }
 
+// Generic placeholder dots when groups not yet assigned
+function PlaceholderDots({ count }: { count: number }) {
+  return (
+    <div className="flex gap-[2px] items-center">
+      {Array.from({ length: count }).map((_, i) => (
+        <div
+          key={i}
+          style={{
+            width: 12,
+            height: 12,
+            borderRadius: '50%',
+            background: 'rgba(255,255,255,0.15)',
+            border: '1px solid rgba(255,255,255,0.1)',
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function Avatar({ name, isActive, timer, connected }: {
+  name: string;
+  isActive: boolean;
+  timer: number | null;
+  connected: boolean;
+}) {
+  const initial = name.charAt(0).toUpperCase();
+  // Generate a consistent color from the name
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  const hue = Math.abs(hash) % 360;
+  const bg = `hsl(${hue}, 50%, 35%)`;
+
+  const size = 36;
+  const strokeWidth = 3;
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const timerProgress = timer !== null ? timer / SHOT_TIMER_MAX : 0;
+  const dashOffset = circumference * (1 - timerProgress);
+
+  // Timer color: green → yellow → red
+  const timerColor = timer !== null
+    ? timer > 10 ? '#4ade80' : timer > 5 ? '#facc15' : '#ef4444'
+    : '#4ade80';
+
+  return (
+    <div style={{ position: 'relative', width: size, height: size, flexShrink: 0 }}>
+      {/* Avatar circle */}
+      <div
+        style={{
+          width: size,
+          height: size,
+          borderRadius: '50%',
+          background: bg,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: 16,
+          fontWeight: 700,
+          color: '#fff',
+          border: isActive ? `2px solid ${timerColor}` : '2px solid rgba(255,255,255,0.15)',
+          boxShadow: isActive ? `0 0 8px ${timerColor}40` : 'none',
+          transition: 'border-color 0.3s, box-shadow 0.3s',
+        }}
+      >
+        {initial}
+      </div>
+
+      {/* Circular timer ring (SVG overlay) */}
+      {isActive && timer !== null && (
+        <svg
+          width={size}
+          height={size}
+          style={{ position: 'absolute', top: 0, left: 0, transform: 'rotate(-90deg)' }}
+        >
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill="none"
+            stroke={timerColor}
+            strokeWidth={strokeWidth}
+            strokeDasharray={circumference}
+            strokeDashoffset={dashOffset}
+            strokeLinecap="round"
+            style={{ transition: 'stroke-dashoffset 1s linear, stroke 0.3s' }}
+          />
+        </svg>
+      )}
+
+      {/* Connection indicator dot */}
+      <div
+        style={{
+          position: 'absolute',
+          bottom: -1,
+          right: -1,
+          width: 8,
+          height: 8,
+          borderRadius: '50%',
+          backgroundColor: connected ? '#4ade80' : '#ef4444',
+          border: '1.5px solid #0e1628',
+        }}
+      />
+    </div>
+  );
+}
+
 export default function PlayerBar({
   myName, opponentName, myGroup, opponentGroup, myTurn,
-  stakeAmount, myConnected, opponentConnected, idleRemaining, idleIsMe, balls,
+  stakeAmount, myConnected, opponentConnected, balls, shotTimer,
 }: PlayerBarProps) {
   const myBallIds = myGroup === 'SOLIDS' ? SOLIDS : myGroup === 'STRIPES' ? STRIPES : [];
   const myIsSolid = myGroup === 'SOLIDS';
   const oppBallIds = opponentGroup === 'SOLIDS' ? SOLIDS : opponentGroup === 'STRIPES' ? STRIPES : [];
   const oppIsSolid = opponentGroup === 'SOLIDS';
+  const groupsAssigned = myGroup !== 'ANY';
 
   return (
-    <div className="flex items-center justify-between w-full px-2 py-1"
-      style={{ fontFamily: 'Arial, sans-serif' }}>
-
+    <div
+      className="flex items-center w-full px-2"
+      style={{
+        height: 48,
+        background: 'linear-gradient(180deg, #1a2744 0%, #0e1628 100%)',
+        fontFamily: 'Arial, sans-serif',
+        borderBottom: '1px solid rgba(255,255,255,0.05)',
+      }}
+    >
       {/* My side */}
-      <div className="flex items-center gap-1.5 min-w-0 flex-1">
-        <div className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold truncate ${
-          myTurn ? 'bg-green-700/90 text-white' : 'bg-gray-800/70 text-gray-400'
-        }`}>
-          <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{
-            backgroundColor: myConnected ? '#4ade80' : '#ef4444',
-          }} />
-          <span className="truncate max-w-[80px]">{myName}</span>
+      <div
+        className="flex items-center gap-2 min-w-0 flex-1"
+        style={{
+          padding: '4px 8px',
+          borderRadius: 6,
+          background: myTurn ? 'rgba(74,222,128,0.08)' : 'transparent',
+          transition: 'background 0.3s',
+        }}
+      >
+        <Avatar
+          name={myName}
+          isActive={myTurn}
+          timer={myTurn ? shotTimer : null}
+          connected={myConnected}
+        />
+        <div className="flex flex-col min-w-0 gap-0.5">
+          <span className="text-[11px] font-semibold text-white truncate max-w-[70px]">
+            {myName}
+          </span>
+          {groupsAssigned
+            ? <BallIndicators ids={myBallIds} balls={balls} isSolid={myIsSolid} />
+            : <PlaceholderDots count={7} />
+          }
         </div>
-        {myBallIds.length > 0 && <BallIndicators ids={myBallIds} balls={balls} isSolid={myIsSolid} />}
       </div>
 
-      {/* Center — stake + idle */}
-      <div className="flex flex-col items-center gap-0 px-2 flex-shrink-0">
-        <span className="text-[11px] text-yellow-400 font-bold leading-tight">
-          {stakeAmount > 0 ? `${stakeAmount.toLocaleString()} UGX` : 'Free'}
+      {/* Center — stake */}
+      <div className="flex flex-col items-center gap-0 px-3 flex-shrink-0">
+        <span className="text-[13px] text-yellow-400 font-bold leading-tight">
+          {stakeAmount > 0 ? `${stakeAmount.toLocaleString()}` : 'Free'}
         </span>
-        {idleRemaining !== null && (
-          <span className={`text-[9px] font-bold px-1.5 py-0 rounded leading-tight ${
-            idleRemaining <= 10 ? 'bg-red-500 text-white animate-pulse' :
-            'bg-yellow-300 text-black'
-          }`}>
-            {idleIsMe ? 'You' : 'Opp'}: {idleRemaining}s
-          </span>
+        {stakeAmount > 0 && (
+          <span className="text-[8px] text-yellow-600 font-medium leading-tight">UGX</span>
         )}
       </div>
 
       {/* Opponent side */}
-      <div className="flex items-center gap-1.5 min-w-0 flex-1 justify-end">
-        {oppBallIds.length > 0 && <BallIndicators ids={oppBallIds} balls={balls} isSolid={oppIsSolid} />}
-        <div className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold truncate ${
-          !myTurn ? 'bg-red-700/90 text-white' : 'bg-gray-800/70 text-gray-400'
-        }`}>
-          <span className="truncate max-w-[80px]">{opponentName}</span>
-          <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{
-            backgroundColor: opponentConnected ? '#4ade80' : '#ef4444',
-          }} />
+      <div
+        className="flex items-center gap-2 min-w-0 flex-1 justify-end"
+        style={{
+          padding: '4px 8px',
+          borderRadius: 6,
+          background: !myTurn ? 'rgba(239,68,68,0.08)' : 'transparent',
+          transition: 'background 0.3s',
+        }}
+      >
+        <div className="flex flex-col items-end min-w-0 gap-0.5">
+          <span className="text-[11px] font-semibold text-white truncate max-w-[70px]">
+            {opponentName}
+          </span>
+          {groupsAssigned
+            ? <BallIndicators ids={oppBallIds} balls={balls} isSolid={oppIsSolid} />
+            : <PlaceholderDots count={7} />
+          }
         </div>
+        <Avatar
+          name={opponentName}
+          isActive={!myTurn}
+          timer={!myTurn ? shotTimer : null}
+          connected={opponentConnected}
+        />
       </div>
     </div>
   );

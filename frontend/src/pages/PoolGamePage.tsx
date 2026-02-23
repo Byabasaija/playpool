@@ -1,4 +1,4 @@
-// Pool game page with sprite-based rendering.
+// Pool game page — mobile-first layout with 8 Ball Pool style UI.
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { usePoolGameState } from '../hooks/usePoolGameState';
@@ -12,9 +12,12 @@ import PoolCanvas from '../game/pool/PoolCanvas';
 import { type ShotParams, type PocketingAnim } from '../game/pool/types';
 import { physToCanvas } from '../game/pool/canvasLayout';
 import PlayerBar from '../game/pool/PlayerBar';
+import SideRail from '../game/pool/SideRails';
 import SpinSetter from '../game/pool/SpinSetter';
 import FoulNotification from '../game/pool/FoulNotification';
 import GameOverScreen from '../game/pool/ui/GameOverScreen';
+
+const SHOT_TIMER_SECONDS = 15;
 
 export const PoolGamePage: React.FC = () => {
   const [assets, setAssets] = useState<PoolAssets | null>(null);
@@ -32,9 +35,11 @@ export const PoolGamePage: React.FC = () => {
   const [pocketingBalls, setPocketingBalls] = useState<PocketingAnim[]>([]);
   const [isPortrait, setIsPortrait] = useState(window.innerHeight > window.innerWidth);
 
-  // Idle/disconnect state
-  const [idleRemaining, setIdleRemaining] = useState<number | null>(null);
-  const [idlePlayer, setIdlePlayer] = useState<string | null>(null);
+  // Shot timer state
+  const [shotTimer, setShotTimer] = useState<number | null>(null);
+  const shotTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Disconnect state
   const [disconnectRemaining, setDisconnectRemaining] = useState<number | null>(null);
 
   const urlParams = new URLSearchParams(window.location.search);
@@ -82,7 +87,6 @@ export const PoolGamePage: React.FC = () => {
   if (!animatorRef.current) {
     animatorRef.current = new ShotAnimator(
       (balls: BallFrame[]) => {
-        // Update ball rotation from velocity data
         for (const b of balls) {
           updateBallRotation(b.id, b.vx, b.vy, b.grip, b.ySpin);
         }
@@ -92,7 +96,6 @@ export const PoolGamePage: React.FC = () => {
         setBallPositions(finalPositions.map(b => ({ id: b.id, x: b.x, y: b.y, active: b.active })));
         setAnimating(false);
 
-        // If this was my shot, send shot_complete to server
         if (isMyShotRef.current) {
           isMyShotRef.current = false;
           const cd = collisionDataRef.current;
@@ -109,36 +112,29 @@ export const PoolGamePage: React.FC = () => {
         }
       },
       (event) => {
-        // Sound on collision
         const isFirst = !firstHitRef.current && event.ballId === 0;
         if (isFirst) firstHitRef.current = true;
         soundRef.current?.playCollision(event, isFirst);
 
-        // Track collision data for shot_complete
         if (isMyShotRef.current) {
           const cd = collisionDataRef.current;
           if (event.type === 'pocket') {
             cd.pocketedBalls.push(event.ballId);
           } else if (event.type === 'ball' && event.ballId === 0 && !cd.ballContactMade) {
-            // First ball the cue ball contacts
             cd.firstContactBallId = event.targetId;
             cd.ballContactMade = true;
           } else if ((event.type === 'line' || event.type === 'vertex') && cd.ballContactMade) {
-            // Cushion hit after first ball contact
             cd.cushionAfterContact = true;
-            // Track non-cue balls hitting cushions (for break foul)
             if (event.ballId !== 0) {
               cd.breakCushionBallIds.add(event.ballId);
             }
           } else if ((event.type === 'line' || event.type === 'vertex') && !cd.ballContactMade && event.ballId !== 0) {
-            // Non-cue ball hitting cushion before cue ball contact (e.g. break)
             cd.breakCushionBallIds.add(event.ballId);
           }
         }
       },
     );
     animatorRef.current.setOnPocket((evt: PocketEvent) => {
-      // Find ball's current canvas position from current state
       const ball = gameState.balls.find(b => b.id === evt.ballId);
       if (!ball) return;
       const [startX, startY] = physToCanvas(ball.x, ball.y);
@@ -150,7 +146,6 @@ export const PoolGamePage: React.FC = () => {
         startTime: performance.now(),
         duration: 350,
       }]);
-      // Auto-clean after animation completes
       setTimeout(() => {
         setPocketingBalls(prev => prev.filter(p => p.ballId !== evt.ballId));
       }, 400);
@@ -163,6 +158,65 @@ export const PoolGamePage: React.FC = () => {
       soundRef.current = new SoundManager(assets);
     }
   }, [assets]);
+
+  // --- Shot timer: 15s countdown when it's a player's turn ---
+  const startShotTimer = useCallback(() => {
+    if (shotTimerRef.current) clearInterval(shotTimerRef.current);
+    setShotTimer(SHOT_TIMER_SECONDS);
+    shotTimerRef.current = setInterval(() => {
+      setShotTimer(prev => {
+        if (prev === null || prev <= 1) {
+          if (shotTimerRef.current) clearInterval(shotTimerRef.current);
+          shotTimerRef.current = null;
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  }, []);
+
+  const stopShotTimer = useCallback(() => {
+    if (shotTimerRef.current) {
+      clearInterval(shotTimerRef.current);
+      shotTimerRef.current = null;
+    }
+    setShotTimer(null);
+  }, []);
+
+  // Start/restart timer when turn changes and not animating
+  useEffect(() => {
+    if (gameStarted && !animating && !gameOver) {
+      startShotTimer();
+    } else {
+      stopShotTimer();
+    }
+    return () => stopShotTimer();
+  }, [gameState.myTurn, gameStarted, animating, gameOver, startShotTimer, stopShotTimer]);
+
+  // Pause timer during animation
+  useEffect(() => {
+    if (animating) {
+      stopShotTimer();
+    }
+  }, [animating, stopShotTimer]);
+
+  // Handle timer expiry: send turn_timeout if it's my turn
+  useEffect(() => {
+    if (shotTimer === 0 && gameState.myTurn && !animating) {
+      sendWSMessageRef.current?.({
+        type: 'turn_timeout',
+        data: {},
+      });
+      stopShotTimer();
+    }
+  }, [shotTimer, gameState.myTurn, animating, stopShotTimer]);
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (shotTimerRef.current) clearInterval(shotTimerRef.current);
+    };
+  }, []);
 
   // Resolve tokens from URL
   useEffect(() => {
@@ -198,7 +252,6 @@ export const PoolGamePage: React.FC = () => {
         break;
 
       case 'shot_relay': {
-        // Opponent's shot relayed before server physics — start animation immediately
         const relayParams = message.shot_params;
         if (relayParams) {
           setAnimating(true);
@@ -213,9 +266,6 @@ export const PoolGamePage: React.FC = () => {
       }
 
       case 'shot_result': {
-        // Animation is already running from local shot or shot_relay.
-        // Server no longer sends shot_params — client physics is authoritative.
-
         if (message.foul) {
           setFoulMessage(message.foul.message);
           setIsFoul(true);
@@ -247,18 +297,6 @@ export const PoolGamePage: React.FC = () => {
         if (message.grace_seconds && message.disconnected_at) {
           setDisconnectRemaining(message.grace_seconds);
         }
-        break;
-
-      case 'player_idle_warning':
-        if (message.remaining_seconds != null) {
-          setIdleRemaining(message.remaining_seconds);
-          setIdlePlayer(message.player || null);
-        }
-        break;
-
-      case 'player_idle_canceled':
-        setIdleRemaining(null);
-        setIdlePlayer(null);
         break;
 
       case 'player_conceded':
@@ -300,7 +338,7 @@ export const PoolGamePage: React.FC = () => {
       ballContactMade: false,
     };
 
-    // Start local animation immediately (don't wait for server response)
+    // Start local animation immediately
     setAnimating(true);
     firstHitRef.current = false;
     soundRef.current?.resumeAudioContext();
@@ -322,19 +360,6 @@ export const PoolGamePage: React.FC = () => {
       sendWSMessage({ type: 'concede', data: {} });
     }
   }, [sendWSMessage]);
-
-  // Idle countdown tick
-  useEffect(() => {
-    if (idleRemaining === null) return;
-    if (idleRemaining <= 0) { setIdleRemaining(null); setIdlePlayer(null); return; }
-    const t = setInterval(() => {
-      setIdleRemaining(prev => {
-        if (prev === null || prev <= 1) { setIdlePlayer(null); return null; }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(t);
-  }, [idleRemaining]);
 
   // Disconnect countdown tick
   useEffect(() => {
@@ -399,22 +424,31 @@ export const PoolGamePage: React.FC = () => {
     return <GameOverScreen gameOver={gameOver} stakeAmount={gameState.stakeAmount} />;
   }
 
-  // Portrait rotation styles — rotate entire game view when phone is held upright
-  const portraitStyle: React.CSSProperties = isPortrait ? {
-    position: 'fixed',
-    top: '50%',
-    left: '50%',
-    width: '100vh',
-    height: '100vw',
-    transform: 'translate(-50%, -50%) rotate(90deg)',
-    transformOrigin: 'center center',
-    overflow: 'hidden',
-  } : {};
+  // Layout: mobile-only, always landscape.
+  // In landscape: fill viewport normally.
+  // In portrait: CSS-rotate the entire game 90° and swap dimensions.
+  const containerStyle: React.CSSProperties = isPortrait
+    ? {
+        position: 'fixed',
+        top: '50%',
+        left: '50%',
+        // After 90° rotation, "width" becomes the visual height and vice versa.
+        // So we set width = vh (long side) and height = vw (short side).
+        width: '100vh',
+        height: '100vw',
+        transform: 'translate(-50%, -50%) rotate(90deg)',
+        transformOrigin: 'center center',
+        overflow: 'hidden',
+      }
+    : {
+        width: '100vw',
+        height: '100dvh',
+      };
 
-  // Main game view: PlayerBar on top, table centered, controls overlaid on right
+  // Main game view
   return (
-    <div style={portraitStyle} className="h-screen bg-[#0e1628] flex flex-col overflow-hidden">
-      {/* Player bar — compact, with ball indicators inline */}
+    <div className="bg-[#0e1628] flex flex-col overflow-hidden" style={containerStyle}>
+      {/* Player bar — 8 Ball Pool style with avatars + timer */}
       <PlayerBar
         myName={gameState.myDisplayName || 'You'}
         opponentName={gameState.opponentDisplayName || 'Opponent'}
@@ -424,30 +458,46 @@ export const PoolGamePage: React.FC = () => {
         stakeAmount={gameState.stakeAmount}
         myConnected={gameState.myConnected}
         opponentConnected={gameState.opponentConnected}
-        idleRemaining={idleRemaining}
-        idleIsMe={idlePlayer === gameState.playerId}
         balls={gameState.balls}
+        shotTimer={shotTimer}
       />
 
-      {/* Table area — fills remaining space, centered */}
+      {/* Table area with side rails */}
       <div className="flex-1 relative flex items-center justify-center min-h-0">
-        <PoolCanvas
+        {/* Left side rail — my pocketed balls */}
+        <SideRail
           balls={gameState.balls}
-          myTurn={gameState.myTurn}
-          ballInHand={gameState.ballInHand && gameState.ballInHandPlayer === gameState.playerId}
-          isBreakShot={gameState.isBreakShot}
-          myGroup={gameState.myGroup}
-          opponentGroup={gameState.opponentGroup}
-          animating={animating}
-          onTakeShot={handleTakeShot}
-          onPlaceCueBall={handlePlaceCueBall}
-          assets={assets}
-          showGuideLine={showGuideLine}
-          pocketingBalls={pocketingBalls}
+          group={gameState.myGroup}
+          side="left"
         />
 
-        {/* Right-side controls — overlaid on top of canvas area */}
-        <div className="absolute right-1 top-1/2 -translate-y-1/2 flex flex-col items-center gap-1.5 z-10">
+        {/* Pool table canvas — fills available space */}
+        <div className="flex-1 min-w-0 h-full flex items-center justify-center">
+          <PoolCanvas
+            balls={gameState.balls}
+            myTurn={gameState.myTurn}
+            ballInHand={gameState.ballInHand && gameState.ballInHandPlayer === gameState.playerId}
+            isBreakShot={gameState.isBreakShot}
+            myGroup={gameState.myGroup}
+            opponentGroup={gameState.opponentGroup}
+            animating={animating}
+            onTakeShot={handleTakeShot}
+            onPlaceCueBall={handlePlaceCueBall}
+            assets={assets}
+            showGuideLine={showGuideLine}
+            pocketingBalls={pocketingBalls}
+          />
+        </div>
+
+        {/* Right side rail — opponent pocketed balls */}
+        <SideRail
+          balls={gameState.balls}
+          group={gameState.opponentGroup}
+          side="right"
+        />
+
+        {/* Right-side controls — overlaid */}
+        <div className="absolute right-10 top-1/2 -translate-y-1/2 flex flex-col items-center gap-1.5 z-10">
           <SpinSetter
             screw={screw}
             english={english}

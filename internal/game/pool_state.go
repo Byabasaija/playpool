@@ -698,6 +698,26 @@ func (g *PoolGameState) SaveToRedis() {
 	}
 }
 
+// TurnTimeout handles a player's shot clock expiring.
+// Switches the turn to the opponent and gives them ball-in-hand.
+func (g *PoolGameState) TurnTimeout(playerID string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if g.CurrentTurn != playerID {
+		return errors.New("not your turn")
+	}
+	if g.Status != StatusInProgress {
+		return errors.New("game not in progress")
+	}
+
+	g.switchTurn()
+	g.BallInHand = true
+	g.BallInHandPlayer = g.CurrentTurn
+	g.LastActivity = time.Now()
+	return nil
+}
+
 // === Internal helpers ===
 
 func (g *PoolGameState) switchTurn() {

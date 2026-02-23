@@ -154,4 +154,9 @@ export interface ShotCompleteMessage {
   };
 }
 
-export type PoolOutgoingMessage = TakeShotMessage | PlaceCueBallMessage | ConcedeMessage | GetStateMessage | ShotCompleteMessage;
+export interface TurnTimeoutMessage {
+  type: 'turn_timeout';
+  data: Record<string, never>;
+}
+
+export type PoolOutgoingMessage = TakeShotMessage | PlaceCueBallMessage | ConcedeMessage | GetStateMessage | ShotCompleteMessage | TurnTimeoutMessage;

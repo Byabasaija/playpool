@@ -38,6 +38,9 @@ export class ShotAnimator {
   private onCollision: ((event: CollisionEvent) => void) | null = null;
   private onPocket: ((event: PocketEvent) => void) | null = null;
   private running = false;
+  private lastTime = 0;
+  private accumulator = 0;
+  private static readonly FIXED_DT = 1000 / 60; // Fixed 60fps physics timestep
 
   constructor(
     onFrame: (balls: BallFrame[]) => void,
@@ -76,9 +79,17 @@ export class ShotAnimator {
       cueBall.velocity = new Vec2(vx, vy);
       cueBall.screw = shotParams.screw;
       cueBall.english = shotParams.english;
+
+      // Apply initial ySpin from english (matches original game: applied immediately on shot)
+      const speed = cueBall.velocity.magnitude();
+      cueBall.ySpin = -cueBall.english * speed / 300;
+      if (cueBall.ySpin > 20) cueBall.ySpin = 20;
+      if (cueBall.ySpin < -20) cueBall.ySpin = -20;
     }
 
     this.physics = new PhysicsEngine(balls, table);
+    this.lastTime = 0;
+    this.accumulator = 0;
     this.tick();
   }
 
@@ -95,40 +106,64 @@ export class ShotAnimator {
   private tick = (): void => {
     if (!this.running || !this.physics) return;
 
-    // Check if all balls stopped
-    if (this.physics.allStopped()) {
-      const finalFrame = this.buildFrame();
-      this.onFrame(finalFrame);
-      this.onComplete(finalFrame);
-      this.physics = null;
-      this.running = false;
-      return;
+    const now = performance.now();
+    if (this.lastTime === 0) {
+      this.lastTime = now;
+      // Ensure first frame steps immediately
+      this.accumulator = ShotAnimator.FIXED_DT;
+    } else {
+      this.accumulator += now - this.lastTime;
+      this.lastTime = now;
     }
 
-    // Clear events before stepping
-    this.physics.events = [];
+    // Cap accumulator to prevent spiral of death
+    if (this.accumulator > ShotAnimator.FIXED_DT * 4) {
+      this.accumulator = ShotAnimator.FIXED_DT * 4;
+    }
 
-    // Step physics: 1x collisions + 1x friction per frame (matches original game exactly)
-    this.physics.stepCollisions();
-    this.physics.stepFriction();
+    let stepped = false;
+    while (this.accumulator >= ShotAnimator.FIXED_DT) {
+      this.accumulator -= ShotAnimator.FIXED_DT;
 
-    // Process collision events
-    for (const evt of this.physics.events) {
-      if (this.onCollision) this.onCollision(evt);
-      if (evt.type === 'pocket' && this.onPocket) {
-        const pocket = this.physics.table.pockets.find(p => p.id === evt.targetId);
-        if (pocket) {
-          this.onPocket({
-            ballId: evt.ballId,
-            pocketX: pocket.dropPosition.x,
-            pocketY: pocket.dropPosition.y,
-          });
+      // Check if all balls stopped
+      if (this.physics.allStopped()) {
+        const finalFrame = this.buildFrame();
+        this.onFrame(finalFrame);
+        this.onComplete(finalFrame);
+        this.physics = null;
+        this.running = false;
+        return;
+      }
+
+      // Clear events before stepping
+      this.physics.events = [];
+
+      // Step physics: 1x collisions + 1x friction per step (matches original 60fps game)
+      this.physics.stepCollisions();
+      this.physics.stepFriction();
+
+      // Process collision events
+      for (const evt of this.physics.events) {
+        if (this.onCollision) this.onCollision(evt);
+        if (evt.type === 'pocket' && this.onPocket) {
+          const pocket = this.physics.table.pockets.find(p => p.id === evt.targetId);
+          if (pocket) {
+            this.onPocket({
+              ballId: evt.ballId,
+              pocketX: pocket.dropPosition.x,
+              pocketY: pocket.dropPosition.y,
+            });
+          }
         }
       }
+
+      stepped = true;
     }
 
-    // Emit current ball positions
-    this.onFrame(this.buildFrame());
+    // Only emit frame when physics actually stepped (keeps rotation at 60fps too)
+    if (stepped) {
+      this.onFrame(this.buildFrame());
+    }
 
     this.animFrameId = requestAnimationFrame(this.tick);
   };

@@ -162,22 +162,29 @@ function drawSpot(
     }
   }
 
+  // Rotate spot position by yaw (matches original: spot is in ball group's local coords
+  // which rotate by yaw via Phaser Group.angle)
+  const cosYaw = Math.cos(yaw);
+  const sinYaw = Math.sin(yaw);
+  const rSpotX = spotX * cosYaw - spotY * sinYaw;
+  const rSpotY = spotX * sinYaw + spotY * cosYaw;
+
   // Calculate foreshortening and visibility
-  const dist = Math.sqrt(spotX * spotX + spotY * spotY) / radiusPx;
+  const dist = Math.sqrt(rSpotX * rSpotX + rSpotY * rSpotY) / radiusPx;
   const foreshorten = Math.cos(dist * Math.PI / 2);
   if (foreshorten <= 0) return; // spot is on the far side of the ball
 
-  const spotAngle = Math.atan2(spotY, spotX);
+  const spotAngle = Math.atan2(rSpotY, rSpotX);
   const spotSize = radiusPx * 1.0; // spot display size
 
   ctx.save();
-  ctx.translate(cx + spotX, cy + spotY);
+  ctx.translate(cx + rSpotX, cy + rSpotY);
   // Apply foreshortening: scale Y by foreshorten factor, rotate to face correct direction
   ctx.rotate(spotAngle + Math.PI / 2);
   ctx.scale(1, foreshorten);
   ctx.rotate(-(spotAngle + Math.PI / 2));
   // Rotate spot by yaw so the number faces the right way
-  ctx.rotate(yaw - Math.PI);
+  ctx.rotate(yaw);
   ctx.globalAlpha = Math.min(1, foreshorten + 0.2);
 
   // Draw spot from sprite sheet
@@ -248,7 +255,7 @@ export function drawBall(
       // Draw rotated by yaw (the stripe pattern orbits around the ball)
       ctx.save();
       ctx.translate(cx, cy);
-      ctx.rotate(yaw - Math.PI);
+      ctx.rotate(yaw);
       drawFrame(ctx, sheet, frame, STRIPE_FW, STRIPE_FH, STRIPE_COLS,
         -half, -half, diameter, diameter);
       ctx.restore();
