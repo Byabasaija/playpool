@@ -61,6 +61,62 @@ function lineIntersectCircle(
   return { intersects: false, enterX: 0, enterY: 0 };
 }
 
+// find intersection points between two circles (canvas coordinates)
+function circleIntersectCircle(
+  x0: number, y0: number, r0: number,
+  x1: number, y1: number, r1: number,
+): { x3: number; y3: number; x4: number; y4: number } | null {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const d = Math.hypot(dx, dy);
+  if (d > r0 + r1 || d < Math.abs(r0 - r1) || d === 0) return null;
+  const a = (r0 * r0 - r1 * r1 + d * d) / (2 * d);
+  const h = Math.sqrt(Math.max(0, r0 * r0 - a * a));
+  const xm = x0 + (a * dx) / d;
+  const ym = y0 + (a * dy) / d;
+  const rx = -(dy * (h / d));
+  const ry = dx * (h / d);
+  return {
+    x3: xm + rx,
+    y3: ym + ry,
+    x4: xm - rx,
+    y4: ym - ry,
+  };
+}
+
+// helper: choose a random canvas coordinate inside the cloth that does
+// not overlap any active non‑cue balls. falls back to centre after a few tries.
+function randomBallInHandCanvasPos(): { cx: number; cy: number } {
+  const halfW = TABLE_W / 2 - BALL_R_PX;
+  const halfH = TABLE_H / 2 - BALL_R_PX;
+
+  // compile list of other balls in canvas space
+  const others: Array<{ cx: number; cy: number }> = ballsRefStatic.current
+    .filter((b) => b.active && b.id !== 0)
+    .map((b) => {
+      const [bx, by] = physToCanvas(b.x, b.y);
+      return { cx: bx, cy: by };
+    });
+
+  for (let i = 0; i < 500; i++) {
+    const cx = TABLE_CX - halfW + Math.random() * halfW * 2;
+    const cy = TABLE_CY - halfH + Math.random() * halfH * 2;
+    let overlap = false;
+    for (const b of others) {
+      const dx = cx - b.cx;
+      const dy = cy - b.cy;
+      if (dx * dx + dy * dy < (BALL_R_PX * 2) ** 2) {
+        overlap = true;
+        break;
+      }
+    }
+    if (!overlap) {
+      return { cx, cy };
+    }
+  }
+  return { cx: TABLE_CX, cy: TABLE_CY };
+}
+
 // Re-export types for backward compatibility
 export { type BallState, type BallGroup, type ShotParams, type PocketingAnim } from './types';
 
@@ -93,41 +149,150 @@ interface PoolCanvasProps {
   assets: PoolAssets;
   showGuideLine?: boolean;
   pocketingBalls?: PocketingAnim[];
+  // when the opponent is dragging the cue ball, their canvas coordinates
+  // are supplied here so we can render the mover sprite at that location.
 }
+
+// static ref used by helper to sample other balls outside of render
+const ballsRefStatic = { current: [] as BallState[] };
 
 export default function PoolCanvas({
   balls, myTurn, ballInHand, isBreakShot, myGroup, opponentGroup: _opponentGroup,
-  animating, onTakeShot, onPlaceCueBall, assets, showGuideLine = true, pocketingBalls = [],
+  animating, onTakeShot, onPlaceCueBall, assets,
+  showGuideLine = true, pocketingBalls = [],
 }: PoolCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const tableRef = useRef<Table | null>(null);
 
   // helper used when the player is moving the cue ball (ball-in-hand).
-  // keeps the ghost ball inside the rectangular play area and prevents
-  // overlapping any other active balls by pushing it outwards.
+  // This implements the same behaviour as the original 8-ball game code:
+  // the ghost ball is clamped inside the cloth, it is prevented from
+  // overlapping other balls, and when dragged between two balls it will
+  // slide around them instead of jittering.
   const constrainBallInHand = useCallback((cx: number, cy: number) => {
-    // clamp to cloth bounds plus radius
-    const halfW = TABLE_W / 2 - BALL_R_PX;
-    const halfH = TABLE_H / 2 - BALL_R_PX;
-    let nx = Math.max(TABLE_CX - halfW, Math.min(TABLE_CX + halfW, cx));
-    let ny = Math.max(TABLE_CY - halfH, Math.min(TABLE_CY + halfH, cy));
+    // candidate position (canvas coords)
+    let x = cx;
+    let y = cy;
 
-    // push outside any existing balls
-    for (const b of ballsRef.current) {
-      if (!b.active || b.id === 0) continue;
-      const [bx, by] = physToCanvas(b.x, b.y);
-      const dx = nx - bx;
-      const dy = ny - by;
-      const dist = Math.hypot(dx, dy);
-      const minDist = BALL_R_PX * 2;
-      if (dist < minDist && dist > 0) {
-        const ang = Math.atan2(dy, dx);
-        nx = bx + Math.cos(ang) * minDist;
-        ny = by + Math.sin(ang) * minDist;
+    // precompute list of other active balls in canvas coordinates
+    const others = ballsRef.current
+      .filter((b) => b.active && b.id !== 0)
+      .map((b) => {
+        const [bx, by] = physToCanvas(b.x, b.y);
+        return { x: bx, y: by };
+      });
+
+    // helper functions ported from the original JS
+    const tooClose = (tx: number, ty: number): boolean => {
+      for (const b of others) {
+        const dx = b.x - tx;
+        const dy = b.y - ty;
+        if (dx * dx + dy * dy < (BALL_R_PX * 2) * (BALL_R_PX * 2) * 2 + 10) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    const tooCloseTight = (tx: number, ty: number): boolean => {
+      for (const b of others) {
+        const dx = b.x - tx;
+        const dy = b.y - ty;
+        if (dx * dx + dy * dy < (BALL_R_PX * 2) * (BALL_R_PX * 2) * 2 - 10) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+
+    // --- original algorithm follows ---
+    const cuePos = { x, y }; // current (possibly inactive) cue position
+    const pointer = { x: cx, y: cy };
+    const hitBalls: Array<{ x: number; y: number }> = [];
+    const hitPoints: Array<{ x: number; y: number }> = [];
+
+    for (const b of others) {
+      const hit = lineIntersectCircle(cuePos.x, cuePos.y, pointer.x, pointer.y, b.x, b.y, BALL_R_PX * 2);
+      if (hit.intersects) {
+        hitBalls.push(b);
+        if (hit.enterX || hit.enterY) {
+          hitPoints.push({ x: hit.enterX, y: hit.enterY });
+        } else {
+          hitPoints.push({ x: cuePos.x, y: cuePos.y });
+        }
       }
     }
 
-    return { cx: nx, cy: ny };
+    if (hitBalls.length === 1) {
+      const b = hitBalls[0];
+      const p = hitPoints[0];
+      // push the cue ball away from the collision point
+      const vx = b.x - p.x;
+      const vy = b.y - p.y;
+      const len = Math.hypot(vx, vy) || 1;
+      const ux = vx / len;
+      const uy = vy / len;
+      const offset = BALL_R_PX * 2;
+      x = b.x - ux * offset;
+      y = b.y - uy * offset;
+    } else if (hitBalls.length > 1) {
+      // compute intersections between every pair of hit balls
+      let bestDist = Infinity;
+      for (let i = 0; i < hitBalls.length; i++) {
+        for (let j = i + 1; j < hitBalls.length; j++) {
+          const a = hitBalls[i];
+          const b = hitBalls[j];
+          const inter = circleIntersectCircle(a.x, a.y, BALL_R_PX * 2, b.x, b.y, BALL_R_PX * 2);
+          if (inter) {
+            for (const cand of [
+              { x: inter.x3, y: inter.y3 },
+              { x: inter.x4, y: inter.y4 },
+            ]) {
+              if (!tooClose(cand.x, cand.y)) {
+                const d2 = (cand.x - pointer.x) ** 2 + (cand.y - pointer.y) ** 2;
+                if (d2 < bestDist) {
+                  bestDist = d2;
+                  x = cand.x;
+                  y = cand.y;
+                }
+              }
+            }
+          }
+        }
+      }
+      // if we failed to find a valid intersection, fall back to simple push
+      if (bestDist === Infinity) {
+        for (const b of others) {
+          const dx = x - b.x;
+          const dy = y - b.y;
+          const dist = Math.hypot(dx, dy);
+          const minDist = BALL_R_PX * 2;
+          if (dist < minDist && dist > 0) {
+            const ang = Math.atan2(dy, dx);
+            x = b.x + Math.cos(ang) * minDist;
+            y = b.y + Math.sin(ang) * minDist;
+          }
+        }
+      }
+    } else {
+      // no hits along pointer ray – simply follow the pointer
+      x = pointer.x;
+      y = pointer.y;
+    }
+
+    // clamp inside table cloth
+    const halfW = TABLE_W / 2 - BALL_R_PX;
+    const halfH = TABLE_H / 2 - BALL_R_PX;
+    x = Math.max(TABLE_CX - halfW, Math.min(TABLE_CX + halfW, x));
+    y = Math.max(TABLE_CY - halfH, Math.min(TABLE_CY + halfH, y));
+
+    // final nudges if still overlapping
+    while (tooCloseTight(x, y)) {
+      x -= BALL_R_PX / 4;
+    }
+
+    return { cx: x, cy: y };
   }, []);
 
   // --- Canvas-only state as refs (no React re-renders) ---
@@ -137,8 +302,14 @@ export default function PoolCanvas({
   const settingPowerRef = useRef(false);
   const mouseStartRef = useRef<{ x: number; y: number } | null>(null);
   const ballInHandPosRef = useRef<{ cx: number; cy: number } | null>(null);
+  // we only start moving the cue ball if pointer down occurs on the ghost ball
+  const ballInHandDraggingRef = useRef(false);
+  const ballInHandHoverRef = useRef(false);
+  const moverAlphaRef = useRef(0.2);
   // when true we are dragging the cue from the left-side UI area
   const draggingUIRef = useRef(false);
+  // last pointer canvas coordinates (for optional debug drawing)
+  const lastPointerRef = useRef<{ mx: number; my: number } | null>(null);
   const mouseDownRef = useRef(false);
 
   // left UI bar dimensions (recomputed each frame if formulas change)
@@ -168,6 +339,7 @@ export default function PoolCanvas({
   // Stable refs for props that event handlers / draw loop need
   const ballsRef = useRef(balls);
   ballsRef.current = balls;
+  ballsRefStatic.current = balls; // keep sync for random helper
   const onTakeShotRef = useRef(onTakeShot);
   onTakeShotRef.current = onTakeShot;
   const onPlaceCueBallRef = useRef(onPlaceCueBall);
@@ -218,6 +390,33 @@ export default function PoolCanvas({
     }
   }, [myTurn, animating, ballInHand]);
 
+  // clear any in‑hand interaction state when ballInHand is revoked
+  useEffect(() => {
+    if (!ballInHand) {
+      ballInHandDraggingRef.current = false;
+      ballInHandHoverRef.current = false;
+      moverAlphaRef.current = 0.2;
+      ballInHandPosRef.current = null;
+    }
+  }, [ballInHand]);
+
+  // when ball-in-hand is granted, make the ghost ball appear immediately
+  // at the cue ball location (or centre if the cue is inactive). this mirrors
+  // the original game, which moves the cue to centre upon the first lift.
+  useEffect(() => {
+    if (ballInHand && !animating) {
+      const cueBall = ballsRef.current.find((b) => b.id === 0 && b.active);
+      if (cueBall) {
+        const [cx, cy] = physToCanvas(cueBall.x, cueBall.y);
+        ballInHandPosRef.current = { cx, cy };
+      } else {
+        ballInHandPosRef.current = randomBallInHandCanvasPos();
+      }
+    } else {
+      ballInHandPosRef.current = null;
+    }
+  }, [ballInHand, animating]);
+
   // When external animation starts, hide cue
   useEffect(() => {
     if (animating) {
@@ -242,6 +441,18 @@ export default function PoolCanvas({
       const power = powerRef.current;
       const dragDist = dragDistRef.current;
       const settingPower = settingPowerRef.current;
+      // lazily seed ballInHandPos if it isn't already set and we still have
+      // ballInHand state – this covers the brief window before the effect
+      // runs or when animating prevented it.
+      if (ballInHand && !ballInHandPosRef.current) {
+        const cueBall = currentBalls.find((b) => b.id === 0 && b.active);
+        if (cueBall) {
+          const [cx, cy] = physToCanvas(cueBall.x, cueBall.y);
+          ballInHandPosRef.current = { cx, cy };
+        } else {
+          ballInHandPosRef.current = randomBallInHandCanvasPos();
+        }
+      }
       const ballInHandPos = ballInHandPosRef.current;
 
       // Draw cached table background
@@ -298,7 +509,7 @@ export default function PoolCanvas({
       const shadowSize = BALL_R_PX * 4;
       for (const ball of sortedBalls) {
         if (!ball.active) continue;
-        if (ball.id === 0 && ballInHand) continue; // Hide cue ball during ball-in-hand
+        if (ball.id === 0 && ballInHand) continue; // hide cue while we are lifting
         const [bx, by] = physToCanvas(ball.x, ball.y);
         ctx.save();
         ctx.globalAlpha = 0.7;
@@ -309,9 +520,34 @@ export default function PoolCanvas({
       // Draw balls
       for (const ball of sortedBalls) {
         if (!ball.active) continue;
-        if (ball.id === 0 && ballInHand) continue; // Hide cue ball during ball-in-hand
+        // do not draw the cue ball from state while ball-in-hand; we'll draw
+        // it manually at the gesture position below instead.
+        if (ball.id === 0 && ballInHand) continue;
         const [bx, by] = physToCanvas(ball.x, ball.y);
         drawBall(ctx, assets, ball.id, bx, by, BALL_R_PX);
+      }
+
+      // when ball is in hand and we have a computed position, draw the cue
+      // ball itself beneath the mover sprite so the square appears to surround
+      // it, just like the original game.
+      if (ballInHand && ballInHandPos) {
+        drawBall(ctx, assets, 0, ballInHandPos.cx, ballInHandPos.cy, BALL_R_PX);
+      }
+
+      // show mover sprite when ball-in-hand (ours)
+      const moverPos = ballInHandPos;
+      if (moverPos) {
+        const size = BALL_R_PX * 2.5; // approximate scale of original mover
+        ctx.save();
+        ctx.globalAlpha = moverAlphaRef.current;
+        ctx.drawImage(
+          assets.images.mover,
+          moverPos.cx - size / 2,
+          moverPos.cy - size / 2,
+          size,
+          size,
+        );
+        ctx.restore();
       }
 
       // === BALL GROUP MARKERS ===
@@ -366,16 +602,32 @@ export default function PoolCanvas({
       // === CUE STICK + AIMING GUIDE ===
       const cueBall = currentBalls.find((b) => b.id === 0 && b.active);
       const cue = cueStateRef.current;
-      const showCue = cueBall && !ballInHand && cue.phase !== 'hidden' && (
-        (myTurn && !animating && cue.phase === 'aiming') ||
-        cue.phase === 'striking' ||
-        cue.phase === 'followThrough'
-      );
+      const showCue = (cueBall || (ballInHand && ballInHandPos)) &&
+        !ballInHandHoverRef.current && cue.phase !== 'hidden' && (
+          (myTurn && !animating && cue.phase === 'aiming') ||
+          cue.phase === 'striking' ||
+          cue.phase === 'followThrough'
+        );
 
       if (showCue) {
-        const [liveCx, liveCy] = physToCanvas(cueBall.x, cueBall.y);
-        const cx = (cue.phase === 'striking' || cue.phase === 'followThrough') ? cue.strikeCanvasX : liveCx;
-        const cy = (cue.phase === 'striking' || cue.phase === 'followThrough') ? cue.strikeCanvasY : liveCy;
+        // determine where the cue should originate: prefer real cue ball,
+        // fall back to the in‑hand mover position
+        let cx: number, cy: number;
+        if (cueBall) {
+          const [liveCx, liveCy] = physToCanvas(cueBall.x, cueBall.y);
+          cx = liveCx;
+          cy = liveCy;
+        } else if (ballInHandPos) {
+          cx = ballInHandPos.cx;
+          cy = ballInHandPos.cy;
+        } else {
+          cx = TABLE_CX;
+          cy = TABLE_CY;
+        }
+        if (cue.phase === 'striking' || cue.phase === 'followThrough') {
+          cx = cue.strikeCanvasX;
+          cy = cue.strikeCanvasY;
+        }
         const cueDrawLen = BALL_R_PX * 18;
         const cueDrawThick = BALL_R_PX * 0.8;
         const baseGap = BALL_R_PX * 1.5;
@@ -425,8 +677,10 @@ export default function PoolCanvas({
         if (showGuide && cueBall) {
           const dirX = Math.cos(drawAngle);
           const dirY = Math.sin(drawAngle);
-          const rayEndX = cueBall.x + dirX * 500000;
-          const rayEndY = cueBall.y + dirY * 500000;
+          const originX = cueBall ? cueBall.x : (ballInHandPos ? canvasToPhys(ballInHandPos.cx, ballInHandPos.cy)[0] : 0);
+          const originY = cueBall ? cueBall.y : (ballInHandPos ? canvasToPhys(ballInHandPos.cx, ballInHandPos.cy)[1] : 0);
+          const rayEndX = originX + dirX * 500000;
+          const rayEndY = originY + dirY * 500000;
           const collisionRadius = BALL_RADIUS * 2;
 
           let closestBall: BallState | null = null;
@@ -686,19 +940,6 @@ export default function PoolCanvas({
         }
       }
 
-      // Ball-in-hand ghost + instruction
-      if (myTurn && ballInHand && !animating) {
-        if (ballInHandPos) {
-          ctx.save();
-          ctx.globalAlpha = 0.5;
-          drawBall(ctx, assets, 0, ballInHandPos.cx, ballInHandPos.cy, BALL_R_PX);
-          ctx.restore();
-        }
-        ctx.fillStyle = 'rgba(255,255,255,0.7)';
-        ctx.font = '14px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText('Click to place cue ball', CANVAS_WIDTH / 2, TABLE_CY - TABLE_H / 2 - 10);
-      }
     };
 
     const loop = () => {
@@ -710,73 +951,25 @@ export default function PoolCanvas({
   }, [balls, myTurn, animating, ballInHand, isBreakShot, myGroup, assets, pocketingBalls, showGuideLine]);
 
   // --- Coordinate conversion (stable, no deps) ---
+  const DEBUG_AIM = false; // set true to log pointer/ball coords for troubleshooting
+
   const clientToCanvas = useCallback((clientX: number, clientY: number) => {
     const canvas = canvasRef.current;
     if (!canvas) return { mx: 0, my: 0 };
     const rect = canvas.getBoundingClientRect();
+    // use actual drawing buffer size in case CSS scales the element or
+    // the devicePixelRatio differs from 1
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
     return {
-      mx: ((clientX - rect.left) / rect.width) * CANVAS_WIDTH,
-      my: ((clientY - rect.top) / rect.height) * CANVAS_HEIGHT,
+      mx: (clientX - rect.left) * scaleX,
+      my: (clientY - rect.top) * scaleY,
     };
   }, []);
 
   // --- Event handlers (update refs, no setState, no re-renders) ---
 
-  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (animatingRef.current || !myTurnRef.current) return;
-    const cue = cueStateRef.current;
-    if (cue.phase !== 'aiming') return;
 
-    const { mx, my } = clientToCanvas(e.clientX, e.clientY);
-    const currentBalls = ballsRef.current;
-    const cueBall = currentBalls.find((b) => b.id === 0 && b.active);
-    if (!cueBall) return;
-    const [cx, cy] = physToCanvas(cueBall.x, cueBall.y);
-
-    if (ballInHandRef.current) {
-      const { cx, cy } = constrainBallInHand(mx, my);
-      ballInHandPosRef.current = { cx, cy };
-      return;
-    }
-
-    const tableLeft = TABLE_CX - TABLE_W / 2;
-    const tableRight = TABLE_CX + TABLE_W / 2;
-    const tableTop = TABLE_CY - TABLE_H / 2;
-    const tableBottom = TABLE_CY + TABLE_H / 2;
-    const inTable = mx >= tableLeft && mx <= tableRight && my >= tableTop && my <= tableBottom;
-
-    // if pointer leaves the table on the left side while holding down, start
-    // power mode.  we ignore exits on the right/bottom/top because they are
-    // simply the user moving the aim around.
-    if (
-      mouseDownRef.current &&
-      !draggingUIRef.current &&
-      !inTable &&
-      mx < tableLeft
-    ) {
-      draggingUIRef.current = true;
-      settingPowerRef.current = true;
-      mouseStartRef.current = { x: mx, y: my };
-      powerRef.current = 0;
-    }
-
-    if (draggingUIRef.current) {
-        const barH = TABLE_H * BAR_SCALE;
-        const barTop2 = TABLE_CY - barH / 2;
-        const pct = 1 - (my - barTop2) / barH;
-        const clamped = Math.max(0, Math.min(1, pct));
-        powerRef.current = clamped * MAX_POWER;
-        dragDistRef.current = clamped * 180;
-        return;
-    }
-
-    // Power drag is handled by window-level listeners (see handleMouseDown)
-    if (settingPowerRef.current) return;
-
-    if (inTable) {
-      aimAngleRef.current = Math.atan2(my - cy, mx - cx);
-    }
-  }, [clientToCanvas]);
 
   const startStrike = useCallback((shotAngle: number, shotPower: number) => {
     const cue = cueStateRef.current;
@@ -799,38 +992,56 @@ export default function PoolCanvas({
     shotFiredRef.current = false;
   }, []);
 
-  // Window-level drag handlers (attached on mousedown, removed on mouseup)
-  // This ensures shooting works even when mouse leaves the canvas during drag.
-  const windowDragHandlersRef = useRef<{ move: (e: MouseEvent) => void; up: (e: MouseEvent) => void } | null>(null);
-
-  const removeWindowDragHandlers = useCallback(() => {
-    if (windowDragHandlersRef.current) {
-      window.removeEventListener('mousemove', windowDragHandlersRef.current.move);
-      window.removeEventListener('mouseup', windowDragHandlersRef.current.up);
-      windowDragHandlersRef.current = null;
-    }
-  }, []);
-
-  // Clean up window listeners on unmount
-  useEffect(() => removeWindowDragHandlers, [removeWindowDragHandlers]);
-
-  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+  // Pointer-based unified handlers (replace separate mouse/touch flows).
+  // We use pointer capture to continue receiving pointermove/up events
+  // even when the pointer leaves the canvas. Pointer type distinguishes
+  // mouse (desktop) from touch (mobile/tablet).
+  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
     if (!myTurnRef.current || animatingRef.current) return;
     mouseDownRef.current = true;
     const cue = cueStateRef.current;
     if (cue.phase !== 'aiming') return;
 
-    const { mx, my } = clientToCanvas(e.clientX, e.clientY);
+    const isTouch = e.pointerType === 'touch' || e.pointerType === 'pen';
+    let { mx, my } = clientToCanvas(e.clientX, e.clientY);
+    const evtAny = e as any;
+    if (evtAny.offsetX !== undefined && evtAny.offsetY !== undefined && canvasRef.current) {
+      const canvas = canvasRef.current;
+      const scaleX = canvas.width / canvas.clientWidth;
+      const scaleY = canvas.height / canvas.clientHeight;
+      mx = evtAny.offsetX * scaleX;
+      my = evtAny.offsetY * scaleY;
+    }
+    lastPointerRef.current = { mx, my };
 
     if (ballInHandRef.current) {
-      const { cx, cy } = constrainBallInHand(mx, my);
-      ballInHandPosRef.current = { cx, cy };
-      return; // start dragging cue ball, placement on up
+      // make sure we have a position recorded so the mover is clickable
+      if (!ballInHandPosRef.current) {
+        const cueBall = ballsRef.current.find((b) => b.id === 0 && b.active);
+        if (cueBall) {
+          const [cx, cy] = physToCanvas(cueBall.x, cueBall.y);
+          ballInHandPosRef.current = { cx, cy };
+        } else {
+          ballInHandPosRef.current = randomBallInHandCanvasPos();
+        }
+      }
+
+      const pos = ballInHandPosRef.current!;
+      const dx = mx - pos.cx;
+      const dy = my - pos.cy;
+      // allow clicks anywhere on the visible mover sprite (approx 2.5*ball radius)
+      if (Math.hypot(dx, dy) <= BALL_R_PX * 2.5) {
+        ballInHandDraggingRef.current = true;
+        const { cx, cy } = constrainBallInHand(mx, my);
+        ballInHandPosRef.current = { cx, cy };
+        // capture pointer to continue receiving moves outside the canvas
+        try { (e.currentTarget as Element).setPointerCapture(e.pointerId); } catch {};
+      }
+      return;
     }
 
-    // decide if the press is inside our left-side UI zone.  we compute
-    // the visual bar width the same way drawFrame does so the hit area matches
-    // the graphics (with a small tolerance).
+    // compute UI bar geometry
     const barH = TABLE_H * BAR_SCALE;
     const barTop = TABLE_CY - barH / 2;
     let barW = UI_BAR_W;
@@ -838,138 +1049,59 @@ export default function PoolCanvas({
       const bgScale = barH / assets.images.powerBarBG.width;
       barW = assets.images.powerBarBG.height * bgScale;
     }
-    let insideUI = false;
-    if (mx >= 0 && mx <= UI_BAR_X + barW + 20 && my >= barTop && my <= barTop + barH) {
-      insideUI = true;
+
+    // Only treat the left-side bar as a UI-driven power control for touch
+    const insideUI = isTouch && mx >= 0 && mx <= UI_BAR_X + barW + 20 && my >= barTop && my <= barTop + barH;
+    if (insideUI) {
       draggingUIRef.current = true;
-      // immediately aim towards current pointer as in original
-      const cueBall = ballsRef.current.find((b) => b.id === 0 && b.active);
+      // do not change aim on initial press; aim will update on move
+      /*const cueBall = ballsRef.current.find((b) => b.id === 0 && b.active);
       if (cueBall) {
         const [cx, cy] = physToCanvas(cueBall.x, cueBall.y);
+        if (DEBUG_AIM) console.log('pointerDown aim', mx.toFixed(1), my.toFixed(1), 'ball', cx.toFixed(1), cy.toFixed(1));
         aimAngleRef.current = Math.atan2(my - cy, mx - cx);
-      }
+      }*/
       settingPowerRef.current = true;
       mouseStartRef.current = { x: mx, y: my };
       powerRef.current = 0;
-    }
-
-    if (!insideUI) {
-      // clicks outside the UI zone are purely for aiming; no power drag
-      const cueBall = ballsRef.current.find((b) => b.id === 0 && b.active);
+    } else {
+      // outside UI: for both mouse and touch, DO NOT reset aim on down;
+      // the current aim angle should remain until the user moves the cursor.
+      /*const cueBall = ballsRef.current.find((b) => b.id === 0 && b.active);
       if (cueBall) {
         const [cx, cy] = physToCanvas(cueBall.x, cueBall.y);
+        if (DEBUG_AIM) console.log('pointerDown aim', mx.toFixed(1), my.toFixed(1), 'ball', cx.toFixed(1), cy.toFixed(1));
         aimAngleRef.current = Math.atan2(my - cy, mx - cx);
-      }
-    }
-
-    // Attach window-level listeners so dragging outside canvas still works
-    const onWindowMove = (ev: MouseEvent) => {
-      if (!settingPowerRef.current || !mouseStartRef.current) return;
-      const { mx: wmx, my: wmy } = clientToCanvas(ev.clientX, ev.clientY);
-      const ms = mouseStartRef.current;
-      const dx = -(wmx - ms.x);
-      const dy = -(wmy - ms.y);
-      const aimDirX = Math.cos(aimAngleRef.current);
-      const aimDirY = Math.sin(aimAngleRef.current);
-      let r = dx * aimDirX + dy * aimDirY;
-      const maxDrag = 180;
-      if (r < 0) r = 0;
-      if (r > maxDrag) r = maxDrag;
-      dragDistRef.current = r;
-      powerRef.current = MAX_POWER * (Math.pow(r, 1.4) / Math.pow(maxDrag, 1.4));
-    };
-
-    const onWindowUp = () => {
-      if (settingPowerRef.current && powerRef.current > 40) {
-        startStrike(aimAngleRef.current, powerRef.current);
-      }
-      settingPowerRef.current = false;
-      powerRef.current = 0;
-      dragDistRef.current = 0;
-      mouseStartRef.current = null;
-      draggingUIRef.current = false;
-      removeWindowDragHandlers();
-    };
-
-    removeWindowDragHandlers(); // clean up any stale listeners
-    windowDragHandlersRef.current = { move: onWindowMove, up: onWindowUp };
-    window.addEventListener('mousemove', onWindowMove);
-    window.addEventListener('mouseup', onWindowUp);
-  }, [clientToCanvas, startStrike, removeWindowDragHandlers]);
-
-  const handleMouseUp = useCallback(() => {
-    mouseDownRef.current = false;
-    // if we're dragging the cue ball, place it now
-    if (ballInHandRef.current && ballInHandPosRef.current) {
-      const { cx, cy } = ballInHandPosRef.current;
-      const [px, py] = canvasToPhys(cx, cy);
-      onPlaceCueBallRef.current(px, py);
-      ballInHandPosRef.current = null;
-      draggingUIRef.current = false;
-      return;
-    }
-    // Window-level handler takes care of firing the shot.
-    // This is kept as a no-op fallback for safety.
-  }, []);
-
-  const handleMouseLeave = useCallback(() => {
-    // Don't cancel drag on mouse leave — window listeners handle it.
-  }, []);
-
-  // --- Touch handlers ---
-
-  const handleTouchStart = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    mouseDownRef.current = true;
-    if (!myTurnRef.current || animatingRef.current || !e.touches[0]) return;
-    const cue = cueStateRef.current;
-    if (cue.phase !== 'aiming') return;
-
-    const { mx, my } = clientToCanvas(e.touches[0].clientX, e.touches[0].clientY);
-
-    if (ballInHandRef.current) {
-      const { cx, cy } = constrainBallInHand(mx, my);
-      ballInHandPosRef.current = { cx, cy };
-      return; // begin drag, placement occurs on touch end
-    }
-
-    const barH = TABLE_H * BAR_SCALE;
-    const barTop = TABLE_CY - barH / 2;
-    let barW = UI_BAR_W;
-    if (assets.images.powerBarBG) {
-      const bgScale = barH / assets.images.powerBarBG.width;
-      barW = assets.images.powerBarBG.height * bgScale;
-    }
-    if (mx >= 0 && mx <= UI_BAR_X + barW + 20 && my >= barTop && my <= barTop + barH) {
-      draggingUIRef.current = true;
-      const cueBall = ballsRef.current.find((b) => b.id === 0 && b.active);
-      if (cueBall) {
-        const [cx, cy] = physToCanvas(cueBall.x, cueBall.y);
-        aimAngleRef.current = Math.atan2(my - cy, mx - cx);
-      }
-      settingPowerRef.current = true;
+      }*/
+      // remember where the drag started so we can project against the aim
       mouseStartRef.current = { x: mx, y: my };
-      powerRef.current = 0;
-      return;
-    }
-
-    // outside UI, just set aim
-    const cueBall = ballsRef.current.find((b) => b.id === 0 && b.active);
-    if (cueBall) {
-      const [cx, cy] = physToCanvas(cueBall.x, cueBall.y);
-      aimAngleRef.current = Math.atan2(my - cy, mx - cx);
+      // For mouse pointers, capture so we keep receiving pointermove/up
+      try {
+        (e.currentTarget as Element).setPointerCapture(e.pointerId);
+      } catch (err) {
+        // ignore if capture not supported
+      }
     }
   }, [clientToCanvas]);
 
-  const handleTouchMove = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    if (animatingRef.current || !myTurnRef.current || !e.touches[0]) return;
+  const handlePointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (animatingRef.current || !myTurnRef.current) return;
     const cue = cueStateRef.current;
     if (cue.phase !== 'aiming') return;
 
-    const { mx, my } = clientToCanvas(e.touches[0].clientX, e.touches[0].clientY);
+    const isTouch = e.pointerType === 'touch' || e.pointerType === 'pen';
+    let { mx, my } = clientToCanvas(e.clientX, e.clientY);
+    const evtAny = e as any;
+    if (evtAny.offsetX !== undefined && evtAny.offsetY !== undefined && canvasRef.current) {
+      const canvas = canvasRef.current;
+      const scaleX = canvas.width / canvas.clientWidth;
+      const scaleY = canvas.height / canvas.clientHeight;
+      mx = evtAny.offsetX * scaleX;
+      my = evtAny.offsetY * scaleY;
+    }
+    lastPointerRef.current = { mx, my };
 
-    if (ballInHandRef.current) {
+    if (ballInHandRef.current && ballInHandDraggingRef.current) {
       const { cx, cy } = constrainBallInHand(mx, my);
       ballInHandPosRef.current = { cx, cy };
       return;
@@ -981,14 +1113,49 @@ export default function PoolCanvas({
     const tableBottom = TABLE_CY + TABLE_H / 2;
     const inTable = mx >= tableLeft && mx <= tableRight && my >= tableTop && my <= tableBottom;
 
-    if (mouseDownRef.current && !draggingUIRef.current && !inTable) {
-      draggingUIRef.current = true;
-      settingPowerRef.current = true;
-      mouseStartRef.current = { x: mx, y: my };
-      powerRef.current = 0;
+    // manage hover state when ball-in-hand but not dragging
+    if (ballInHandRef.current && !ballInHandDraggingRef.current) {
+      const pos = ballInHandPosRef.current;
+      if (pos) {
+        const dist = Math.hypot(mx - pos.cx, my - pos.cy);
+        const hovering = dist <= BALL_R_PX * 2.5;
+        if (hovering && !ballInHandHoverRef.current) {
+          ballInHandHoverRef.current = true;
+        } else if (!hovering && ballInHandHoverRef.current) {
+          ballInHandHoverRef.current = false;
+        }
+      }
     }
 
-    if (draggingUIRef.current) {
+    // adjust mover opacity: full when hovering or dragging
+    if (ballInHandHoverRef.current || ballInHandDraggingRef.current) {
+      moverAlphaRef.current = 1;
+    } else {
+      moverAlphaRef.current = 0.2;
+    }
+
+    // If hovering, do not update aim or power
+    if (ballInHandHoverRef.current) return;
+
+    // For mouse: begin a power drag when the user pulls backwards from
+    // the initial down point (regardless of aim); update aim to follow the
+    // direction of the drag.
+    if (!isTouch && mouseDownRef.current && !draggingUIRef.current && mouseStartRef.current) {
+      const ms = mouseStartRef.current;
+      const dx = -(mx - ms.x);
+      const dy = -(my - ms.y);
+      const dist = Math.hypot(dx, dy);
+      if (dist > 10) {
+        draggingUIRef.current = true;
+        settingPowerRef.current = true;
+        // we will use the same start point for measuring power magnitude
+        mouseStartRef.current = { x: mx, y: my };
+        powerRef.current = 0;
+      }
+    }
+
+    // If dragging UI (touch) then vertical bar maps to power directly
+    if (draggingUIRef.current && isTouch) {
       const barH = TABLE_H * BAR_SCALE;
       const barTop2 = TABLE_CY - barH / 2;
       const pct = 1 - (my - barTop2) / barH;
@@ -998,30 +1165,55 @@ export default function PoolCanvas({
       return;
     }
 
-    const cueBall = ballsRef.current.find((b) => b.id === 0 && b.active);
-    if (!cueBall) return;
-    const [cx, cy] = physToCanvas(cueBall.x, cueBall.y);
+    // If we're currently pulling for power with mouse, compute power using
+    // the magnitude of the drag and update aim direction to match the pull.
+    if (settingPowerRef.current && !isTouch && mouseStartRef.current) {
+      const ms = mouseStartRef.current;
+      const dx = -(mx - ms.x);
+      const dy = -(my - ms.y);
+      const r = Math.hypot(dx, dy);
+      const maxDrag = 180;
+      const clamped = Math.min(maxDrag, r);
+      dragDistRef.current = clamped;
+      powerRef.current = MAX_POWER * (Math.pow(clamped, 1.4) / Math.pow(maxDrag, 1.4));
+      // keep aim fixed when pulling; it was set at drag start
+      return;
+    }
 
     if (settingPowerRef.current) return;
 
-    if (inTable) {
+    // update aim only when the user is not actively dragging the mouse
+    // (power drags or any button-down movement should keep aim fixed).
+    const pos = ballInHandPosRef.current;
+    if (inTable && !mouseDownRef.current) {
+      const cueBall = ballsRef.current.find((b) => b.id === 0 && b.active);
+      let origin: [number, number] | null = null;
+      if (cueBall) {
+        origin = physToCanvas(cueBall.x, cueBall.y);
+      } else if (pos) {
+        origin = [pos.cx, pos.cy];
+      }
+      if (!origin) return;
+      const [cx, cy] = origin;
+      if (DEBUG_AIM) console.log('pointerMove aim', mx.toFixed(1), my.toFixed(1), 'ball', cx.toFixed(1), cy.toFixed(1));
       aimAngleRef.current = Math.atan2(my - cy, mx - cx);
     }
   }, [clientToCanvas]);
 
-  const handleTouchEnd = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
+  const handlePointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     e.preventDefault();
     mouseDownRef.current = false;
-    if (!myTurnRef.current || animatingRef.current) return;
-    if (ballInHandRef.current && ballInHandPosRef.current) {
+
+    if (ballInHandRef.current && ballInHandDraggingRef.current && ballInHandPosRef.current) {
       const { cx, cy } = ballInHandPosRef.current;
       const [px, py] = canvasToPhys(cx, cy);
       onPlaceCueBallRef.current(px, py);
       ballInHandPosRef.current = null;
+      ballInHandDraggingRef.current = false;
       draggingUIRef.current = false;
+      try { (e.currentTarget as Element).releasePointerCapture(e.pointerId); } catch (err) {}
       return;
     }
-    if (ballInHandRef.current) return;
 
     if (settingPowerRef.current && powerRef.current > 40) {
       startStrike(aimAngleRef.current, powerRef.current);
@@ -1029,8 +1221,26 @@ export default function PoolCanvas({
 
     settingPowerRef.current = false;
     powerRef.current = 0;
+    dragDistRef.current = 0;
     mouseStartRef.current = null;
+    draggingUIRef.current = false;
+    ballInHandHoverRef.current = false;
+    moverAlphaRef.current = 0.2;
+    try { (e.currentTarget as Element).releasePointerCapture(e.pointerId); } catch (err) {}
   }, [startStrike]);
+
+  const handlePointerCancel = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    // Treat cancel similar to up
+    try { (e.currentTarget as Element).releasePointerCapture(e.pointerId); } catch (err) {}
+    mouseDownRef.current = false;
+    settingPowerRef.current = false;
+    draggingUIRef.current = false;
+    ballInHandDraggingRef.current = false;
+    ballInHandHoverRef.current = false;
+    powerRef.current = 0;
+    dragDistRef.current = 0;
+    mouseStartRef.current = null;
+  }, []);
 
   return (
     <canvas
@@ -1038,13 +1248,10 @@ export default function PoolCanvas({
       width={CANVAS_WIDTH}
       height={CANVAS_HEIGHT}
       style={{ width: '100%', height: '100%', objectFit: 'contain', touchAction: 'none', cursor: myTurn && !animating ? 'crosshair' : 'default' }}
-      onMouseMove={handleMouseMove}
-      onMouseDown={handleMouseDown}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseLeave}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
+      onPointerMove={handlePointerMove}
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerCancel}
     />
   );
 }

@@ -355,6 +355,7 @@ export const PoolGamePage: React.FC = () => {
     });
   }, [sendWSMessage]);
 
+
   const handleConcede = useCallback(() => {
     if (confirm('Are you sure you want to concede?')) {
       sendWSMessage({ type: 'concede', data: {} });

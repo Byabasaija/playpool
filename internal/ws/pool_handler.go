@@ -384,11 +384,11 @@ func (c *Client) handleTakeShot(g *game.PoolGameState, data TakeShotData) {
 
 		// Build a timeout result: no contact, no pocketed balls — pure foul
 		timeoutData := game.ClientShotData{
-			BallPositions:      g2.GetCurrentBallPositions(),
-			PocketedBalls:      []int{},
-			FirstContactBallID: -1,
+			BallPositions:       g2.GetCurrentBallPositions(),
+			PocketedBalls:       []int{},
+			FirstContactBallID:  -1,
 			CushionAfterContact: false,
-			BreakCushionCount:  0,
+			BreakCushionCount:   0,
 		}
 		result, err := g2.ApplyShotResult(playerID, timeoutData)
 		if err != nil {

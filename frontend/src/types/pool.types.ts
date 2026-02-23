@@ -133,6 +133,7 @@ export interface PlaceCueBallMessage {
   data: { x: number; y: number };
 }
 
+
 export interface ConcedeMessage {
   type: 'concede';
   data: Record<string, never>;
@@ -159,4 +160,10 @@ export interface TurnTimeoutMessage {
   data: Record<string, never>;
 }
 
-export type PoolOutgoingMessage = TakeShotMessage | PlaceCueBallMessage | ConcedeMessage | GetStateMessage | ShotCompleteMessage | TurnTimeoutMessage;
+export type PoolOutgoingMessage =
+  | TakeShotMessage
+  | PlaceCueBallMessage
+  | ConcedeMessage
+  | GetStateMessage
+  | ShotCompleteMessage
+  | TurnTimeoutMessage;
