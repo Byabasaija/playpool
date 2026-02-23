@@ -462,15 +462,8 @@ export const PoolGamePage: React.FC = () => {
         shotTimer={shotTimer}
       />
 
-      {/* Table area with side rails */}
+      {/* Table area with single right-side rail */}
       <div className="flex-1 relative flex items-center justify-center min-h-0">
-        {/* Left side rail — my pocketed balls */}
-        <SideRail
-          balls={gameState.balls}
-          group={gameState.myGroup}
-          side="left"
-        />
-
         {/* Pool table canvas — fills available space */}
         <div className="flex-1 min-w-0 h-full flex items-center justify-center">
           <PoolCanvas
@@ -489,15 +482,15 @@ export const PoolGamePage: React.FC = () => {
           />
         </div>
 
-        {/* Right side rail — opponent pocketed balls */}
+        {/* Right-side controls — overlaid */}
+        <div className="relative right-10 top-1/2 -translate-y-1/2 flex flex-col items-center gap-1.5 z-10">
         <SideRail
           balls={gameState.balls}
-          group={gameState.opponentGroup}
+          myGroup={gameState.myGroup}
+          oppGroup={gameState.opponentGroup}
           side="right"
         />
 
-        {/* Right-side controls — overlaid */}
-        <div className="absolute right-10 top-1/2 -translate-y-1/2 flex flex-col items-center gap-1.5 z-10">
           <SpinSetter
             screw={screw}
             english={english}
@@ -507,8 +500,10 @@ export const PoolGamePage: React.FC = () => {
 
           <button
             onClick={() => setShowGuideLine(prev => !prev)}
-            className={`text-[9px] px-1.5 py-0.5 rounded transition-colors ${
-              showGuideLine ? 'text-green-400 bg-green-900/40' : 'text-gray-500 bg-gray-800/40'
+            className={`text-xs font-semibold px-2 py-1 rounded transition-colors duration-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 ${
+              showGuideLine
+                ? 'text-green-400 bg-green-900/40 hover:bg-green-800/60 focus:ring-green-400'
+                : 'text-gray-500 bg-gray-800/40 hover:bg-gray-700/60 focus:ring-gray-400'
             }`}
           >
             Guide
@@ -516,7 +511,7 @@ export const PoolGamePage: React.FC = () => {
 
           <button
             onClick={handleConcede}
-            className="text-[9px] text-gray-600 hover:text-red-400 transition-colors"
+            className="text-xs font-semibold px-2 py-1 rounded bg-gray-800/40 text-gray-600 hover:bg-red-800/60 hover:text-red-400 transition-colors duration-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-red-400"
           >
             Concede
           </button>

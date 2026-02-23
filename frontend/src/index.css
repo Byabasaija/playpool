@@ -1,5 +1,17 @@
 @import "tailwindcss";
 
+/* Ensure the HTML document occupies the full browser window and no
+   unexpected scrollbars appear – this makes our fixed-position game
+   wrapper easier to size using window.innerHeight/innerWidth. */
+html, body {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+}
+
+
 /* Prevent CLS from font loading */
 @layer base {
   html {

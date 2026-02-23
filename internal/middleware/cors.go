@@ -34,6 +34,7 @@ func CORSMiddleware(cfg *config.Config) gin.HandlerFunc {
 		corsConfig.AllowOrigins = []string{
 			"http://localhost:5173", // Vite dev server
 			"http://127.0.0.1:5173", // Alternative localhost format
+			"http://192.168.1.94:5173", // Local network IP
 		}
 		corsConfig.AllowCredentials = true
 		corsConfig.AllowAllOrigins = false
@@ -76,7 +77,8 @@ func WebSocketCORSCheck(cfg *config.Config) gin.HandlerFunc {
 		if cfg.Environment == "development" {
 			// Allow localhost variants in dev
 			allowed = strings.HasPrefix(origin, "http://localhost:") ||
-				strings.HasPrefix(origin, "http://127.0.0.1:")
+				strings.HasPrefix(origin, "http://127.0.0.1:") || 
+				strings.HasPrefix(origin, "http://192.168.1.94:") // Local network IP
 		} else {
 			// Production: check against allowed domains
 			allowedOrigins := []string{

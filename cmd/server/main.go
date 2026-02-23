@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -116,13 +117,21 @@ func main() {
 	api.SetupRoutes(router, db, rdb, cfg)
 
 	// Start server
-	port := cfg.Port
-	if port == "" {
-		port = "8080"
+	addr := cfg.BindAddr // preferred override
+	if addr == "" {
+		addr = cfg.Port
+		if addr == "" {
+			addr = "8000"
+		}
 	}
 
-	log.Printf("Starting PlayMatatu server on port %s", port)
-	if err := router.Run(":" + port); err != nil {
+	// make sure there is at least one colon so Gin/http treats it as port
+	if !strings.Contains(addr, ":") {
+		addr = ":" + addr
+	}
+
+	log.Printf("Starting PlayMatatu server on %s", addr)
+	if err := router.Run(addr); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
 }

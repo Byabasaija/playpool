@@ -65,7 +65,7 @@ export default defineConfig({
     proxy: {
       '/api': {
         //@ts-ignore
-        target: process.env.VITE_BACKEND_URL || 'http://localhost:8000',
+        target: process.env.VITE_BACKEND_URL || 'http://192.168.1.94:8000',
         changeOrigin: true
       }
     }

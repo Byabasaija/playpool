@@ -78,9 +78,6 @@ export default function SpinSetter({ screw, english, onChange, disabled }: SpinS
         {/* Spin dot */}
         <circle cx={dotX} cy={dotY} r={5} fill={disabled ? '#999' : '#e63946'} />
       </svg>
-      <span className="absolute bottom-[-14px] left-0 right-0 text-center text-[9px] text-gray-400">
-        Spin
-      </span>
     </div>
   );
 }

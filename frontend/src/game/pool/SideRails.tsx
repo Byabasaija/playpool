@@ -1,5 +1,6 @@
 // Side rail collection areas for pocketed balls — flanks the pool table like in 8 Ball Pool.
 
+import { useState, useEffect } from 'react';
 import { type BallState, type BallGroup } from './types';
 
 const SOLIDS = [1, 2, 3, 4, 5, 6, 7];
@@ -41,23 +42,46 @@ function RailBallSprite({ ballId, size = 22 }: { ballId: number; size?: number }
 
 interface SideRailProps {
   balls: BallState[];
-  group: BallGroup;
-  side: 'left' | 'right';
+  myGroup: BallGroup;
+  oppGroup: BallGroup;
+  side?: 'left' | 'right';
+  children?: React.ReactNode;
 }
 
-export default function SideRail({ balls, group, side }: SideRailProps) {
-  const ballIds = group === 'SOLIDS' ? SOLIDS : group === 'STRIPES' ? STRIPES : [];
-  const pocketed = ballIds.filter(id => {
+export default function SideRail({
+  balls,
+  myGroup,
+  oppGroup,
+  side = 'right',
+  children,
+}: SideRailProps) {
+  const [winW, setWinW] = useState(window.innerWidth);
+  useEffect(() => {
+    const h = () => setWinW(window.innerWidth);
+    window.addEventListener('resize', h);
+    return () => window.removeEventListener('resize', h);
+  }, []);
+  const small = winW < 480;
+  const myIds = myGroup === 'SOLIDS' ? SOLIDS : myGroup === 'STRIPES' ? STRIPES : [];
+  const oppIds = oppGroup === 'SOLIDS' ? SOLIDS : oppGroup === 'STRIPES' ? STRIPES : [];
+
+  const myPocketed = myIds.filter(id => {
+    const ball = balls.find(b => b.id === id);
+    return ball && !ball.active;
+  });
+  const oppPocketed = oppIds.filter(id => {
     const ball = balls.find(b => b.id === id);
     return ball && !ball.active;
   });
 
+  const railW = small ? 28 : 36;
+  const ballSize = small ? 16 : 20;
   return (
     <div
-      className="flex flex-col items-center justify-center gap-1 py-2"
+      className="flex flex-col items-center justify-start gap-1 pt-3 pb-2"
       style={{
-        width: 36,
-        minWidth: 36,
+        width: railW,
+        minWidth: railW,
         background: 'linear-gradient(180deg, #2a1a0a 0%, #4a2a10 20%, #3a2010 80%, #2a1a0a 100%)',
         borderRadius: side === 'left' ? '8px 0 0 8px' : '0 8px 8px 0',
         boxShadow: side === 'left'
@@ -67,47 +91,48 @@ export default function SideRail({ balls, group, side }: SideRailProps) {
       }}
     >
       {/* Decorative top notch */}
-      <div style={{
-        width: 16,
-        height: 3,
-        background: 'linear-gradient(90deg, transparent, rgba(139,90,43,0.6), transparent)',
-        borderRadius: 2,
-        marginBottom: 2,
-      }} />
+      <div
+        style={{
+          width: 16,
+          height: 3,
+          background: 'linear-gradient(90deg, transparent, rgba(139,90,43,0.6), transparent)',
+          borderRadius: 2,
+          marginBottom: 2,
+        }}
+      />
 
-      {/* Pocketed balls */}
-      <div className="flex flex-col items-center gap-0.5">
-        {pocketed.map(id => (
-          <RailBallSprite key={id} ballId={id} size={20} />
+      {/* Optional additional content (spin setter, buttons, etc.) */}
+      {children && (
+        <div className="mb-1 flex flex-col items-center gap-1">{children}</div>
+      )}
+
+      {/* My pocketed balls (top section) */}
+      <div className="flex flex-col items-center gap-0.5 mt-1">
+        {myPocketed.map(id => (
+          <RailBallSprite key={id} ballId={id} size={ballSize} />
         ))}
       </div>
 
-      {/* Empty slots for remaining */}
-      {pocketed.length < ballIds.length && (
-        <div className="flex flex-col items-center gap-0.5 mt-auto">
-          {Array.from({ length: Math.min(3, ballIds.length - pocketed.length) }).map((_, i) => (
-            <div
-              key={i}
-              style={{
-                width: 12,
-                height: 12,
-                borderRadius: '50%',
-                background: 'rgba(0,0,0,0.3)',
-                border: '1px solid rgba(139,90,43,0.2)',
-              }}
-            />
-          ))}
-        </div>
-      )}
+      {/* Spacer grows to push opponent balls to bottom */}
+      <div className="flex-grow" />
+
+      {/* Opponent pocketed balls (bottom section) */}
+      <div className="flex flex-col items-center gap-0.5 mb-1">
+        {oppPocketed.map(id => (
+          <RailBallSprite key={id} ballId={id} size={ballSize} />
+        ))}
+      </div>
 
       {/* Decorative bottom notch */}
-      <div style={{
-        width: 16,
-        height: 3,
-        background: 'linear-gradient(90deg, transparent, rgba(139,90,43,0.6), transparent)',
-        borderRadius: 2,
-        marginTop: 2,
-      }} />
+      <div
+        style={{
+          width: 16,
+          height: 3,
+          background: 'linear-gradient(90deg, transparent, rgba(139,90,43,0.6), transparent)',
+          borderRadius: 2,
+          marginTop: 2,
+        }}
+      />
     </div>
   );
 }

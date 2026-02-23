@@ -18,7 +18,11 @@ type Config struct {
 	RedisURL string
 
 	// Server
-	Port        string
+	Port string
+	// Bind address (host:port) to listen on. If set the value is used directly,
+	// otherwise the server falls back to Port and defaults to ":8000". This
+	// allows configuration such as APP_BIND=0.0.0.0:8000 via .env.
+	BindAddr    string
 	FrontendURL string
 	BaseURL     string
 
@@ -113,7 +117,10 @@ func Load() *Config {
 		RedisURL: getEnv("REDIS_URL", "redis://localhost:6379/0"),
 
 		// Server
-		Port:        getEnv("APP_PORT", "8000"),
+		// port number only (used when BindAddr is unset)
+		Port: getEnv("APP_PORT", "8000"),
+		// optional full bind address (host:port) override
+		BindAddr:    getEnv("APP_BIND", ""),
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
 		BaseURL:     getEnv("BASE_URL", "http://localhost:8000"),
 

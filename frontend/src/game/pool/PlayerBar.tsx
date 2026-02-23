@@ -1,5 +1,6 @@
 // Top bar with player avatars, circular shot timer, ball indicators, and stake — 8 Ball Pool style.
 
+import { useState, useEffect } from 'react';
 import { type BallGroup, type BallState } from './types';
 
 interface PlayerBarProps {
@@ -26,21 +27,20 @@ const GUI_COLS = 2;
 const GUI_SHEET_W = 256;
 const GUI_SHEET_H = 512;
 
-function BallSprite({ ballId, isSolid, active }: { ballId: number; isSolid: boolean; active: boolean }) {
+function BallSprite({ ballId, isSolid, active, size = 16 }: { ballId: number; isSolid: boolean; active: boolean; size?: number }) {
   const frame = isSolid ? ballId - 1 : ballId - 9;
   const col = frame % GUI_COLS;
   const row = Math.floor(frame / GUI_COLS);
   const src = isSolid ? '/pool/img/guiSolids.png' : '/pool/img/guiStripes.png';
 
-  const DISPLAY_SIZE = 16;
-  const scaleX = DISPLAY_SIZE / GUI_FRAME_W;
-  const scaleY = DISPLAY_SIZE / GUI_FRAME_H;
+  const scaleX = size / GUI_FRAME_W;
+  const scaleY = size / GUI_FRAME_H;
 
   return (
     <div
       style={{
-        width: DISPLAY_SIZE,
-        height: DISPLAY_SIZE,
+        width: size,
+        height: size,
         backgroundImage: `url(${src})`,
         backgroundSize: `${GUI_SHEET_W * scaleX}px ${GUI_SHEET_H * scaleY}px`,
         backgroundPosition: `${-col * GUI_FRAME_W * scaleX}px ${-row * GUI_FRAME_H * scaleY}px`,
@@ -53,12 +53,12 @@ function BallSprite({ ballId, isSolid, active }: { ballId: number; isSolid: bool
   );
 }
 
-function BallIndicators({ ids, balls, isSolid }: { ids: number[]; balls: BallState[]; isSolid: boolean }) {
+function BallIndicators({ ids, balls, isSolid, size }: { ids: number[]; balls: BallState[]; isSolid: boolean; size: number }) {
   return (
     <div className="flex gap-[2px] items-center">
       {ids.map(id => {
         const active = balls.find(b => b.id === id)?.active ?? true;
-        return <BallSprite key={id} ballId={id} isSolid={isSolid} active={active} />;
+        return <BallSprite key={id} ballId={id} isSolid={isSolid} active={active} size={size} />;
       })}
     </div>
   );
@@ -84,11 +84,12 @@ function PlaceholderDots({ count }: { count: number }) {
   );
 }
 
-function Avatar({ name, isActive, timer, connected }: {
+function Avatar({ name, isActive, timer, connected, size = 36 }: {
   name: string;
   isActive: boolean;
   timer: number | null;
   connected: boolean;
+  size?: number;
 }) {
   const initial = name.charAt(0).toUpperCase();
   // Generate a consistent color from the name
@@ -97,7 +98,6 @@ function Avatar({ name, isActive, timer, connected }: {
   const hue = Math.abs(hash) % 360;
   const bg = `hsl(${hue}, 50%, 35%)`;
 
-  const size = 36;
   const strokeWidth = 3;
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
@@ -121,7 +121,7 @@ function Avatar({ name, isActive, timer, connected }: {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          fontSize: 16,
+          fontSize: size * 0.44,
           fontWeight: 700,
           color: '#fff',
           border: isActive ? `2px solid ${timerColor}` : '2px solid rgba(255,255,255,0.15)',
@@ -175,6 +175,15 @@ export default function PlayerBar({
   myName, opponentName, myGroup, opponentGroup, myTurn,
   stakeAmount, myConnected, opponentConnected, balls, shotTimer,
 }: PlayerBarProps) {
+  // responsive sizing
+  const [winW, setWinW] = useState(window.innerWidth);
+  useEffect(() => {
+    const h = () => setWinW(window.innerWidth);
+    window.addEventListener('resize', h);
+    return () => window.removeEventListener('resize', h);
+  }, []);
+  const small = winW < 480;
+
   const myBallIds = myGroup === 'SOLIDS' ? SOLIDS : myGroup === 'STRIPES' ? STRIPES : [];
   const myIsSolid = myGroup === 'SOLIDS';
   const oppBallIds = opponentGroup === 'SOLIDS' ? SOLIDS : opponentGroup === 'STRIPES' ? STRIPES : [];
@@ -183,9 +192,10 @@ export default function PlayerBar({
 
   return (
     <div
-      className="flex items-center w-full px-2"
+      className="flex flex-wrap items-center w-full px-2"
       style={{
-        height: 48,
+        height: small ? 40 : 48,
+        padding: small ? '2px 4px' : undefined,
         background: 'linear-gradient(180deg, #1a2744 0%, #0e1628 100%)',
         fontFamily: 'Arial, sans-serif',
         borderBottom: '1px solid rgba(255,255,255,0.05)',
@@ -195,7 +205,7 @@ export default function PlayerBar({
       <div
         className="flex items-center gap-2 min-w-0 flex-1"
         style={{
-          padding: '4px 8px',
+          padding: small ? '2px 4px' : '4px 8px',
           borderRadius: 6,
           background: myTurn ? 'rgba(74,222,128,0.08)' : 'transparent',
           transition: 'background 0.3s',
@@ -206,13 +216,14 @@ export default function PlayerBar({
           isActive={myTurn}
           timer={myTurn ? shotTimer : null}
           connected={myConnected}
+          size={small ? 28 : 36}
         />
         <div className="flex flex-col min-w-0 gap-0.5">
           <span className="text-[11px] font-semibold text-white truncate max-w-[70px]">
             {myName}
           </span>
           {groupsAssigned
-            ? <BallIndicators ids={myBallIds} balls={balls} isSolid={myIsSolid} />
+            ? <BallIndicators ids={myBallIds} balls={balls} isSolid={myIsSolid} size={small ? 12 : 16} />
             : <PlaceholderDots count={7} />
           }
         </div>
@@ -243,7 +254,7 @@ export default function PlayerBar({
             {opponentName}
           </span>
           {groupsAssigned
-            ? <BallIndicators ids={oppBallIds} balls={balls} isSolid={oppIsSolid} />
+            ? <BallIndicators ids={oppBallIds} balls={balls} isSolid={oppIsSolid} size={small ? 12 : 16} />
             : <PlaceholderDots count={7} />
           }
         </div>
@@ -252,6 +263,7 @@ export default function PlayerBar({
           isActive={!myTurn}
           timer={!myTurn ? shotTimer : null}
           connected={opponentConnected}
+          size={small ? 28 : 36}
         />
       </div>
     </div>
