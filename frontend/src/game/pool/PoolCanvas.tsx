@@ -833,31 +833,43 @@ export default function PoolCanvas({
               }
             }
           } else {
+            // clip ray against the table rectangle (physical units). we know the
+            // cue ball/ghost is always within these bounds, so the first positive
+            // intersection is where the guide should terminate.
             const halfW = 138000 / 2 - BALL_RADIUS;
             const halfH = 69000 / 2 - BALL_RADIUS;
-            const walls = [
-              { x1: -halfW, y1: -halfH, x2: halfW, y2: -halfH },
-              { x1: halfW, y1: -halfH, x2: halfW, y2: halfH },
-              { x1: halfW, y1: halfH, x2: -halfW, y2: halfH },
-              { x1: -halfW, y1: halfH, x2: -halfW, y2: -halfH },
-            ];
-            let wallHitX = rayEndX, wallHitY = rayEndY;
-            let minT = Infinity;
-            for (const w of walls) {
-              const denom = (w.y2 - w.y1) * dirX - (w.x2 - w.x1) * dirY;
-              if (Math.abs(denom) < 0.001) continue;
-              const t = ((w.x2 - w.x1) * (originY - w.y1) - (w.y2 - w.y1) * (originX - w.x1)) / denom;
-              if (t > 0 && t < minT) {
-                const u = dirX !== 0
-                  ? (originX + t * dirX - w.x1) / (w.x2 - w.x1)
-                  : (originY + t * dirY - w.y1) / (w.y2 - w.y1);
-                if (u >= 0 && u <= 1) {
-                  minT = t;
-                  wallHitX = originX + t * dirX;
-                  wallHitY = originY + t * dirY;
+            let wallHitX = rayEndX;
+            let wallHitY = rayEndY;
+            let bestT = Infinity;
+
+            // vertical walls
+            if (dirX !== 0) {
+              // choose left or right depending on ray direction
+              const targetX = dirX > 0 ? halfW : -halfW;
+              const t = (targetX - originX) / dirX;
+              if (t > 0) {
+                const yAtT = originY + t * dirY;
+                if (Math.abs(yAtT) <= halfH && t < bestT) {
+                  bestT = t;
+                  wallHitX = targetX;
+                  wallHitY = yAtT;
                 }
               }
             }
+            // horizontal walls
+            if (dirY !== 0) {
+              const targetY = dirY > 0 ? halfH : -halfH;
+              const t = (targetY - originY) / dirY;
+              if (t > 0) {
+                const xAtT = originX + t * dirX;
+                if (Math.abs(xAtT) <= halfW && t < bestT) {
+                  bestT = t;
+                  wallHitX = xAtT;
+                  wallHitY = targetY;
+                }
+              }
+            }
+
             const [fromX, fromY] = physToCanvas(originX, originY);
             const [toX, toY] = physToCanvas(wallHitX, wallHitY);
             ctx.beginPath();
