@@ -151,6 +151,10 @@ interface PoolCanvasProps {
   pocketingBalls?: PocketingAnim[];
   // when the opponent is dragging the cue ball, their canvas coordinates
   // are supplied here so we can render the mover sprite at that location.
+  // test-only hook for observing ghost position changes
+  onBallInHandPosChanged?: (pos: { cx: number; cy: number } | null) => void;
+  // increments when a scratch occurred (resets ghost when ballInHand)
+  scratchCount?: number;
 }
 
 // static ref used by helper to sample other balls outside of render
@@ -160,6 +164,8 @@ export default function PoolCanvas({
   balls, myTurn, ballInHand, isBreakShot, myGroup, opponentGroup: _opponentGroup,
   animating, onTakeShot, onPlaceCueBall, assets,
   showGuideLine = true, pocketingBalls = [],
+  onBallInHandPosChanged,
+  scratchCount = 0,
 }: PoolCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const tableRef = useRef<Table | null>(null);
@@ -305,7 +311,10 @@ export default function PoolCanvas({
   // we only start moving the cue ball if pointer down occurs on the ghost ball
   const ballInHandDraggingRef = useRef(false);
   const ballInHandHoverRef = useRef(false);
+  const placedInCenterRef = useRef(false);
   const moverAlphaRef = useRef(0.2);
+  // track previous cue-ball active flag so we can detect when it gets pocketed
+  const prevCueActiveRef = useRef<boolean>(true);
   // when true we are dragging the cue from the left-side UI area
   const draggingUIRef = useRef(false);
   // last pointer canvas coordinates (for optional debug drawing)
@@ -395,27 +404,52 @@ export default function PoolCanvas({
     if (!ballInHand) {
       ballInHandDraggingRef.current = false;
       ballInHandHoverRef.current = false;
+      placedInCenterRef.current = false;
       moverAlphaRef.current = 0.2;
       ballInHandPosRef.current = null;
+    } else {
+      // ensure the cue is in aiming phase, so pointerDown will succeed; this
+      // is important because we may receive ballInHand while animation is
+      // still running and cue.phase could be 'hidden' or 'followThrough'.
+      cueStateRef.current.phase = 'aiming';
+      shotFiredRef.current = false;
     }
   }, [ballInHand]);
 
-  // when ball-in-hand is granted, make the ghost ball appear immediately
-  // at the cue ball location (or centre if the cue is inactive). this mirrors
-  // the original game, which moves the cue to centre upon the first lift.
+  // when we become ball-in-hand we immediately show a ghost cue ball
+  // centred on the table; the user can then drag it anywhere without waiting
+  // for any animation or server position updates.  this avoids the case where
+  // the cue ball is still flagged active at the pocket and the ghost never
+  // seeds properly.
+  //
+  // additionally, if the cue ball is pocketed while we already have
+  // ball-in-hand (e.g. we took a shot while placing the cue and scratched),
+  // the state transition may not flip `ballInHand` so the effect won't run
+  // again.  in that scenario the ghost can remain stuck at the last drag
+  // position (often the pocket).  we detect the cue ball disappearing via
+  // another effect below and reset the ghost to centre.
   useEffect(() => {
-    if (ballInHand && !animating) {
-      const cueBall = ballsRef.current.find((b) => b.id === 0 && b.active);
-      if (cueBall) {
-        const [cx, cy] = physToCanvas(cueBall.x, cueBall.y);
-        ballInHandPosRef.current = { cx, cy };
-      } else {
-        ballInHandPosRef.current = randomBallInHandCanvasPos();
-      }
+    if (ballInHand) {
+      placedInCenterRef.current = true;
+      ballInHandPosRef.current = { cx: TABLE_CX, cy: TABLE_CY };
+      onBallInHandPosChanged?.(ballInHandPosRef.current);
     } else {
       ballInHandPosRef.current = null;
+      placedInCenterRef.current = false;
+      onBallInHandPosChanged?.(null);
     }
-  }, [ballInHand, animating]);
+  }, [ballInHand]);
+
+  // when the server indicates a scratch, the ghost should re‑centre even if
+  // we already had ball-in-hand before taking the shot.  scratchCount is
+  // incremented by the page whenever a scratch message arrives.
+  useEffect(() => {
+    if (ballInHand) {
+      placedInCenterRef.current = true;
+      ballInHandPosRef.current = { cx: TABLE_CX, cy: TABLE_CY };
+      onBallInHandPosChanged?.(ballInHandPosRef.current);
+    }
+  }, [scratchCount, ballInHand]);
 
   // When external animation starts, hide cue
   useEffect(() => {
@@ -425,6 +459,22 @@ export default function PoolCanvas({
       }
     }
   }, [animating]);
+
+  // watch for the cue ball going inactive while we already have ball-in-hand
+  // (scratch during a ball-in-hand shot).  in that case we need to reset the
+  // ghost position because the primary "ballInHand" effect above won't run.
+  useEffect(() => {
+    const cueBall = ballsRef.current.find(b => b.id === 0);
+    const cueActive = cueBall ? cueBall.active : false;
+    if (ballInHand && prevCueActiveRef.current && !cueActive) {
+      // reset to centre, just like the ballInHand effect
+      placedInCenterRef.current = true;
+      ballInHandPosRef.current = { cx: TABLE_CX, cy: TABLE_CY };
+      onBallInHandPosChanged?.(ballInHandPosRef.current);
+    }
+    prevCueActiveRef.current = cueActive;
+  }, [balls, ballInHand]);
+
 
   // --- RAF render loop (reads refs, no dependency on canvas-only state) ---
   useEffect(() => {
@@ -447,8 +497,13 @@ export default function PoolCanvas({
       if (ballInHand && !ballInHandPosRef.current) {
         const cueBall = currentBalls.find((b) => b.id === 0 && b.active);
         if (cueBall) {
-          const [cx, cy] = physToCanvas(cueBall.x, cueBall.y);
-          ballInHandPosRef.current = { cx, cy };
+          if (!placedInCenterRef.current) {
+            placedInCenterRef.current = true;
+            ballInHandPosRef.current = { cx: TABLE_CX, cy: TABLE_CY };
+          } else {
+            const [cx, cy] = physToCanvas(cueBall.x, cueBall.y);
+            ballInHandPosRef.current = { cx, cy };
+          }
         } else {
           ballInHandPosRef.current = randomBallInHandCanvasPos();
         }
@@ -602,7 +657,11 @@ export default function PoolCanvas({
       // === CUE STICK + AIMING GUIDE ===
       const cueBall = currentBalls.find((b) => b.id === 0 && b.active);
       const cue = cueStateRef.current;
-      const showCue = (cueBall || (ballInHand && ballInHandPos)) &&
+      // when we're in ball-in-hand, always consider the ghost position as the
+      // cue origin; ignore the real cueBall coordinate which may linger at the
+      // pocket.  otherwise use the live cue ball if present.
+      const effectiveCueOrigin = ballInHand && ballInHandPos ? 'ghost' : 'real';
+      const showCue = ((effectiveCueOrigin === 'ghost' && ballInHandPos) || (effectiveCueOrigin === 'real' && cueBall)) &&
         !ballInHandHoverRef.current && cue.phase !== 'hidden' && (
           (myTurn && !animating && cue.phase === 'aiming') ||
           cue.phase === 'striking' ||
@@ -610,10 +669,14 @@ export default function PoolCanvas({
         );
 
       if (showCue) {
-        // determine where the cue should originate: prefer real cue ball,
-        // fall back to the in‑hand mover position
+        // determine where the cue should originate: if we're in ball-in-hand
+        // we use the ghost position exclusively.  otherwise, prefer the real
+        // cue ball coordinate if available.
         let cx: number, cy: number;
-        if (cueBall) {
+        if (effectiveCueOrigin === 'ghost' && ballInHandPos) {
+          cx = ballInHandPos.cx;
+          cy = ballInHandPos.cy;
+        } else if (cueBall) {
           const [liveCx, liveCy] = physToCanvas(cueBall.x, cueBall.y);
           cx = liveCx;
           cy = liveCy;
@@ -677,8 +740,19 @@ export default function PoolCanvas({
         if (showGuide && cueBall) {
           const dirX = Math.cos(drawAngle);
           const dirY = Math.sin(drawAngle);
-          const originX = cueBall ? cueBall.x : (ballInHandPos ? canvasToPhys(ballInHandPos.cx, ballInHandPos.cy)[0] : 0);
-          const originY = cueBall ? cueBall.y : (ballInHandPos ? canvasToPhys(ballInHandPos.cx, ballInHandPos.cy)[1] : 0);
+          let originX: number;
+          let originY: number;
+          if (effectiveCueOrigin === 'ghost' && ballInHandPos) {
+            [originX, originY] = canvasToPhys(ballInHandPos.cx, ballInHandPos.cy);
+          } else if (cueBall) {
+            originX = cueBall.x;
+            originY = cueBall.y;
+          } else if (ballInHandPos) {
+            [originX, originY] = canvasToPhys(ballInHandPos.cx, ballInHandPos.cy);
+          } else {
+            originX = 0;
+            originY = 0;
+          }
           const rayEndX = originX + dirX * 500000;
           const rayEndY = originY + dirY * 500000;
           const collisionRadius = BALL_RADIUS * 2;
@@ -690,11 +764,11 @@ export default function PoolCanvas({
           for (const b of currentBalls) {
             if (b.id === 0 || !b.active) continue;
             const hit = lineIntersectCircle(
-              cueBall.x, cueBall.y, rayEndX, rayEndY,
+              originX, originY, rayEndX, rayEndY,
               b.x, b.y, collisionRadius,
             );
             if (hit.intersects) {
-              const dSq = (b.x - cueBall.x) ** 2 + (b.y - cueBall.y) ** 2;
+              const dSq = (b.x - originX) ** 2 + (b.y - originY) ** 2;
               if (dSq < closestDistSq) {
                 closestDistSq = dSq;
                 closestBall = b;
@@ -709,7 +783,7 @@ export default function PoolCanvas({
           ctx.strokeStyle = 'rgba(255,255,255,0.7)';
 
           if (closestBall) {
-            const [fromX, fromY] = physToCanvas(cueBall.x, cueBall.y);
+            const [fromX, fromY] = physToCanvas(originX, originY);
             const [toX, toY] = physToCanvas(closestEnterX, closestEnterY);
             ctx.beginPath();
             ctx.moveTo(fromX, fromY);
@@ -772,19 +846,19 @@ export default function PoolCanvas({
             for (const w of walls) {
               const denom = (w.y2 - w.y1) * dirX - (w.x2 - w.x1) * dirY;
               if (Math.abs(denom) < 0.001) continue;
-              const t = ((w.x2 - w.x1) * (cueBall.y - w.y1) - (w.y2 - w.y1) * (cueBall.x - w.x1)) / denom;
+              const t = ((w.x2 - w.x1) * (originY - w.y1) - (w.y2 - w.y1) * (originX - w.x1)) / denom;
               if (t > 0 && t < minT) {
                 const u = dirX !== 0
-                  ? (cueBall.x + t * dirX - w.x1) / (w.x2 - w.x1)
-                  : (cueBall.y + t * dirY - w.y1) / (w.y2 - w.y1);
+                  ? (originX + t * dirX - w.x1) / (w.x2 - w.x1)
+                  : (originY + t * dirY - w.y1) / (w.y2 - w.y1);
                 if (u >= 0 && u <= 1) {
                   minT = t;
-                  wallHitX = cueBall.x + t * dirX;
-                  wallHitY = cueBall.y + t * dirY;
+                  wallHitX = originX + t * dirX;
+                  wallHitY = originY + t * dirY;
                 }
               }
             }
-            const [fromX, fromY] = physToCanvas(cueBall.x, cueBall.y);
+            const [fromX, fromY] = physToCanvas(originX, originY);
             const [toX, toY] = physToCanvas(wallHitX, wallHitY);
             ctx.beginPath();
             ctx.moveTo(fromX, fromY);
@@ -998,10 +1072,16 @@ export default function PoolCanvas({
   // mouse (desktop) from touch (mobile/tablet).
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     e.preventDefault();
-    if (!myTurnRef.current || animatingRef.current) return;
+    // allow ball-in-hand interactions even if animation is running; otherwise
+    // require it to be our turn
+    if ((!myTurnRef.current && !ballInHandRef.current) || (animatingRef.current && !ballInHandRef.current)) return;
     mouseDownRef.current = true;
     const cue = cueStateRef.current;
-    if (cue.phase !== 'aiming') return;
+    // when ball-in-hand, we should be able to start dragging regardless of
+    // the cue animation phase; cue phase may still be 'hidden' from the last
+    // shot when the turn switched.  if we're not handling ball-in-hand then
+    // require the cue to be aiming as usual.
+    if (!ballInHandRef.current && cue.phase !== 'aiming') return;
 
     const isTouch = e.pointerType === 'touch' || e.pointerType === 'pen';
     let { mx, my } = clientToCanvas(e.clientX, e.clientY);
@@ -1015,13 +1095,42 @@ export default function PoolCanvas({
     }
     lastPointerRef.current = { mx, my };
 
+    // update aim based on current cue position (ghost or real) when we're not
+    // interacting with the ball-in-hand. This ensures the guide line and the
+    // shot originate from the correct spot immediately after placement.
+    if (!ballInHandRef.current) {
+      const pos = ballInHandPosRef.current;
+      const cueBall = ballsRef.current.find((b) => b.id === 0 && b.active);
+      let ox: number, oy: number;
+      if (ballInHandRef.current && pos) {
+        // should not happen, but cover for completeness
+        ox = pos.cx;
+        oy = pos.cy;
+      } else if (cueBall) {
+        [ox, oy] = physToCanvas(cueBall.x, cueBall.y);
+      } else if (pos) {
+        ox = pos.cx;
+        oy = pos.cy;
+      } else {
+        ox = TABLE_CX;
+        oy = TABLE_CY;
+      }
+      aimAngleRef.current = Math.atan2(my - oy, mx - ox);
+      if (DEBUG_AIM) console.log('pointerDown aim reset', aimAngleRef.current.toFixed(3));
+    }
+
     if (ballInHandRef.current) {
       // make sure we have a position recorded so the mover is clickable
       if (!ballInHandPosRef.current) {
         const cueBall = ballsRef.current.find((b) => b.id === 0 && b.active);
         if (cueBall) {
-          const [cx, cy] = physToCanvas(cueBall.x, cueBall.y);
-          ballInHandPosRef.current = { cx, cy };
+          if (!placedInCenterRef.current) {
+            placedInCenterRef.current = true;
+            ballInHandPosRef.current = { cx: TABLE_CX, cy: TABLE_CY };
+          } else {
+            const [cx, cy] = physToCanvas(cueBall.x, cueBall.y);
+            ballInHandPosRef.current = { cx, cy };
+          }
         } else {
           ballInHandPosRef.current = randomBallInHandCanvasPos();
         }
@@ -1030,15 +1139,31 @@ export default function PoolCanvas({
       const pos = ballInHandPosRef.current!;
       const dx = mx - pos.cx;
       const dy = my - pos.cy;
-      // allow clicks anywhere on the visible mover sprite (approx 2.5*ball radius)
-      if (Math.hypot(dx, dy) <= BALL_R_PX * 2.5) {
+      const dist = Math.hypot(dx, dy);
+
+      // if the click landed on the ghost/mover, begin dragging as before
+      if (dist <= BALL_R_PX * 2.5) {
         ballInHandDraggingRef.current = true;
         const { cx, cy } = constrainBallInHand(mx, my);
         ballInHandPosRef.current = { cx, cy };
         // capture pointer to continue receiving moves outside the canvas
         try { (e.currentTarget as Element).setPointerCapture(e.pointerId); } catch {};
+        return;
       }
-      return;
+
+      // clicking elsewhere should count as placing the cue ball at its
+      // current ghost location; after placement we fall through to the
+      // normal aiming code below so the shot can be taken immediately.
+      if (pos) {
+        const [px, py] = canvasToPhys(pos.cx, pos.cy);
+        onPlaceCueBallRef.current(px, py);
+        ballInHandRef.current = false; // clear local flag to enable shooting
+        // reset aim to match click direction from ghost origin
+        const ox = pos.cx;
+        const oy = pos.cy;
+        aimAngleRef.current = Math.atan2(my - oy, mx - ox);
+      }
+      // do not return; let aim logic handle the rest
     }
 
     // compute UI bar geometry
@@ -1085,7 +1210,8 @@ export default function PoolCanvas({
   }, [clientToCanvas]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (animatingRef.current || !myTurnRef.current) return;
+    // allow movement if dragging the cue ball; otherwise respect animation state
+    if ((animatingRef.current && !ballInHandRef.current) || !myTurnRef.current) return;
     const cue = cueStateRef.current;
     if (cue.phase !== 'aiming') return;
 
@@ -1188,7 +1314,9 @@ export default function PoolCanvas({
     if (inTable && !mouseDownRef.current) {
       const cueBall = ballsRef.current.find((b) => b.id === 0 && b.active);
       let origin: [number, number] | null = null;
-      if (cueBall) {
+      if (ballInHandRef.current && pos) {
+        origin = [pos.cx, pos.cy];
+      } else if (cueBall) {
         origin = physToCanvas(cueBall.x, cueBall.y);
       } else if (pos) {
         origin = [pos.cx, pos.cy];
@@ -1207,6 +1335,8 @@ export default function PoolCanvas({
     if (ballInHandRef.current && ballInHandDraggingRef.current && ballInHandPosRef.current) {
       const { cx, cy } = ballInHandPosRef.current;
       const [px, py] = canvasToPhys(cx, cy);
+      // clear local flag immediately so future clicks will fire shots
+      ballInHandRef.current = false;
       onPlaceCueBallRef.current(px, py);
       ballInHandPosRef.current = null;
       ballInHandDraggingRef.current = false;

@@ -24,6 +24,7 @@ export const TABLE_TOP_NATIVE_H = 902;
 export const POCKETS_NATIVE_W = 1654;
 export const POCKETS_NATIVE_H = 965;
 
+
 // Original display-pixel play area (100*N * physScale x 50*N * physScale)
 const ORIG_PLAY_W = 1380; // 100 * 1380 * 0.01
 const ORIG_PLAY_H = 690;  // 50 * 1380 * 0.01
@@ -45,6 +46,7 @@ export const TABLE_TOP_W = TABLE_TOP_NATIVE_W * IMG_SCALE;
 export const TABLE_TOP_H = TABLE_TOP_NATIVE_H * IMG_SCALE;
 export const POCKETS_W = POCKETS_NATIVE_W * IMG_SCALE;
 export const POCKETS_H = POCKETS_NATIVE_H * IMG_SCALE;
+
 
 // Play area in canvas pixels (scaled from original display size)
 export const TABLE_W = ORIG_PLAY_W * IMG_SCALE;

@@ -282,8 +282,9 @@ func (c *Client) readPump() {
 
 			if shouldTrackIdle {
 				rdbClient.Set(ctx, "last_active:"+member, fmt.Sprintf("%d", now), 0)
+				// keep warning schedule for telemetry, but we no longer enforce forfeits
 				rdbClient.ZAdd(ctx, "idle_warning", redis.Z{Score: float64(now + int64(wsConfig.IdleWarningSeconds)), Member: member})
-				rdbClient.ZAdd(ctx, "idle_forfeit", redis.Z{Score: float64(now + int64(wsConfig.IdleForfeitSeconds)), Member: member})
+				// idle_forfeit entries are intentionally omitted; idle forfeits removed
 			}
 		}
 
@@ -339,6 +340,7 @@ func (c *Client) handleMessage(msg WSMessage) {
 		c.handleConcede(g)
 
 	case "turn_timeout":
+		log.Printf("[WS] turn_timeout message from player %s", c.playerID)
 		c.handleTurnTimeout(g)
 
 	default:
@@ -442,6 +444,7 @@ func (c *Client) handleShotComplete(g *game.PoolGameState, data ShotCompleteData
 		c.sendError(err.Error())
 		return
 	}
+	log.Printf("[WS] shot_complete result: %+v, g.BallInHand=%v, g.BallInHandPlayer=%s", result, g.BallInHand, g.BallInHandPlayer)
 
 	// Broadcast shot result to both players
 	GameHub.BroadcastToGame(c.gameID, map[string]interface{}{
@@ -509,6 +512,7 @@ func (c *Client) handleConcede(g *game.PoolGameState) {
 // handleTurnTimeout processes a shot clock expiry — switches turn and gives opponent ball-in-hand.
 func (c *Client) handleTurnTimeout(g *game.PoolGameState) {
 	if err := g.TurnTimeout(c.playerID); err != nil {
+		log.Printf("[WS] TurnTimeout error for player %s: %v", c.playerID, err)
 		c.sendError(err.Error())
 		return
 	}

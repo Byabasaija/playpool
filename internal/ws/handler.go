@@ -158,9 +158,8 @@ func resetIdleTimersForGame(gameToken string, p1ID, p2ID string) {
 	for _, m := range members {
 		// store last active
 		rdbClient.Set(ctx, "last_active:"+m, fmt.Sprintf("%d", now), 0)
-		// schedule warning and forfeit
+		// schedule warning only; forfeits no longer tracked
 		rdbClient.ZAdd(ctx, "idle_warning", redis.Z{Score: float64(now + int64(wsConfig.IdleWarningSeconds)), Member: m})
-		rdbClient.ZAdd(ctx, "idle_forfeit", redis.Z{Score: float64(now + int64(wsConfig.IdleForfeitSeconds)), Member: m})
-		log.Printf("[WS] reset idle timers for member=%s warning_at=%d forfeit_at=%d", m, now+int64(wsConfig.IdleWarningSeconds), now+int64(wsConfig.IdleForfeitSeconds))
+		log.Printf("[WS] reset idle timers for member=%s warning_at=%d (forfeits disabled)", m, now+int64(wsConfig.IdleWarningSeconds))
 	}
 }

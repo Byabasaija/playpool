@@ -26,7 +26,9 @@ export interface ShotAnimationParams {
 
 export interface PocketEvent {
   ballId: number;
-  pocketX: number; // physics coords
+  ballX?: number; // physics coords at pocket time (optional, added later)
+  ballY?: number;
+  pocketX: number; // physics coords where ball falls through
   pocketY: number;
 }
 
@@ -148,11 +150,18 @@ export class ShotAnimator {
         if (evt.type === 'pocket' && this.onPocket) {
           const pocket = this.physics.table.pockets.find(p => p.id === evt.targetId);
           if (pocket) {
-            this.onPocket({
+            // try to capture the ball's current position from physics
+            const ball = this.physics?.balls.find(b => b.id === evt.ballId);
+            const event: PocketEvent = {
               ballId: evt.ballId,
               pocketX: pocket.dropPosition.x,
               pocketY: pocket.dropPosition.y,
-            });
+            };
+            if (ball) {
+              event.ballX = ball.position.x;
+              event.ballY = ball.position.y;
+            }
+            this.onPocket(event);
           }
         }
       }

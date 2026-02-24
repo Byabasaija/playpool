@@ -21,7 +21,12 @@ func StartIdleWorker(ctx context.Context, db *sqlx.DB, rdb *redis.Client, cfg *c
 		return
 	}
 
-	log.Println("[IDLE] Idle worker started")
+	// purge any stray idle_forfeit entries once at startup
+	if err := rdb.Del(context.Background(), "idle_forfeit").Err(); err != nil {
+		log.Printf("[IDLE] failed to delete idle_forfeit key: %v", err)
+	}
+
+	log.Println("[IDLE] Idle worker started (forfeit set cleared)")
 	go func() {
 		ticker := time.NewTicker(time.Duration(cfg.IdleWorkerPollInterval) * time.Second)
 		defer ticker.Stop()
@@ -57,10 +62,9 @@ func StartIdleWorker(ctx context.Context, db *sqlx.DB, rdb *redis.Client, cfg *c
 										log.Printf("[IDLE] skipping warning for player %s in game %s (status=%s currentTurn=%s)", playerID, gameToken, g.Status, g.CurrentTurn)
 										continue
 									}
-									// forfeitAt should be computed from the player's last active time (lastTs) + IdleForfeitSeconds
+									// compute forfeitAt for warning payload
 									forfeitAt := time.Unix(lastTs, 0).Add(time.Duration(cfg.IdleForfeitSeconds) * time.Second)
 									remaining := int(time.Until(forfeitAt).Seconds())
-									// resolve game ID if possible
 									gameID := g.ID
 									payload := map[string]interface{}{"type": "player_idle_warning", "game_token": gameToken, "game_id": gameID, "player": playerID, "forfeit_at": forfeitAt.Format(time.RFC3339), "remaining_seconds": remaining, "message": "Player idle; will forfeit soon."}
 									b, _ := json.Marshal(payload)
@@ -75,45 +79,9 @@ func StartIdleWorker(ctx context.Context, db *sqlx.DB, rdb *redis.Client, cfg *c
 					}
 				}
 
-				// Process forfeits
-				membersF, err := rdb.ZRangeByScore(ctx, "idle_forfeit", &redis.ZRangeBy{Min: "-inf", Max: fmt.Sprintf("%d", now)}).Result()
-				if err != nil {
-					log.Printf("[IDLE] Failed to fetch idle forfeits: %v", err)
-				} else {
-					for _, m := range membersF {
-						if removed, _ := rdb.ZRem(ctx, "idle_forfeit", m).Result(); removed > 0 {
-							last, _ := rdb.Get(ctx, "last_active:"+m).Result()
-							lastTs, _ := strconv.ParseInt(last, 10, 64)
-							if time.Now().Unix()-lastTs >= int64(cfg.IdleForfeitSeconds) {
-								// parse member
-								gameToken, playerID := parseMember(m)
-								if gameToken == "" || playerID == "" {
-									continue
-								}
-								// Attempt to load game and forfeit
-								if g, err := Manager.GetGameByToken(gameToken); err == nil {
-									// Only forfeit if game is in progress and it's the player's turn
-									if g.Status != StatusInProgress || g.CurrentTurn != playerID {
-										log.Printf("[IDLE] skipping forfeit for player %s in game %s (status=%s currentTurn=%s)", playerID, gameToken, g.Status, g.CurrentTurn)
-										continue
-									}
-									log.Printf("[IDLE] Forfeiting player %s in game %s due to inactivity", playerID, gameToken)
-									// Forfeit the game (this persists and triggers payout logic)
-									g.ForfeitByDisconnect(playerID)
-									// publish event that forfeit happened and include final states
-									p1State := g.GetGameStateForPlayer(g.Player1.ID)
-									p2State := g.GetGameStateForPlayer(g.Player2.ID)
-									payload := map[string]interface{}{"type": "player_forfeit", "game_token": gameToken, "game_id": g.ID, "player": playerID, "message": "Player forfeited due to inactivity", "player1_state": p1State, "player2_state": p2State, "winner": g.Winner}
-									b, _ := json.Marshal(payload)
-									if n, err := rdb.Publish(ctx, "idle_events", b).Result(); err != nil {
-										log.Printf("[IDLE] publish forfeit failed: game=%s player=%s err=%v", gameToken, playerID, err)
-									} else {
-										log.Printf("[IDLE] published forfeit: game=%s player=%s subscribers=%d winner=%s", gameToken, playerID, n, g.Winner)
-									}
-								}
-							}
-						}
-					}
+				// ensure idle_forfeit remains empty
+				if err := rdb.Del(ctx, "idle_forfeit").Err(); err != nil {
+					log.Printf("[IDLE] failed to purge idle_forfeit during tick: %v", err)
 				}
 			}
 		}

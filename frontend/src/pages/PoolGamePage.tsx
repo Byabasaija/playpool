@@ -17,7 +17,7 @@ import SpinSetter from '../game/pool/SpinSetter';
 import FoulNotification from '../game/pool/FoulNotification';
 import GameOverScreen from '../game/pool/ui/GameOverScreen';
 
-const SHOT_TIMER_SECONDS = 15;
+const SHOT_TIMER_SECONDS = 30;
 
 export const PoolGamePage: React.FC = () => {
   const [assets, setAssets] = useState<PoolAssets | null>(null);
@@ -34,6 +34,8 @@ export const PoolGamePage: React.FC = () => {
   const [showGuideLine, setShowGuideLine] = useState(true);
   const [pocketingBalls, setPocketingBalls] = useState<PocketingAnim[]>([]);
   const [isPortrait, setIsPortrait] = useState(window.innerHeight > window.innerWidth);
+  // incremented whenever a scratch occurs (for resetting ghost position)
+  const [scratchCount, setScratchCount] = useState(0);
 
   // Shot timer state
   const [shotTimer, setShotTimer] = useState<number | null>(null);
@@ -48,6 +50,12 @@ export const PoolGamePage: React.FC = () => {
   const gt = gameTokenMatch?.[1] || '';
 
   const { gameState, gameOver, updateFromWSMessage, applyShotResult, setBallPositions, setTokens } = usePoolGameState();
+  const [localBallInHand, setLocalBallInHand] = useState(false);
+
+  // debug logging for ball-in-hand state
+  useEffect(() => {
+    console.log('[Pool] gameState.ballInHand', gameState.ballInHand, 'ballInHandPlayer', gameState.ballInHandPlayer, 'currentTurn', gameState.currentTurn);
+  }, [gameState.ballInHand, gameState.ballInHandPlayer, gameState.currentTurn]);
 
   // Load assets on mount
   useEffect(() => {
@@ -135,9 +143,15 @@ export const PoolGamePage: React.FC = () => {
       },
     );
     animatorRef.current.setOnPocket((evt: PocketEvent) => {
-      const ball = gameState.balls.find(b => b.id === evt.ballId);
-      if (!ball) return;
-      const [startX, startY] = physToCanvas(ball.x, ball.y);
+      // use physics position if supplied, otherwise fallback to game state
+      let startX: number, startY: number;
+      if (evt.ballX !== undefined && evt.ballY !== undefined) {
+        [startX, startY] = physToCanvas(evt.ballX, evt.ballY);
+      } else {
+        const ball = gameState.balls.find(b => b.id === evt.ballId);
+        if (!ball) return;
+        [startX, startY] = physToCanvas(ball.x, ball.y);
+      }
       const [targetX, targetY] = physToCanvas(evt.pocketX, evt.pocketY);
       setPocketingBalls(prev => [...prev, {
         ballId: evt.ballId,
@@ -159,7 +173,7 @@ export const PoolGamePage: React.FC = () => {
     }
   }, [assets]);
 
-  // --- Shot timer: 15s countdown when it's a player's turn ---
+  // --- Shot timer: 30s countdown when it's a player's turn ---
   const startShotTimer = useCallback(() => {
     if (shotTimerRef.current) clearInterval(shotTimerRef.current);
     setShotTimer(SHOT_TIMER_SECONDS);
@@ -183,9 +197,9 @@ export const PoolGamePage: React.FC = () => {
     setShotTimer(null);
   }, []);
 
-  // Start/restart timer when turn changes and not animating
+  // Start/restart timer when *my* turn begins; stop when it ends or animation/game stops
   useEffect(() => {
-    if (gameStarted && !animating && !gameOver) {
+    if (gameStarted && gameState.myTurn && !animating && !gameOver) {
       startShotTimer();
     } else {
       stopShotTimer();
@@ -203,6 +217,7 @@ export const PoolGamePage: React.FC = () => {
   // Handle timer expiry: send turn_timeout if it's my turn
   useEffect(() => {
     if (shotTimer === 0 && gameState.myTurn && !animating) {
+      console.log('[Pool] shot timer expired; sending turn_timeout');
       sendWSMessageRef.current?.({
         type: 'turn_timeout',
         data: {},
@@ -266,6 +281,27 @@ export const PoolGamePage: React.FC = () => {
       }
 
       case 'shot_result': {
+        console.log('[Pool] received shot_result', {
+          player: message.player,
+          pocketed: message.pocketed_balls,
+          foul: message.foul?.type,
+          ball_in_hand: message.ball_in_hand,
+          next_turn: message.next_turn,
+        });
+
+        // if the message explains that the *next* turn is ours and we have
+        // ball_in_hand, record locally as well. this avoids cases where the
+        // reducer state doesn't flip quickly enough.
+        if (message.ball_in_hand && message.next_turn === gameState.playerId) {
+          setLocalBallInHand(true);
+        }
+
+        // track scratches so the canvas can reposition the ghost for cases
+        // where the player already had ball-in-hand when they scratched again
+        if (message.foul && message.foul.type === 'scratch') {
+          setScratchCount(prev => prev + 1);
+        }
+
         if (message.foul) {
           setFoulMessage(message.foul.message);
           setIsFoul(true);
@@ -353,6 +389,7 @@ export const PoolGamePage: React.FC = () => {
       type: 'place_cue_ball',
       data: { x, y },
     });
+    setLocalBallInHand(false);
   }, [sendWSMessage]);
 
 
@@ -470,7 +507,8 @@ export const PoolGamePage: React.FC = () => {
           <PoolCanvas
             balls={gameState.balls}
             myTurn={gameState.myTurn}
-            ballInHand={gameState.ballInHand && gameState.ballInHandPlayer === gameState.playerId}
+            ballInHand={(gameState.ballInHand || localBallInHand)}
+            scratchCount={scratchCount}
             isBreakShot={gameState.isBreakShot}
             myGroup={gameState.myGroup}
             opponentGroup={gameState.opponentGroup}

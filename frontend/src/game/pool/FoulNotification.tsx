@@ -11,11 +11,12 @@ export default function FoulNotification({ message, isFoul }: FoulNotificationPr
   const [visible, setVisible] = useState(false);
   const [currentMsg, setCurrentMsg] = useState<string | null>(null);
 
+  // show message briefly then hide
   useEffect(() => {
     if (message) {
       setCurrentMsg(message);
       setVisible(true);
-      const timer = setTimeout(() => setVisible(false), 2500);
+      const timer = setTimeout(() => setVisible(false), 2000);
       return () => clearTimeout(timer);
     } else {
       setVisible(false);
@@ -27,17 +28,14 @@ export default function FoulNotification({ message, isFoul }: FoulNotificationPr
   return (
     <div
       className={`
-        fixed top-16 left-1/2 -translate-x-1/2 z-50
-        px-5 py-2.5 rounded-lg shadow-xl font-semibold text-sm
-        transition-all duration-300 ease-in-out
-        ${visible ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4 pointer-events-none'}
-        ${isFoul
-          ? 'bg-red-500 text-white border border-red-300'
-          : 'bg-blue-500 text-white border border-blue-300'
-        }
+        fixed top-4 left-1/2 transform -translate-x-1/2 z-50
+        px-3 py-1.5 rounded-md text-xs font-medium
+        transition-opacity duration-250 ease-in-out
+        ${visible ? 'opacity-90' : 'opacity-0 pointer-events-none'}
+        ${isFoul ? 'bg-black text-yellow-300' : 'bg-black text-white'}
       `}
     >
-      {isFoul ? 'FOUL: ' : ''}{currentMsg}
+      {currentMsg}
     </div>
   );
 }
