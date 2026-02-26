@@ -80,6 +80,8 @@ export const PoolGamePage: React.FC = () => {
   // break shot — once placed the derived ball-in-hand condition must stay
   // false so the cue stick appears and the player can actually shoot.
   const [breakBallPlaced, setBreakBallPlaced] = useState(false);
+  // derived ball-in-hand flag used throughout this component and passed to PoolCanvas
+  const ballInHand = gameState.ballInHand || localBallInHand || (gameState.isBreakShot && gameState.myTurn && !breakBallPlaced);
 
   // reset breakBallPlaced whenever isBreakShot changes (new game → true resets
   // any stale value from the previous game; break done → false is also fine)
@@ -286,6 +288,16 @@ export const PoolGamePage: React.FC = () => {
       if (shotTimerRef.current) clearInterval(shotTimerRef.current);
     };
   }, []);
+
+  // When a scratch occurs the cue ball ends up inactive (pocketed).
+  // Once animation finishes and ball-in-hand is active, restore ball 0 to
+  // the head-string so the player can see and pick it up.
+  useEffect(() => {
+    if (animating || !ballInHand) return;
+    const cb = gameState.balls.find(b => b.id === 0);
+    if (!cb || cb.active) return;
+    setBallPositions(gameState.balls.map(b => b.id === 0 ? { ...b, x: -34500, y: 0, active: true } : b));
+  }, [animating, ballInHand, gameState.balls, setBallPositions]);
 
 
 
@@ -612,7 +624,7 @@ export const PoolGamePage: React.FC = () => {
             ref={poolCanvasRef}
             balls={gameState.balls}
             myTurn={gameState.myTurn}
-            ballInHand={(gameState.ballInHand || localBallInHand || (gameState.isBreakShot && gameState.myTurn && !breakBallPlaced))}
+            ballInHand={ballInHand}
             scratchCount={scratchCount}
             isBreakShot={gameState.isBreakShot}
             myGroup={gameState.myGroup}

@@ -391,6 +391,11 @@ func (g *PoolGameState) ApplyShotResult(playerID string, clientData ClientShotDa
 	}
 
 	// === CHECK IF PLAYER CLEARED THEIR GROUP ===
+	// Capture the player's group before promotion so the turn-keep check uses
+	// the group that was active when the balls were pocketed (pocketing the last
+	// solid correctly promotes the player to Group8Ball, but the comparison
+	// "ballGroup(id) == player.BallGroup" must use the pre-promotion value).
+	priorPlayerGroup := player.BallGroup
 	g.updateBallGroupStatus(player)
 	g.updateBallGroupStatus(opponent)
 
@@ -426,7 +431,7 @@ func (g *PoolGameState) ApplyShotResult(playerID string, clientData ClientShotDa
 			if ballID == 0 || ballID == 8 {
 				continue
 			}
-			if player.BallGroup == GroupAny || ballGroup(ballID) == player.BallGroup {
+			if priorPlayerGroup == GroupAny || ballGroup(ballID) == priorPlayerGroup {
 				pottedOwn = true
 				break
 			}
@@ -469,7 +474,7 @@ func (g *PoolGameState) PlaceCueBall(playerID string, x, y float64) error {
 	if g.CurrentTurn != playerID {
 		return errors.New("not your turn")
 	}
-	if !g.BallInHand {
+	if !g.BallInHand && !g.IsBreakShot {
 		return errors.New("not ball-in-hand")
 	}
 
