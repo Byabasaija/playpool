@@ -1,6 +1,7 @@
 // Pool game page — mobile-first layout with 8 Ball Pool style UI.
 
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { useTouchDevice } from '../hooks/useTouchDevice';
 import { usePoolGameState } from '../hooks/usePoolGameState';
 import { usePoolWebSocket } from '../hooks/usePoolWebSocket';
 import { PoolWSMessage } from '../types/pool.types';
@@ -8,7 +9,8 @@ import { ShotAnimator, type BallFrame, type PocketEvent } from '../game/pool/Sho
 import { loadPoolAssets, PoolAssets } from '../game/pool/AssetLoader';
 import { SoundManager } from '../game/pool/SoundManager';
 import { updateBallRotation } from '../game/pool/BallRenderer';
-import PoolCanvas from '../game/pool/PoolCanvas';
+import PoolCanvas, { PoolCanvasHandle } from '../game/pool/PoolCanvas';
+import PowerBar from '../game/pool/PowerBar';
 import { type ShotParams, type PocketingAnim } from '../game/pool/types';
 import { physToCanvas } from '../game/pool/canvasLayout';
 import PlayerBar from '../game/pool/PlayerBar';
@@ -22,6 +24,8 @@ const SHOT_TIMER_SECONDS = 30;
 export const PoolGamePage: React.FC = () => {
   const [assets, setAssets] = useState<PoolAssets | null>(null);
   const [assetsError, setAssetsError] = useState(false);
+  const aimAngleRef = useRef(0);
+  const poolCanvasRef = useRef<PoolCanvasHandle>(null);
   const [tokensReady, setTokensReady] = useState(false);
   const [resolvedGameToken, setResolvedGameToken] = useState('');
   const [resolvedPlayerToken, setResolvedPlayerToken] = useState('');
@@ -34,6 +38,27 @@ export const PoolGamePage: React.FC = () => {
   const [showGuideLine, setShowGuideLine] = useState(true);
   const [pocketingBalls, setPocketingBalls] = useState<PocketingAnim[]>([]);
   const [isPortrait, setIsPortrait] = useState(window.innerHeight > window.innerWidth);
+  const isTouchDevice = useTouchDevice();
+  // only treat the session as touch-enabled once we actually see a touch event
+  const [touchedOnce, setTouchedOnce] = useState(false);
+  useEffect(() => {
+    if (touchedOnce) return;
+    const handle = (e: PointerEvent) => {
+      if (e.pointerType === 'touch' || e.pointerType === 'pen') {
+        setTouchedOnce(true);
+        window.removeEventListener('pointerdown', handle);
+      }
+    };
+    window.addEventListener('pointerdown', handle);
+    return () => window.removeEventListener('pointerdown', handle);
+  }, [touchedOnce]);
+
+  // the value actually passed to components; avoids false positives from
+  // CSS media or devices with a coarse pointer that aren't really touch
+  const effectiveTouch = isTouchDevice && touchedOnce;
+
+  // show overlay prompting rotation when in portrait on touch devices
+  const [showRotateOverlay, setShowRotateOverlay] = useState(effectiveTouch && isPortrait);
   // incremented whenever a scratch occurs (for resetting ghost position)
   const [scratchCount, setScratchCount] = useState(0);
 
@@ -62,18 +87,31 @@ export const PoolGamePage: React.FC = () => {
     loadPoolAssets().then(setAssets).catch(() => setAssetsError(true));
   }, []);
 
-  // Force landscape orientation on game screen
+  // track portrait state and show rotation overlay when appropriate
   useEffect(() => {
-    try { (screen.orientation as any)?.lock?.('landscape').catch(() => {}); } catch {}
-    const handler = () => setIsPortrait(window.innerHeight > window.innerWidth);
+    const handler = () => {
+      const portrait = window.innerHeight > window.innerWidth;
+      setIsPortrait(portrait);
+      if (portrait && effectiveTouch) {
+        setShowRotateOverlay(true);
+      } else {
+        setShowRotateOverlay(false);
+      }
+    };
     window.addEventListener('resize', handler);
     window.addEventListener('orientationchange', handler);
+    // vh hack for mobile browsers (iOS)
+    const setVh = () => {
+      document.documentElement.style.setProperty('--vh', `${window.innerHeight * 0.01}px`);
+    };
+    setVh();
+    window.addEventListener('resize', setVh);
     return () => {
-      try { (screen.orientation as any)?.unlock?.(); } catch {}
       window.removeEventListener('resize', handler);
       window.removeEventListener('orientationchange', handler);
+      window.removeEventListener('resize', setVh);
     };
-  }, []);
+  }, [effectiveTouch]);
 
   // Sound manager (created once assets load)
   const soundRef = useRef<SoundManager | null>(null);
@@ -232,6 +270,8 @@ export const PoolGamePage: React.FC = () => {
       if (shotTimerRef.current) clearInterval(shotTimerRef.current);
     };
   }, []);
+
+
 
   // Resolve tokens from URL
   useEffect(() => {
@@ -462,30 +502,38 @@ export const PoolGamePage: React.FC = () => {
     return <GameOverScreen gameOver={gameOver} stakeAmount={gameState.stakeAmount} />;
   }
 
-  // Layout: mobile-only, always landscape.
-  // In landscape: fill viewport normally.
-  // In portrait: CSS-rotate the entire game 90° and swap dimensions.
-  const containerStyle: React.CSSProperties = isPortrait
-    ? {
-        position: 'fixed',
-        top: '50%',
-        left: '50%',
-        // After 90° rotation, "width" becomes the visual height and vice versa.
-        // So we set width = vh (long side) and height = vw (short side).
-        width: '100vh',
-        height: '100vw',
-        transform: 'translate(-50%, -50%) rotate(90deg)',
-        transformOrigin: 'center center',
-        overflow: 'hidden',
-      }
-    : {
-        width: '100vw',
-        height: '100dvh',
-      };
+  // Layout: full‑viewport game area.
+  // We no longer rotate the container; instead we show a prompt when the
+  // device is in portrait on touch devices.
+  // --vh variable still used to work around mobile viewport height bugs.
+  const containerStyle: React.CSSProperties = {
+    width: '100vw',
+    height: 'calc(var(--vh, 1vh) * 100)',
+  };
 
   // Main game view
   return (
     <div className="bg-[#0e1628] flex flex-col overflow-hidden" style={containerStyle}>
+      {/* Portrait rotate hint overlay */}
+      {showRotateOverlay && isPortrait && effectiveTouch && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/60 z-50 pointer-events-none">
+          <div className="text-white text-center px-4">
+            <svg
+              className="w-12 h-12 mx-auto mb-2 animate-spin duration-2000"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <polyline points="1 4 1 10 7 10" />
+              <polyline points="23 20 23 14 17 14" />
+            </svg>
+            <p className="text-lg font-semibold">Rotate your device</p>
+          </div>
+        </div>
+      )}
       {/* Player bar — 8 Ball Pool style with avatars + timer */}
       <PlayerBar
         myName={gameState.myDisplayName || 'You'}
@@ -500,11 +548,17 @@ export const PoolGamePage: React.FC = () => {
         shotTimer={shotTimer}
       />
 
-      {/* Table area with single right-side rail */}
-      <div className="flex-1 relative flex items-center justify-center min-h-0">
+      {/* Table area with responsive right-side rail */}
+      <div className="flex-1 flex items-center justify-center min-h-0">
+        {/* left bar (power) — touch only; desktop uses canvas pullback drag */}
+        {assets && effectiveTouch && (
+          <PowerBar poolCanvasRef={poolCanvasRef} assets={assets} />
+        )}
+
         {/* Pool table canvas — fills available space */}
         <div className="flex-1 min-w-0 h-full flex items-center justify-center">
           <PoolCanvas
+            ref={poolCanvasRef}
             balls={gameState.balls}
             myTurn={gameState.myTurn}
             ballInHand={(gameState.ballInHand || localBallInHand)}
@@ -518,17 +572,18 @@ export const PoolGamePage: React.FC = () => {
             assets={assets}
             showGuideLine={showGuideLine}
             pocketingBalls={pocketingBalls}
+            aimAngleRef={aimAngleRef}
           />
         </div>
 
-        {/* Right-side controls — overlaid */}
-        <div className="relative right-10 top-1/2 -translate-y-1/2 flex flex-col items-center gap-1.5 z-10">
-        <SideRail
-          balls={gameState.balls}
-          myGroup={gameState.myGroup}
-          oppGroup={gameState.opponentGroup}
-          side="right"
-        />
+        {/* Right-side controls — now part of flex row, not overlay */}
+        <div className="flex flex-col items-center gap-1.5 z-10 ml-1">
+          <SideRail
+            balls={gameState.balls}
+            myGroup={gameState.myGroup}
+            oppGroup={gameState.opponentGroup}
+            side="right"
+          />
 
           <SpinSetter
             screw={screw}
