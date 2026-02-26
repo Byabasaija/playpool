@@ -66,6 +66,7 @@ export type PoolWSMessageType =
   | 'shot_result'
   | 'shot_relay'
   | 'ball_placed'
+  | 'cue_ball_move'
   | 'player_connected'
   | 'player_disconnected'
   | 'player_idle_warning'
@@ -133,6 +134,11 @@ export interface PlaceCueBallMessage {
   data: { x: number; y: number };
 }
 
+export interface CueBallMoveMessage {
+  type: 'cue_ball_move';
+  data: { x: number; y: number };
+}
+
 
 export interface ConcedeMessage {
   type: 'concede';
@@ -163,6 +169,7 @@ export interface TurnTimeoutMessage {
 export type PoolOutgoingMessage =
   | TakeShotMessage
   | PlaceCueBallMessage
+  | CueBallMoveMessage
   | ConcedeMessage
   | GetStateMessage
   | ShotCompleteMessage

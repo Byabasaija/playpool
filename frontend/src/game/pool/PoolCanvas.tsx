@@ -89,38 +89,6 @@ function circleIntersectCircle(
   };
 }
 
-// helper: choose a random canvas coordinate inside the cloth that does
-// not overlap any active non‑cue balls. falls back to centre after a few tries.
-function randomBallInHandCanvasPos(): { cx: number; cy: number } {
-  const halfW = TABLE_W / 2 - BALL_R_PX;
-  const halfH = TABLE_H / 2 - BALL_R_PX;
-
-  // compile list of other balls in canvas space
-  const others: Array<{ cx: number; cy: number }> = ballsRefStatic.current
-    .filter((b) => b.active && b.id !== 0)
-    .map((b) => {
-      const [bx, by] = physToCanvas(b.x, b.y);
-      return { cx: bx, cy: by };
-    });
-
-  for (let i = 0; i < 500; i++) {
-    const cx = TABLE_CX - halfW + Math.random() * halfW * 2;
-    const cy = TABLE_CY - halfH + Math.random() * halfH * 2;
-    let overlap = false;
-    for (const b of others) {
-      const dx = cx - b.cx;
-      const dy = cy - b.cy;
-      if (dx * dx + dy * dy < (BALL_R_PX * 2) ** 2) {
-        overlap = true;
-        break;
-      }
-    }
-    if (!overlap) {
-      return { cx, cy };
-    }
-  }
-  return { cx: TABLE_CX, cy: TABLE_CY };
-}
 
 // Re-export types for backward compatibility
 export { type BallState, type BallGroup, type ShotParams, type PocketingAnim } from './types';
@@ -160,16 +128,16 @@ interface PoolCanvasProps {
   isTouchDevice?: boolean;
   // ref used by parent to track current aim angle
   aimAngleRef: React.MutableRefObject<number>;
-  // when the opponent is dragging the cue ball, their canvas coordinates
-  // are supplied here so we can render the mover sprite at that location.
-  // test-only hook for observing ghost position changes
+  // streamed position of opponent's cue ball while they are in ball-in-hand
+  // mode (physics coordinates); null when opponent is not placing.
+  opponentCueBallPos?: { x: number; y: number } | null;
+  // fires on every drag move (canvas coords) so the parent can throttle-stream
+  // the position to the opponent via WebSocket.
   onBallInHandPosChanged?: (pos: { cx: number; cy: number } | null) => void;
   // increments when a scratch occurred (resets ghost when ballInHand)
   scratchCount?: number;
 }
 
-// static ref used by helper to sample other balls outside of render
-const ballsRefStatic = { current: [] as BallState[] };
 
 export type PoolCanvasHandle = {
   fireShot: (angle: number, power: number) => void;
@@ -183,6 +151,7 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
   balls, myTurn, ballInHand, isBreakShot, myGroup, opponentGroup: _opponentGroup,
   animating, onTakeShot, onPlaceCueBall, assets,
   showGuideLine = true, pocketingBalls = [],
+  opponentCueBallPos,
   onBallInHandPosChanged,
   scratchCount = 0,
   aimAngleRef,
@@ -197,7 +166,7 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
   // the ghost ball is clamped inside the cloth, it is prevented from
   // overlapping other balls, and when dragged between two balls it will
   // slide around them instead of jittering.
-  const constrainBallInHand = useCallback((cx: number, cy: number) => {
+  const constrainBallInHand = useCallback((cx: number, cy: number, breakShot: boolean) => {
     // candidate position (canvas coords)
     let x = cx;
     let y = cy;
@@ -320,6 +289,12 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
       x -= BALL_R_PX / 4;
     }
 
+    // during break shot restrict to the kitchen (left of head string)
+    if (breakShot) {
+      const [headStringCX] = physToCanvas(-34500, 0);
+      x = Math.min(x, headStringCX - BALL_R_PX);
+    }
+
     return { cx: x, cy: y };
   }, []);
 
@@ -333,7 +308,7 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
   const ballInHandDraggingRef = useRef(false);
   const ballInHandHoverRef = useRef(false);
   const placedInCenterRef = useRef(false);
-  const moverAlphaRef = useRef(0.2);
+  const moverAlphaRef = useRef(0.8);
   // track previous cue-ball active flag so we can detect when it gets pocketed
   const prevCueActiveRef = useRef<boolean>(true);
   // when true we are dragging the cue from the left-side UI area
@@ -402,7 +377,6 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
   // Stable refs for props that event handlers / draw loop need
   const ballsRef = useRef(balls);
   ballsRef.current = balls;
-  ballsRefStatic.current = balls; // keep sync for random helper
   const onTakeShotRef = useRef(onTakeShot);
   onTakeShotRef.current = onTakeShot;
   const onPlaceCueBallRef = useRef(onPlaceCueBall);
@@ -413,6 +387,8 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
   animatingRef.current = animating;
   const ballInHandRef = useRef(ballInHand);
   ballInHandRef.current = ballInHand;
+  const isBreakShotRef = useRef(isBreakShot);
+  isBreakShotRef.current = isBreakShot;
 
   // Cached static table background
   const tableBgRef = useRef<HTMLCanvasElement | null>(null);
@@ -468,43 +444,22 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
       // still running and cue.phase could be 'hidden' or 'followThrough'.
       cueStateRef.current.phase = 'aiming';
       shotFiredRef.current = false;
+      // reset mover to default visible alpha so it shows immediately when
+      // ball-in-hand starts (the !ballInHand branch above sets it to 0.2)
+      moverAlphaRef.current = 0.8;
     }
   }, [ballInHand]);
 
-  // when we become ball-in-hand we immediately show a ghost cue ball
-  // centred on the table; the user can then drag it anywhere without waiting
-  // for any animation or server position updates.  this avoids the case where
-  // the cue ball is still flagged active at the pocket and the ghost never
-  // seeds properly.
-  //
-  // additionally, if the cue ball is pocketed while we already have
-  // ball-in-hand (e.g. we took a shot while placing the cue and scratched),
-  // the state transition may not flip `ballInHand` so the effect won't run
-  // again.  in that scenario the ghost can remain stuck at the last drag
-  // position (often the pocket).  we detect the cue ball disappearing via
-  // another effect below and reset the ghost to centre.
+  // Reset drag state when ball-in-hand starts or ends.
+  // No ghost position is seeded here — the mover always renders at the physics ball.
   useEffect(() => {
-    if (ballInHand) {
-      placedInCenterRef.current = true;
-      ballInHandPosRef.current = { cx: TABLE_CX, cy: TABLE_CY };
-      onBallInHandPosChanged?.(ballInHandPosRef.current);
-    } else {
+    if (!ballInHand) {
       ballInHandPosRef.current = null;
+      ballInHandDraggingRef.current = false;
       placedInCenterRef.current = false;
       onBallInHandPosChanged?.(null);
     }
-  }, [ballInHand]);
-
-  // when the server indicates a scratch, the ghost should re‑centre even if
-  // we already had ball-in-hand before taking the shot.  scratchCount is
-  // incremented by the page whenever a scratch message arrives.
-  useEffect(() => {
-    if (ballInHand) {
-      placedInCenterRef.current = true;
-      ballInHandPosRef.current = { cx: TABLE_CX, cy: TABLE_CY };
-      onBallInHandPosChanged?.(ballInHandPosRef.current);
-    }
-  }, [scratchCount, ballInHand]);
+  }, [ballInHand, scratchCount]);
 
   // When external animation starts, hide cue
   useEffect(() => {
@@ -522,10 +477,9 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
     const cueBall = ballsRef.current.find(b => b.id === 0);
     const cueActive = cueBall ? cueBall.active : false;
     if (ballInHand && prevCueActiveRef.current && !cueActive) {
-      // reset to centre, just like the ballInHand effect
-      placedInCenterRef.current = true;
-      ballInHandPosRef.current = { cx: TABLE_CX, cy: TABLE_CY };
-      onBallInHandPosChanged?.(ballInHandPosRef.current);
+      // cue ball just pocketed while still in ball-in-hand — clear drag state
+      ballInHandPosRef.current = null;
+      ballInHandDraggingRef.current = false;
     }
     prevCueActiveRef.current = cueActive;
   }, [balls, ballInHand]);
@@ -550,23 +504,7 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
       const aimAngle = aimAngleRef.current;
       const dragDist = dragDistRef.current;
       const settingPower = settingPowerRef.current;
-      // lazily seed ballInHandPos if it isn't already set and we still have
-      // ballInHand state – this covers the brief window before the effect
-      // runs or when animating prevented it.
-      if (ballInHand && !ballInHandPosRef.current) {
-        const cueBall = currentBalls.find((b) => b.id === 0 && b.active);
-        if (cueBall) {
-          if (!placedInCenterRef.current) {
-            placedInCenterRef.current = true;
-            ballInHandPosRef.current = { cx: TABLE_CX, cy: TABLE_CY };
-          } else {
-            const [cx, cy] = physToCanvas(cueBall.x, cueBall.y);
-            ballInHandPosRef.current = { cx, cy };
-          }
-        } else {
-          ballInHandPosRef.current = randomBallInHandCanvasPos();
-        }
-      }
+      // ballInHandPos tracks the mover drag position (null when not dragging)
       const ballInHandPos = ballInHandPosRef.current;
 
       // Draw cached table background
@@ -613,55 +551,65 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
       }
 
       // === BALLS ===
+      const isDraggingMover = ballInHand && ballInHandDraggingRef.current;
       const sortedBalls = [...currentBalls].sort((a, b) => {
         if (a.id === 0) return 1;
         if (b.id === 0) return -1;
         return 0;
       });
 
-      // Draw shadows first
+      // Draw shadows — cue ball uses drag position during mover drag so it
+      // follows the mover visually before physics is updated on pointer-up.
       const shadowSize = BALL_R_PX * 4;
       for (const ball of sortedBalls) {
         if (!ball.active) continue;
-        if (ball.id === 0 && ballInHand) continue; // hide cue while we are lifting
-        const [bx, by] = physToCanvas(ball.x, ball.y);
+        let bx: number, by: number;
+        if (ball.id === 0 && isDraggingMover && ballInHandPos) {
+          bx = ballInHandPos.cx; by = ballInHandPos.cy;
+        } else {
+          [bx, by] = physToCanvas(ball.x, ball.y);
+        }
         ctx.save();
         ctx.globalAlpha = 0.7;
         ctx.drawImage(assets.images.shadow, bx - shadowSize / 2, by - shadowSize / 2, shadowSize, shadowSize);
         ctx.restore();
       }
 
-      // Draw balls
+      // Draw balls — same: cue ball follows drag position when dragging mover
       for (const ball of sortedBalls) {
         if (!ball.active) continue;
-        // do not draw the cue ball from state while ball-in-hand; we'll draw
-        // it manually at the gesture position below instead.
-        if (ball.id === 0 && ballInHand) continue;
-        const [bx, by] = physToCanvas(ball.x, ball.y);
+        let bx: number, by: number;
+        if (ball.id === 0 && isDraggingMover && ballInHandPos) {
+          bx = ballInHandPos.cx; by = ballInHandPos.cy;
+        } else {
+          [bx, by] = physToCanvas(ball.x, ball.y);
+        }
         drawBall(ctx, assets, ball.id, bx, by, BALL_R_PX);
       }
 
-      // when ball is in hand and we have a computed position, draw the cue
-      // ball itself beneath the mover sprite so the square appears to surround
-      // it, just like the original game.
-      if (ballInHand && ballInHandPos) {
-        drawBall(ctx, assets, 0, ballInHandPos.cx, ballInHandPos.cy, BALL_R_PX);
-      }
-
-      // show mover sprite when ball-in-hand (ours)
-      const moverPos = ballInHandPos;
-      if (moverPos) {
-        const size = BALL_R_PX * 2.5; // approximate scale of original mover
-        ctx.save();
-        ctx.globalAlpha = moverAlphaRef.current;
-        ctx.drawImage(
-          assets.images.mover,
-          moverPos.cx - size / 2,
-          moverPos.cy - size / 2,
-          size,
-          size,
-        );
-        ctx.restore();
+      // Mover overlay — shown on top of the real cue ball for the placing player.
+      // Position: drag position if actively dragging, otherwise physics ball 0.
+      // For the observer: streamed opponent position if available.
+      if (ballInHand) {
+        let moverPos: { cx: number; cy: number } | null = null;
+        if (myTurn) {
+          if (ballInHandDraggingRef.current && ballInHandPos) {
+            moverPos = ballInHandPos;
+          } else {
+            const cb = currentBalls.find(b => b.id === 0 && b.active);
+            if (cb) { const [mx2, my2] = physToCanvas(cb.x, cb.y); moverPos = { cx: mx2, cy: my2 }; }
+          }
+        } else if (opponentCueBallPos) {
+          const [ocx, ocy] = physToCanvas(opponentCueBallPos.x, opponentCueBallPos.y);
+          moverPos = { cx: ocx, cy: ocy };
+        }
+        if (moverPos) {
+          const size = BALL_R_PX * 5;
+          ctx.save();
+          ctx.globalAlpha = myTurn ? moverAlphaRef.current : 0.6;
+          ctx.drawImage(assets.images.mover, moverPos.cx - size / 2, moverPos.cy - size / 2, size, size);
+          ctx.restore();
+        }
       }
 
       // === BALL GROUP MARKERS ===
@@ -719,9 +667,13 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
       // when we're in ball-in-hand, always consider the ghost position as the
       // cue origin; ignore the real cueBall coordinate which may linger at the
       // pocket.  otherwise use the live cue ball if present.
-      const effectiveCueOrigin = ballInHand && ballInHandPos ? 'ghost' : 'real';
-      const showCue = ((effectiveCueOrigin === 'ghost' && ballInHandPos) || (effectiveCueOrigin === 'real' && cueBall)) &&
-        !ballInHandHoverRef.current && cue.phase !== 'hidden' && (
+      // Use drag position as cue origin only while actively dragging the mover;
+      // otherwise always aim from the real physics ball.
+      const effectiveCueOrigin = isDraggingMover && ballInHandPos ? 'ghost' : 'real';
+      // Cue is visible whenever it's our turn — ball-in-hand no longer hides it.
+      // Hide only while actively dragging or hovering the mover.
+      const showCue = cueBall &&
+        !isDraggingMover && !ballInHandHoverRef.current && cue.phase !== 'hidden' && (
           (myTurn && !animating && cue.phase === 'aiming') ||
           cue.phase === 'striking' ||
           cue.phase === 'followThrough'
@@ -756,6 +708,7 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
 
         let cueOffset = baseGap;
         let cueAlpha = 1;
+        // guide also hidden during placement (original: guideCanvas.visible=false)
         let showGuide = showGuideLine && cue.phase === 'aiming';
         const drawAngle = cue.phase === 'aiming' ? aimAngle : cue.shotAngle;
 
@@ -773,6 +726,12 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
 
           if (cueOffset <= baseGap && !shotFiredRef.current) {
             shotFiredRef.current = true;
+            // if the player shot without dragging the mover, auto-place the ball
+            // at its current physics position so breakBallPlaced is set correctly
+            if (ballInHandRef.current) {
+              const cb = ballsRef.current.find(b => b.id === 0 && b.active);
+              if (cb) { ballInHandRef.current = false; onPlaceCueBallRef.current(cb.x, cb.y); }
+            }
             onTakeShotRef.current({ angle: cue.shotAngle, power: cue.shotPower, screw: 0, english: 0 });
           }
 
@@ -1057,87 +1016,54 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
       mx = evtAny.offsetX * scaleX;
       my = evtAny.offsetY * scaleY;
     }
+    // convert physical canvas buffer pixels → logical canvas coords (0..CANVAS_WIDTH)
+    // physToCanvas and all table geometry are in logical units; dpr scaling is
+    // only for the drawing buffer.
+    mx /= dpr; my /= dpr;
     lastPointerRef.current = { mx, my };
 
-    // update aim based on current cue position (ghost or real) when we're not
-    // interacting with the ball-in-hand. This ensures the guide line and the
-    // shot originate from the correct spot immediately after placement.
-    if (!ballInHandRef.current) {
-      const pos = ballInHandPosRef.current;
+    // If ball-in-hand, check if pointer is on the mover. Mover center = physics
+    // ball 0 position (or current drag position if already dragging).
+    if (ballInHandRef.current) {
+      const cueBall0 = ballsRef.current.find(b => b.id === 0 && b.active);
+      let moverCX: number, moverCY: number;
+      if (ballInHandDraggingRef.current && ballInHandPosRef.current) {
+        moverCX = ballInHandPosRef.current.cx;
+        moverCY = ballInHandPosRef.current.cy;
+      } else if (cueBall0) {
+        [moverCX, moverCY] = physToCanvas(cueBall0.x, cueBall0.y);
+      } else {
+        moverCX = TABLE_CX; moverCY = TABLE_CY;
+      }
+      if (Math.hypot(mx - moverCX, my - moverCY) <= BALL_R_PX * 5) {
+        // start dragging the mover from the ball's current position
+        ballInHandDraggingRef.current = true;
+        ballInHandPosRef.current = { cx: moverCX, cy: moverCY };
+        try { (e.currentTarget as Element).setPointerCapture(e.pointerId); } catch {};
+        return; // don't also start an aim gesture
+      }
+      // click not on mover — fall through to aim so player can shoot directly
+    }
+
+    // Aim setup: compute cue origin from physics ball 0 (always real now)
+    {
       const cueBall = ballsRef.current.find((b) => b.id === 0 && b.active);
       let ox: number, oy: number;
-      if (ballInHandRef.current && pos) {
-        // should not happen, but cover for completeness
-        ox = pos.cx;
-        oy = pos.cy;
-      } else if (cueBall) {
+      if (cueBall) {
         [ox, oy] = physToCanvas(cueBall.x, cueBall.y);
-      } else if (pos) {
-        ox = pos.cx;
-        oy = pos.cy;
       } else {
-        ox = TABLE_CX;
-        oy = TABLE_CY;
+        ox = TABLE_CX; oy = TABLE_CY;
       }
-      // record pointer type for debugging / future use
       lastPointerTypeRef.current = e.pointerType;
       if (e.pointerType === 'mouse') {
         aimAngleRef.current = Math.atan2(my - oy, mx - ox);
         if (DEBUG_AIM) console.log('pointerDown aim reset', aimAngleRef.current.toFixed(3));
       } else {
-        // touch/pen: start rotary aim gesture; freeze current aim as baseline
         touchStartCueRef.current = aimAngleRef.current;
         touchStartAngRef.current = Math.atan2(my - oy, mx - ox);
         touchSensitivityRef.current = 0.5;
         touchAimActiveRef.current = true;
       }
-    }
-
-    if (ballInHandRef.current) {
-      // make sure we have a position recorded so the mover is clickable
-      if (!ballInHandPosRef.current) {
-        const cueBall = ballsRef.current.find((b) => b.id === 0 && b.active);
-        if (cueBall) {
-          if (!placedInCenterRef.current) {
-            placedInCenterRef.current = true;
-            ballInHandPosRef.current = { cx: TABLE_CX, cy: TABLE_CY };
-          } else {
-            const [cx, cy] = physToCanvas(cueBall.x, cueBall.y);
-            ballInHandPosRef.current = { cx, cy };
-          }
-        } else {
-          ballInHandPosRef.current = randomBallInHandCanvasPos();
-        }
-      }
-
-      const pos = ballInHandPosRef.current!;
-      const dx = mx - pos.cx;
-      const dy = my - pos.cy;
-      const dist = Math.hypot(dx, dy);
-
-      // if the click landed on the ghost/mover, begin dragging as before
-      if (dist <= BALL_R_PX * 2.5) {
-        ballInHandDraggingRef.current = true;
-        const { cx, cy } = constrainBallInHand(mx, my);
-        ballInHandPosRef.current = { cx, cy };
-        // capture pointer to continue receiving moves outside the canvas
-        try { (e.currentTarget as Element).setPointerCapture(e.pointerId); } catch {};
-        return;
-      }
-
-      // clicking elsewhere should count as placing the cue ball at its
-      // current ghost location; after placement we fall through to the
-      // normal aiming code below so the shot can be taken immediately.
-      if (pos) {
-        const [px, py] = canvasToPhys(pos.cx, pos.cy);
-        onPlaceCueBallRef.current(px, py);
-        ballInHandRef.current = false; // clear local flag to enable shooting
-        // reset aim to match click direction from ghost origin
-        const ox = pos.cx;
-        const oy = pos.cy;
-        aimAngleRef.current = Math.atan2(my - oy, mx - ox);
-      }
-      // do not return; let aim logic handle the rest
     }
 
     // compute UI bar geometry
@@ -1155,8 +1081,6 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     // allow movement if dragging the cue ball; otherwise respect animation state
     if ((animatingRef.current && !ballInHandRef.current) || !myTurnRef.current) return;
-    const cue = cueStateRef.current;
-    if (cue.phase !== 'aiming') return;
 
     let { mx, my } = clientToCanvas(e.clientX, e.clientY);
     const evtAny = e as any;
@@ -1167,37 +1091,31 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
       mx = evtAny.offsetX * scaleX;
       my = evtAny.offsetY * scaleY;
     }
+    mx /= dpr; my /= dpr;
     lastPointerRef.current = { mx, my };
 
+    // ball-in-hand interactions bypass the cue-phase guard — dragging must
+    // work immediately after a shot (when the cue phase may still be 'hidden')
     if (ballInHandRef.current && ballInHandDraggingRef.current) {
-      const { cx, cy } = constrainBallInHand(mx, my);
+      const { cx, cy } = constrainBallInHand(mx, my, isBreakShotRef.current);
       ballInHandPosRef.current = { cx, cy };
+      onBallInHandPosChanged?.({ cx, cy });
       return;
     }
 
-    // manage hover state when ball-in-hand but not dragging
+    // hover detection for mover — test against physics ball 0 position.
+    // Does NOT return early; aim and power drag still run below.
     if (ballInHandRef.current && !ballInHandDraggingRef.current) {
-      const pos = ballInHandPosRef.current;
-      if (pos) {
-        const dist = Math.hypot(mx - pos.cx, my - pos.cy);
-        const hovering = dist <= BALL_R_PX * 2.5;
-        if (hovering && !ballInHandHoverRef.current) {
-          ballInHandHoverRef.current = true;
-        } else if (!hovering && ballInHandHoverRef.current) {
-          ballInHandHoverRef.current = false;
-        }
+      const cb0 = ballsRef.current.find(b => b.id === 0 && b.active);
+      if (cb0) {
+        const [bx, by] = physToCanvas(cb0.x, cb0.y);
+        ballInHandHoverRef.current = Math.hypot(mx - bx, my - by) <= BALL_R_PX * 5;
       }
+      moverAlphaRef.current = ballInHandHoverRef.current ? 1 : 0.8;
     }
 
-    // adjust mover opacity: full when hovering or dragging
-    if (ballInHandHoverRef.current || ballInHandDraggingRef.current) {
-      moverAlphaRef.current = 1;
-    } else {
-      moverAlphaRef.current = 0.2;
-    }
-
-    // If hovering, do not update aim or power
-    if (ballInHandHoverRef.current) return;
+    const cue = cueStateRef.current;
+    if (cue.phase !== 'aiming') return;
 
     // begin a power drag when the user pulls *backward* along the aim
     // direction **and** the initial down was near the cue origin. this

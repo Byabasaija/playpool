@@ -12,7 +12,7 @@ import { updateBallRotation } from '../game/pool/BallRenderer';
 import PoolCanvas, { PoolCanvasHandle } from '../game/pool/PoolCanvas';
 import PowerBar from '../game/pool/PowerBar';
 import { type ShotParams, type PocketingAnim } from '../game/pool/types';
-import { physToCanvas } from '../game/pool/canvasLayout';
+import { physToCanvas, canvasToPhys } from '../game/pool/canvasLayout';
 import PlayerBar from '../game/pool/PlayerBar';
 import SideRail from '../game/pool/SideRails';
 import SpinSetter from '../game/pool/SpinSetter';
@@ -76,11 +76,27 @@ export const PoolGamePage: React.FC = () => {
 
   const { gameState, gameOver, updateFromWSMessage, applyShotResult, setBallPositions, setTokens } = usePoolGameState();
   const [localBallInHand, setLocalBallInHand] = useState(false);
+  // tracks whether we have already placed the cue ball during the current
+  // break shot — once placed the derived ball-in-hand condition must stay
+  // false so the cue stick appears and the player can actually shoot.
+  const [breakBallPlaced, setBreakBallPlaced] = useState(false);
+
+  // reset breakBallPlaced whenever isBreakShot changes (new game → true resets
+  // any stale value from the previous game; break done → false is also fine)
+  useEffect(() => {
+    setBreakBallPlaced(false);
+  }, [gameState.isBreakShot]);
+  // opponent's cue ball position streamed in real-time during their ball-in-hand
+  const [opponentBallInHandPos, setOpponentBallInHandPos] = useState<{ x: number; y: number } | null>(null);
+  const cueBallMoveThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // after a shot_result we have authoritative local physics positions; skip
+  // ball positions from the next game_update to prevent server rollback
+  const skipNextBallsUpdateRef = useRef(false);
 
   // debug logging for ball-in-hand state
   useEffect(() => {
-    console.log('[Pool] gameState.ballInHand', gameState.ballInHand, 'ballInHandPlayer', gameState.ballInHandPlayer, 'currentTurn', gameState.currentTurn);
-  }, [gameState.ballInHand, gameState.ballInHandPlayer, gameState.currentTurn]);
+    console.log('[Pool] gameState.ballInHand', gameState.ballInHand, 'ballInHandPlayer', gameState.ballInHandPlayer, 'currentTurn', gameState.currentTurn, 'isBreakShot', gameState.isBreakShot, 'myTurn', gameState.myTurn);
+  }, [gameState.ballInHand, gameState.ballInHandPlayer, gameState.currentTurn, gameState.isBreakShot, gameState.myTurn]);
 
   // Load assets on mount
   useEffect(() => {
@@ -299,12 +315,25 @@ export const PoolGamePage: React.FC = () => {
         break;
 
       case 'game_state':
-      case 'game_update':
         updateFromWSMessage(message);
-        if (message.balls && message.balls.length > 0) {
-          setGameStarted(true);
-        }
+        // reset per-game client state on (re)connect or new game
+        setLocalBallInHand(false);
+        setBreakBallPlaced(false);
+        setOpponentBallInHandPos(null);
+        if (message.balls && message.balls.length > 0) setGameStarted(true);
         break;
+
+      case 'game_update': {
+        // strip balls from game_update right after a shot so the server can't
+        // roll back to pre-shot positions (local physics is the authority)
+        const msgToApply = skipNextBallsUpdateRef.current
+          ? { ...message, balls: undefined }
+          : message;
+        skipNextBallsUpdateRef.current = false;
+        updateFromWSMessage(msgToApply);
+        if (message.balls && message.balls.length > 0) setGameStarted(true);
+        break;
+      }
 
       case 'shot_relay': {
         const relayParams = message.shot_params;
@@ -354,8 +383,16 @@ export const PoolGamePage: React.FC = () => {
         }
 
         applyShotResult(message);
+        skipNextBallsUpdateRef.current = true;
         break;
       }
+
+      case 'cue_ball_move':
+        // opponent is dragging their cue ball — update position in real-time
+        if (message.x !== undefined && message.y !== undefined) {
+          setOpponentBallInHandPos({ x: message.x, y: message.y });
+        }
+        break;
 
       case 'ball_placed':
         if (message.x !== undefined && message.y !== undefined) {
@@ -364,6 +401,8 @@ export const PoolGamePage: React.FC = () => {
           );
           setBallPositions(newBalls);
         }
+        // placement confirmed — stop showing the streamed position
+        setOpponentBallInHandPos(null);
         break;
 
       case 'player_connected':
@@ -424,13 +463,25 @@ export const PoolGamePage: React.FC = () => {
     );
   }, [sendWSMessage, screw, english, gameState.balls]);
 
-  const handlePlaceCueBall = useCallback((x: number, y: number) => {
-    sendWSMessage({
-      type: 'place_cue_ball',
-      data: { x, y },
-    });
-    setLocalBallInHand(false);
+  const handleBallInHandPosChanged = useCallback((pos: { cx: number; cy: number } | null) => {
+    if (!pos) return;
+    // throttle to ~100 ms so we don't flood the socket on every pointer move
+    if (cueBallMoveThrottleRef.current) return;
+    cueBallMoveThrottleRef.current = setTimeout(() => {
+      cueBallMoveThrottleRef.current = null;
+    }, 100);
+    const [px, py] = canvasToPhys(pos.cx, pos.cy);
+    sendWSMessage({ type: 'cue_ball_move', data: { x: px, y: py } });
   }, [sendWSMessage]);
+
+  const handlePlaceCueBall = useCallback((x: number, y: number) => {
+    sendWSMessage({ type: 'place_cue_ball', data: { x, y } });
+    setLocalBallInHand(false);
+    setBreakBallPlaced(true);
+    // update local physics immediately so the ball visually moves to the placed
+    // position without waiting for the server game_update round-trip
+    setBallPositions(gameState.balls.map(b => b.id === 0 ? { ...b, x, y, active: true } : b));
+  }, [sendWSMessage, gameState.balls, setBallPositions]);
 
 
   const handleConcede = useCallback(() => {
@@ -561,7 +612,7 @@ export const PoolGamePage: React.FC = () => {
             ref={poolCanvasRef}
             balls={gameState.balls}
             myTurn={gameState.myTurn}
-            ballInHand={(gameState.ballInHand || localBallInHand)}
+            ballInHand={(gameState.ballInHand || localBallInHand || (gameState.isBreakShot && gameState.myTurn && !breakBallPlaced))}
             scratchCount={scratchCount}
             isBreakShot={gameState.isBreakShot}
             myGroup={gameState.myGroup}
@@ -569,6 +620,8 @@ export const PoolGamePage: React.FC = () => {
             animating={animating}
             onTakeShot={handleTakeShot}
             onPlaceCueBall={handlePlaceCueBall}
+            onBallInHandPosChanged={handleBallInHandPosChanged}
+            opponentCueBallPos={opponentBallInHandPos}
             assets={assets}
             showGuideLine={showGuideLine}
             pocketingBalls={pocketingBalls}
