@@ -14,7 +14,6 @@ import PowerBar from '../game/pool/PowerBar';
 import { type ShotParams, type PocketingAnim } from '../game/pool/types';
 import { physToCanvas, canvasToPhys } from '../game/pool/canvasLayout';
 import PlayerBar from '../game/pool/PlayerBar';
-import SideRail from '../game/pool/SideRails';
 import SpinSetter from '../game/pool/SpinSetter';
 import FoulNotification from '../game/pool/FoulNotification';
 import GameOverScreen from '../game/pool/ui/GameOverScreen';
@@ -685,13 +684,6 @@ export const PoolGamePage: React.FC = () => {
 
         {/* Right-side controls — now part of flex row, not overlay */}
         <div className="flex flex-col items-center gap-1.5 z-10 ml-1">
-          <SideRail
-            balls={gameState.balls}
-            myGroup={gameState.myGroup}
-            oppGroup={gameState.opponentGroup}
-            side="right"
-          />
-
           <SpinSetter
             screw={screw}
             english={english}

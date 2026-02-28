@@ -1147,11 +1147,14 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
     // drag distance and keep the aim fixed.
     if (settingPowerRef.current && mouseStartRef.current) {
       const ms = mouseStartRef.current;
-      const dx = -(mx - ms.x);
-      const dy = -(my - ms.y);
-      const r = Math.hypot(dx, dy);
-      // use barHConst as the maximum drag distance instead of a hardcoded 180
-      const clamped = Math.min(barHConst, r);
+      const dx = mx - ms.x;
+      const dy = my - ms.y;
+      // Project displacement onto the backward aim direction for signed pull distance.
+      // Moving forward past the start reduces power back to 0.
+      const backX = -Math.cos(aimAngleRef.current);
+      const backY = -Math.sin(aimAngleRef.current);
+      const pull = Math.max(0, dx * backX + dy * backY);
+      const clamped = Math.min(barHConst, pull);
       updatePowerFromDrag(clamped);
       // keep aim fixed when pulling; it was set at drag start
       return;
@@ -1179,7 +1182,7 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
     if (!origin) return;
     const [cx, cy] = origin;
     if (DEBUG_AIM) console.log('pointerMove aim', mx.toFixed(1), my.toFixed(1), 'ball', cx.toFixed(1), cy.toFixed(1));
-    if (e.pointerType === 'mouse') {
+    if (e.pointerType === 'mouse' && !mouseDownRef.current) {
       aimAngleRef.current = Math.atan2(my - cy, mx - cx);
     } else if (touchAimActiveRef.current) {
       const currentAng = Math.atan2(my - cy, mx - cx);

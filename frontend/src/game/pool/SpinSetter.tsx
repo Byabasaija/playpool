@@ -9,8 +9,8 @@ interface SpinSetterProps {
   disabled: boolean;
 }
 
-const SIZE = 60;
-const RADIUS = SIZE / 2 - 4;
+const SIZE = 40;
+const RADIUS = SIZE / 2 - 3;
 
 export default function SpinSetter({ screw, english, onChange, disabled }: SpinSetterProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -76,7 +76,7 @@ export default function SpinSetter({ screw, english, onChange, disabled }: SpinS
         <line x1={SIZE / 2} y1={4} x2={SIZE / 2} y2={SIZE - 4} stroke="#ccc" strokeWidth={0.5} />
         <line x1={4} y1={SIZE / 2} x2={SIZE - 4} y2={SIZE / 2} stroke="#ccc" strokeWidth={0.5} />
         {/* Spin dot */}
-        <circle cx={dotX} cy={dotY} r={5} fill={disabled ? '#999' : '#e63946'} />
+        <circle cx={dotX} cy={dotY} r={3.5} fill={disabled ? '#999' : '#e63946'} />
       </svg>
     </div>
   );
