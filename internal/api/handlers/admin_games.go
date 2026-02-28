@@ -122,20 +122,18 @@ func GetAdminGameDetail(db *sqlx.DB) gin.HandlerFunc {
 
 		// Get moves
 		type moveRow struct {
-			ID           int     `db:"id" json:"id"`
-			PlayerID     int     `db:"player_id" json:"player_id"`
-			PlayerName   *string `db:"player_name" json:"player_name"`
-			MoveNumber   int     `db:"move_number" json:"move_number"`
-			MoveType     string  `db:"move_type" json:"move_type"`
-			CardPlayed   *string `db:"card_played" json:"card_played"`
-			SuitDeclared *string `db:"suit_declared" json:"suit_declared"`
-			CreatedAt    string  `db:"created_at" json:"created_at"`
+			ID         int     `db:"id" json:"id"`
+			PlayerID   int     `db:"player_id" json:"player_id"`
+			PlayerName *string `db:"player_name" json:"player_name"`
+			MoveNumber int     `db:"move_number" json:"move_number"`
+			MoveType   string  `db:"move_type" json:"move_type"`
+			CreatedAt  string  `db:"created_at" json:"created_at"`
 		}
 		var moves []moveRow
 		_ = db.Select(&moves, `
 			SELECT gm.id, gm.player_id,
 				p.display_name as player_name,
-				gm.move_number, gm.move_type, gm.card_played, gm.suit_declared,
+				gm.move_number, gm.move_type,
 				to_char(gm.created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as created_at
 			FROM game_moves gm
 			LEFT JOIN players p ON gm.player_id = p.id

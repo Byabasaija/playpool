@@ -45,8 +45,6 @@ export interface AdminGameMove {
   player_id: number;
   move_number: number;
   move_type: string;
-  card_played?: string;
-  suit_declared?: string;
   created_at: string;
 }
 

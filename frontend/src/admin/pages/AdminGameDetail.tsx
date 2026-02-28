@@ -246,16 +246,7 @@ export function AdminGameDetail() {
                 <span className="text-gray-600 capitalize">
                   {move.move_type.replace(/_/g, ' ')}
                 </span>
-                {move.card_played && (
-                  <span className="font-mono text-xs bg-white border border-gray-200 px-2 py-0.5 rounded">
-                    {move.card_played}
-                  </span>
-                )}
-                {move.suit_declared && (
-                  <span className="text-xs text-gray-500">
-                    declared {move.suit_declared}
-                  </span>
-                )}
+
                 <span className="ml-auto text-xs text-gray-400">
                   {new Date(move.created_at).toLocaleTimeString()}
                 </span>

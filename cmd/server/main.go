@@ -127,7 +127,7 @@ func main() {
 		addr = ":" + addr
 	}
 
-	log.Printf("Starting PlayMatatu server on %s", addr)
+	log.Printf("Starting PlayPool server on %s", addr)
 	if err := router.Run(addr); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}

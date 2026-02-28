@@ -344,62 +344,6 @@ func (c *Client) handleTakeShot(g *game.PoolGameState, data TakeShotData) {
 		"player":      c.playerID,
 		"shot_params": params,
 	})
-
-	// Start timeout — if shot_complete doesn't arrive within 30s, treat as foul
-	go func(gameID, gameToken, playerID string) {
-		time.Sleep(30 * time.Second)
-		g2, err := game.Manager.GetGameByToken(gameToken)
-		if err != nil {
-			return
-		}
-		if !g2.IsShotInProgress(playerID) {
-			return // shot already completed
-		}
-		log.Printf("[POOL] Shot timeout for player %s in game %s", playerID, gameID)
-
-		// Build a timeout result: no contact, no pocketed balls — pure foul
-		timeoutData := game.ClientShotData{
-			BallPositions:       g2.GetCurrentBallPositions(),
-			PocketedBalls:       []int{},
-			FirstContactBallID:  -1,
-			CushionAfterContact: false,
-			BreakCushionCount:   0,
-		}
-		result, err := g2.ApplyShotResult(playerID, timeoutData)
-		if err != nil {
-			log.Printf("[POOL] Shot timeout apply error: %v", err)
-			return
-		}
-
-		GameHub.BroadcastToGame(gameID, map[string]interface{}{
-			"type":           "shot_result",
-			"player":         playerID,
-			"pocketed_balls": result.PocketedBalls,
-			"foul":           result.Foul,
-			"group_assigned": result.GroupAssigned,
-			"player1_group":  result.Player1Group,
-			"player2_group":  result.Player2Group,
-			"turn_change":    result.TurnChange,
-			"next_turn":      result.NextTurn,
-			"ball_in_hand":   result.BallInHand,
-			"game_over":      result.GameOver,
-			"winner":         result.Winner,
-			"win_type":       result.WinType,
-			"timeout":        true,
-		})
-
-		if g2.Player1 != nil {
-			state := g2.GetGameStateForPlayer(g2.Player1.ID)
-			state["type"] = "game_update"
-			GameHub.SendToPlayer(g2.Player1.ID, state)
-		}
-		if g2.Player2 != nil {
-			state := g2.GetGameStateForPlayer(g2.Player2.ID)
-			state["type"] = "game_update"
-			GameHub.SendToPlayer(g2.Player2.ID, state)
-		}
-		g2.SaveToRedis()
-	}(c.gameID, c.gameToken, c.playerID)
 }
 
 // handleShotComplete processes the shot_complete message from the shooting client.
