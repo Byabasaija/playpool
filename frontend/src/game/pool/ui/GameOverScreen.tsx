@@ -16,7 +16,6 @@ export default function GameOverScreen({ gameOver, stakeAmount }: GameOverScreen
     switch (gameOver.winType) {
       case 'pocket_8': return '8-Ball Victory';
       case 'illegal_8ball': return 'Illegal 8-Ball';
-      case 'scratch_on_8': return 'Scratch on 8-Ball';
       case 'concede': return 'Conceded';
       case 'forfeit': return 'Forfeit';
       default: return gameOver.winType;

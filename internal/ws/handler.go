@@ -1,15 +1,11 @@
 package ws
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"sync"
 	"time"
-
-	"github.com/redis/go-redis/v9"
 
 	"github.com/gorilla/websocket"
 )
@@ -146,20 +142,3 @@ func (c *Client) sendError(message string) {
 	c.send <- data
 }
 
-// resetIdleTimersForGame resets last_active and ZADDs idle warning/forfeit for both players
-func resetIdleTimersForGame(gameToken string, p1ID, p2ID string) {
-	if rdbClient == nil || wsConfig == nil {
-		log.Printf("[WS] cannot reset idle timers - redis or config missing")
-		return
-	}
-	ctx := context.Background()
-	now := time.Now().Unix()
-	members := []string{fmt.Sprintf("g:%s:p:%s", gameToken, p1ID), fmt.Sprintf("g:%s:p:%s", gameToken, p2ID)}
-	for _, m := range members {
-		// store last active
-		rdbClient.Set(ctx, "last_active:"+m, fmt.Sprintf("%d", now), 0)
-		// schedule warning only; forfeits no longer tracked
-		rdbClient.ZAdd(ctx, "idle_warning", redis.Z{Score: float64(now + int64(wsConfig.IdleWarningSeconds)), Member: m})
-		log.Printf("[WS] reset idle timers for member=%s warning_at=%d (forfeits disabled)", m, now+int64(wsConfig.IdleWarningSeconds))
-	}
-}

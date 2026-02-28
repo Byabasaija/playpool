@@ -279,8 +279,9 @@ func (g *PoolGameState) ApplyShotResult(playerID string, clientData ClientShotDa
 		foul = &FoulInfo{Type: "scratch", Message: "Cue ball pocketed"}
 	}
 
-	// No ball hit
-	if foul == nil && firstContactBallID == -1 {
+	// No ball hit — only if nothing was pocketed; a pocket requires contact so
+	// if any ball was pocketed the contact tracking must have missed the event.
+	if foul == nil && firstContactBallID == -1 && len(pocketed) == 0 {
 		foul = &FoulInfo{Type: "no_contact", Message: "Failed to hit any ball"}
 	}
 
@@ -291,7 +292,9 @@ func (g *PoolGameState) ApplyShotResult(playerID string, clientData ClientShotDa
 			if firstContactBallID != 8 {
 				foul = &FoulInfo{Type: "wrong_first_contact", Message: "Must hit the 8-ball first"}
 			}
-		} else if targetGroup != player.BallGroup && firstContactBallID != 8 {
+		} else if targetGroup != player.BallGroup {
+			// Hitting the 8-ball (or any opponent ball) first is a foul when
+			// groups are assigned and the player is not yet in the 8-ball phase.
 			foul = &FoulInfo{Type: "wrong_first_contact", Message: "Hit opponent's ball first"}
 		}
 	}
@@ -329,24 +332,6 @@ func (g *PoolGameState) ApplyShotResult(playerID string, clientData ClientShotDa
 		}
 	}
 
-	// Also assign on break if balls are pocketed and no foul
-	if player.BallGroup == GroupAny && opponent.BallGroup == GroupAny && foul == nil && g.IsBreakShot {
-		for _, ballID := range pocketed {
-			if ballID == 0 || ballID == 8 {
-				continue
-			}
-			grp := ballGroup(ballID)
-			player.BallGroup = grp
-			if grp == GroupSolids {
-				opponent.BallGroup = GroupStripes
-			} else {
-				opponent.BallGroup = GroupSolids
-			}
-			groupAssigned = true
-			break
-		}
-	}
-
 	result.GroupAssigned = groupAssigned
 	result.Player1Group = g.Player1.BallGroup
 	result.Player2Group = g.Player2.BallGroup
@@ -364,13 +349,6 @@ func (g *PoolGameState) ApplyShotResult(playerID string, clientData ClientShotDa
 			result.Winner = playerID
 			result.WinType = "pocket_8"
 		}
-	}
-
-	// Scratch on the 8-ball shot (cue pocketed while shooting 8) — opponent wins
-	if cueBallPocketed && player.BallGroup == Group8Ball && !eightBallPocketed {
-		result.GameOver = true
-		result.Winner = opponent.ID
-		result.WinType = "scratch_on_8"
 	}
 
 	// === UPDATE BALL POSITIONS from client data ===

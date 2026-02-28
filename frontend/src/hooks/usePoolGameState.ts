@@ -33,6 +33,7 @@ type Action =
   | { type: 'APPLY_WS_MSG'; payload: PoolWSMessage }
   | { type: 'APPLY_SHOT_RESULT'; payload: PoolWSMessage }
   | { type: 'SET_BALL_POSITIONS'; payload: BallState[] }
+  | { type: 'UPDATE_CUE_BALL'; payload: { x: number; y: number; active: boolean } }
   | { type: 'SET_TOKENS'; payload: { gameToken: string; playerToken: string } }
   | { type: 'SET_CONNECTED'; payload: boolean }
   | { type: 'CLEAR_WINNER' };
@@ -47,6 +48,19 @@ function reducer(state: PoolGameState, action: Action): PoolGameState {
 
     case 'SET_BALL_POSITIONS':
       return { ...state, balls: action.payload };
+
+    // Modifies ONLY ball 0 using the reducer's own state.balls — no closure capture.
+    // Use this instead of setBallPositions(gameState.balls.map(...)) to avoid
+    // spreading stale non-cue ball positions when gameState.balls is out of date.
+    case 'UPDATE_CUE_BALL':
+      return {
+        ...state,
+        balls: state.balls.map(b =>
+          b.id === 0
+            ? { ...b, x: action.payload.x, y: action.payload.y, active: action.payload.active }
+            : b
+        ),
+      };
 
     case 'APPLY_WS_MSG': {
       const d = action.payload;
@@ -135,6 +149,10 @@ export function usePoolGameState() {
     dispatch({ type: 'SET_BALL_POSITIONS', payload: balls });
   }, []);
 
+  const updateCueBall = useCallback((x: number, y: number, active: boolean) => {
+    dispatch({ type: 'UPDATE_CUE_BALL', payload: { x, y, active } });
+  }, []);
+
   const setTokens = useCallback((gameToken: string, playerToken: string) => {
     dispatch({ type: 'SET_TOKENS', payload: { gameToken, playerToken } });
     try {
@@ -161,6 +179,7 @@ export function usePoolGameState() {
     updateFromWSMessage,
     applyShotResult,
     setBallPositions,
+    updateCueBall,
     setTokens,
   };
 }

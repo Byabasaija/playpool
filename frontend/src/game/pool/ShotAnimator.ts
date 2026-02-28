@@ -75,6 +75,7 @@ export class ShotAnimator {
 
     // Apply shot to cue ball
     const cueBall = balls[0];
+    console.log('[ShotAnimator] start: cueBall=', cueBall ? { id: cueBall.id, x: cueBall.position.x.toFixed(0), y: cueBall.position.y.toFixed(0), active: cueBall.active } : null, 'totalBalls=', balls.length);
     if (cueBall && cueBall.active) {
       const vx = Math.cos(shotParams.angle) * shotParams.power;
       const vy = Math.sin(shotParams.angle) * shotParams.power;
@@ -129,6 +130,7 @@ export class ShotAnimator {
 
       // Check if all balls stopped
       if (this.physics.allStopped()) {
+        console.log('[ShotAnimator] allStopped — animation ended. Cue ball:', this.physics.balls[0] ? { id: this.physics.balls[0].id, active: this.physics.balls[0].active, vel: this.physics.balls[0].velocity.magnitude().toFixed(1) } : null);
         const finalFrame = this.buildFrame();
         this.onFrame(finalFrame);
         this.onComplete(finalFrame);

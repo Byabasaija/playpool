@@ -1,7 +1,6 @@
 package ws
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,7 +10,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/playpool/backend/internal/game"
-	"github.com/redis/go-redis/v9"
 )
 
 // Pool-specific message data types
@@ -263,31 +261,6 @@ func (c *Client) readPump() {
 			break
 		}
 
-		// Update idle tracking in Redis
-		if rdbClient != nil && wsConfig != nil {
-			ctx := context.Background()
-			member := fmt.Sprintf("g:%s:p:%s", c.gameToken, c.playerID)
-			now := time.Now().Unix()
-
-			shouldTrackIdle := true
-			if c.opponentID != "" {
-				GameHub.mu.RLock()
-				opponentClient, opponentConnected := GameHub.clients[c.opponentID]
-				GameHub.mu.RUnlock()
-
-				if !opponentConnected || opponentClient == nil || opponentClient.gameID != c.gameID {
-					shouldTrackIdle = false
-				}
-			}
-
-			if shouldTrackIdle {
-				rdbClient.Set(ctx, "last_active:"+member, fmt.Sprintf("%d", now), 0)
-				// keep warning schedule for telemetry, but we no longer enforce forfeits
-				rdbClient.ZAdd(ctx, "idle_warning", redis.Z{Score: float64(now + int64(wsConfig.IdleWarningSeconds)), Member: member})
-				// idle_forfeit entries are intentionally omitted; idle forfeits removed
-			}
-		}
-
 		var msg WSMessage
 		if err := json.Unmarshal(message, &msg); err != nil {
 			continue
@@ -462,10 +435,6 @@ func (c *Client) handleShotComplete(g *game.PoolGameState, data ShotCompleteData
 		"winner":         result.Winner,
 		"win_type":       result.WinType,
 	})
-
-	// Reset idle timers for both players
-	resetIdleTimersForGame(c.gameToken, g.Player1.ID, g.Player2.ID)
-	GameHub.BroadcastToGame(c.gameID, map[string]interface{}{"type": "player_idle_canceled", "player": c.playerID})
 
 	// Send updated game state to each player
 	c.broadcastGameState(g)

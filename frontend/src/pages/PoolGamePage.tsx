@@ -74,7 +74,7 @@ export const PoolGamePage: React.FC = () => {
   const gameTokenMatch = window.location.pathname.match(/\/g\/([^/?]+)/);
   const gt = gameTokenMatch?.[1] || '';
 
-  const { gameState, gameOver, updateFromWSMessage, applyShotResult, setBallPositions, setTokens } = usePoolGameState();
+  const { gameState, gameOver, updateFromWSMessage, applyShotResult, setBallPositions, updateCueBall, setTokens } = usePoolGameState();
   const [localBallInHand, setLocalBallInHand] = useState(false);
   // tracks whether we have already placed the cue ball during the current
   // break shot — once placed the derived ball-in-hand condition must stay
@@ -94,6 +94,19 @@ export const PoolGamePage: React.FC = () => {
   // after a shot_result we have authoritative local physics positions; skip
   // ball positions from the next game_update to prevent server rollback
   const skipNextBallsUpdateRef = useRef(false);
+
+  // Tracks the cue ball position set by handlePlaceCueBall so handleTakeShot
+  // always uses the correct physics origin even when the React closure is stale
+  // (race: auto-place + shot fire synchronously before React re-renders).
+  const pendingCueBallRef = useRef<{ x: number; y: number } | null>(null);
+
+  // When ball-in-hand ends without a shot, discard any pending cue position so
+  // it does not override gameState.balls[0] on a later non-ball-in-hand shot.
+  useEffect(() => {
+    if (!ballInHand) {
+      pendingCueBallRef.current = null;
+    }
+  }, [ballInHand]);
 
   // debug logging for ball-in-hand state
   useEffect(() => {
@@ -163,6 +176,12 @@ export const PoolGamePage: React.FC = () => {
         if (isMyShotRef.current) {
           isMyShotRef.current = false;
           const cd = collisionDataRef.current;
+          console.log('[Shot] shot_complete', {
+            firstContactBallId: cd.firstContactBallId,
+            pocketedBalls: cd.pocketedBalls,
+            cushionAfterContact: cd.cushionAfterContact,
+            breakCushionCount: cd.breakCushionBallIds.size,
+          });
           sendWSMessageRef.current({
             type: 'shot_complete',
             data: {
@@ -181,10 +200,12 @@ export const PoolGamePage: React.FC = () => {
         soundRef.current?.playCollision(event, isFirst);
 
         if (isMyShotRef.current) {
+          console.log('[Shot] onCollision event:', event.type, 'ballId:', event.ballId, 'targetId:', event.targetId);
           const cd = collisionDataRef.current;
           if (event.type === 'pocket') {
             cd.pocketedBalls.push(event.ballId);
           } else if (event.type === 'ball' && event.ballId === 0 && !cd.ballContactMade) {
+            console.log('[Shot] first ball contact: cue -> ball', event.targetId);
             cd.firstContactBallId = event.targetId;
             cd.ballContactMade = true;
           } else if ((event.type === 'line' || event.type === 'vertex') && cd.ballContactMade) {
@@ -296,8 +317,10 @@ export const PoolGamePage: React.FC = () => {
     if (animating || !ballInHand) return;
     const cb = gameState.balls.find(b => b.id === 0);
     if (!cb || cb.active) return;
-    setBallPositions(gameState.balls.map(b => b.id === 0 ? { ...b, x: -34500, y: 0, active: true } : b));
-  }, [animating, ballInHand, gameState.balls, setBallPositions]);
+    // Only modify ball 0 — updateCueBall reads from reducer state so it can never
+    // spread stale non-cue ball positions from a closure capture.
+    updateCueBall(-34500, 0, true);
+  }, [animating, ballInHand, gameState.balls, updateCueBall]);
 
 
 
@@ -407,13 +430,11 @@ export const PoolGamePage: React.FC = () => {
         break;
 
       case 'ball_placed':
-        if (message.x !== undefined && message.y !== undefined) {
-          const newBalls = gameState.balls.map(b =>
-            b.id === 0 ? { ...b, x: message.x!, y: message.y!, active: true } : b
-          );
-          setBallPositions(newBalls);
-        }
-        // placement confirmed — stop showing the streamed position
+        // Ball positions (including the placed cue ball) are updated by the
+        // game_update that broadcastGameState sends immediately after this message.
+        // Using gameState.balls.map() here risks a stale closure — handleWSMessage
+        // may not have refreshed with the latest gameState.balls by the time this
+        // message arrives, causing non-cue balls to revert to pre-foul positions.
         setOpponentBallInHandPos(null);
         break;
 
@@ -427,7 +448,6 @@ export const PoolGamePage: React.FC = () => {
         break;
 
       case 'player_conceded':
-      case 'player_forfeit':
         updateFromWSMessage(message);
         break;
 
@@ -435,7 +455,7 @@ export const PoolGamePage: React.FC = () => {
         console.error('[Pool] Error:', message.message);
         break;
     }
-  }, [updateFromWSMessage, applyShotResult, setBallPositions, gameState.balls, animating]);
+  }, [updateFromWSMessage, applyShotResult, gameState.balls, animating]);
 
   const { connected, send: sendWSMessage } = usePoolWebSocket({
     gameToken: tokensReady ? resolvedGameToken : '',
@@ -453,6 +473,24 @@ export const PoolGamePage: React.FC = () => {
 
   const handleTakeShot = useCallback((params: ShotParams) => {
     const fullParams = { angle: params.angle, power: params.power, screw, english };
+
+    // If handlePlaceCueBall was called synchronously before this (same rAF tick,
+    // before React re-renders), the closure's gameState.balls[0] may still hold
+    // the old position. Override cue ball position with the pending placed position
+    // so physics starts from the correct location and avoids a false no_contact foul.
+    let ballsForShot = gameState.balls;
+    if (pendingCueBallRef.current) {
+      const { x, y } = pendingCueBallRef.current;
+      pendingCueBallRef.current = null;
+      ballsForShot = ballsForShot.map(b => b.id === 0 ? { ...b, x, y, active: true } : b);
+    }
+
+    const cueBallDebug = ballsForShot.find(b => b.id === 0);
+    console.log('[Shot] handleTakeShot', {
+      cueBall: cueBallDebug ? { x: cueBallDebug.x.toFixed(0), y: cueBallDebug.y.toFixed(0), active: cueBallDebug.active } : null,
+      ballCount: ballsForShot.length,
+      usedPending: ballsForShot !== gameState.balls,
+    });
     sendWSMessage({ type: 'take_shot', data: fullParams });
 
     // Reset collision tracking for this shot
@@ -470,7 +508,7 @@ export const PoolGamePage: React.FC = () => {
     firstHitRef.current = false;
     soundRef.current?.resumeAudioContext();
     animatorRef.current?.start(
-      gameState.balls,
+      ballsForShot,
       fullParams,
     );
   }, [sendWSMessage, screw, english, gameState.balls]);
@@ -490,10 +528,14 @@ export const PoolGamePage: React.FC = () => {
     sendWSMessage({ type: 'place_cue_ball', data: { x, y } });
     setLocalBallInHand(false);
     setBreakBallPlaced(true);
-    // update local physics immediately so the ball visually moves to the placed
-    // position without waiting for the server game_update round-trip
-    setBallPositions(gameState.balls.map(b => b.id === 0 ? { ...b, x, y, active: true } : b));
-  }, [sendWSMessage, gameState.balls, setBallPositions]);
+    // Optimistically move ball 0 to the placed position without waiting for the
+    // server game_update round-trip. updateCueBall only touches ball 0 inside
+    // the reducer, so it cannot spread stale non-cue ball positions.
+    updateCueBall(x, y, true);
+    // Also record the position in a ref so handleTakeShot can use it even if
+    // it fires in the same synchronous call stack (before React re-renders).
+    pendingCueBallRef.current = { x, y };
+  }, [sendWSMessage, updateCueBall]);
 
 
   const handleConcede = useCallback(() => {

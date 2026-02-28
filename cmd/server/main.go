@@ -93,11 +93,8 @@ func main() {
 	go payment.StartStatusChecker(context.Background(), db, rdb, cfg, 2) // Check every 2 minutes
 
 	// Wire Redis and start idle event subscriber in WS layer
-	ws.SetRedisClient(rdb, cfg)
+	ws.SetRedisClient(rdb)
 	ws.StartIdleEventSubscriber(context.Background())
-
-	// Start idle worker (warning -> forfeit) for idle detection
-	game.StartIdleWorker(context.Background(), db, rdb, cfg)
 
 	// Start matchmaker worker (pairs players from DB queue and sends SMS)
 	go game.StartMatchmakerWorker(context.Background(), db, rdb, cfg)

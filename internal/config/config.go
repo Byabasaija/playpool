@@ -84,11 +84,6 @@ type Config struct {
 	PINLockoutMinutes  int
 	PINTokenTTLSeconds int
 
-	// Idle detection and forfeit
-	IdleWarningSeconds     int
-	IdleForfeitSeconds     int
-	IdleWorkerPollInterval int
-
 	// Disconnect grace period
 	DisconnectGraceSeconds int
 
@@ -175,13 +170,6 @@ func Load() *Config {
 		PINMaxAttempts:     getEnvInt("PIN_MAX_ATTEMPTS", 5),
 		PINLockoutMinutes:  getEnvInt("PIN_LOCKOUT_MINUTES", 15),
 		PINTokenTTLSeconds: getEnvInt("PIN_TOKEN_TTL_SECONDS", 300),
-
-		// Idle detection timers.  For pool games we no longer enforce forfeits –
-		// the shot clock mechanism handles turn passing and games run to
-		// completion.  Setting IdleForfeitSeconds to 0 disables the logic entirely.
-		IdleWarningSeconds:     getEnvInt("IDLE_WARNING_SECONDS", 45),
-		IdleForfeitSeconds:     getEnvInt("IDLE_FORFEIT_SECONDS", 0), // default changed from 90
-		IdleWorkerPollInterval: getEnvInt("IDLE_WORKER_POLL_INTERVAL", 1),
 
 		// Disconnect grace period (default 60 seconds = 1 minute)
 		DisconnectGraceSeconds: getEnvInt("DISCONNECT_GRACE_SECONDS", 60),
