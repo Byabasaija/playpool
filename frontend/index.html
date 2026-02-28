@@ -5,21 +5,19 @@
     <link rel="icon" type="image/png" sizes="192x192" href="/pwa-icon-192.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="stylesheet" href="/index.css" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <meta name="theme-color" content="#373536" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#0e1628" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="manifest" href="/manifest.json" />
 
     <!-- Performance optimizations: DNS and connection setup -->
     <link rel="dns-prefetch" href="https://api.playpool.com" />
     <link rel="preconnect" href="https://api.playpool.com" crossorigin />
-    <link rel="dns-prefetch" href="https://deckofcardsapi.com" />
-    <link rel="preconnect" href="https://deckofcardsapi.com" crossorigin />
-    
+
     <!-- Preload critical images for faster loading and prevent CLS -->
     <link rel="preload" as="image" href="/logo.webp" type="image/webp" fetchpriority="high" />
     <link rel="preload" as="image" href="/background.webp" type="image/webp" />
-    <link rel="preload" as="image" href="/card_back_orange.webp" type="image/webp" />
     
     <title>PlayPool - Play, Win, Repeat</title>
     <meta name="description" content="PlayPool is a fun and engaging pool game where players compete to win real cash by playing strategically. Join the excitement and play now!" />
