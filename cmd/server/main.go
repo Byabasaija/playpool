@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -112,6 +114,27 @@ func main() {
 
 	// Initialize API handlers
 	api.SetupRoutes(router, db, rdb, cfg)
+
+	// Serve built frontend (SERVE_STATIC_FILES=true)
+	if cfg.ServeStaticFiles {
+		distDir := cfg.StaticFilesDir
+		log.Printf("Serving static frontend from %s", distDir)
+		router.NoRoute(func(c *gin.Context) {
+			// Let API routes return 404 normally
+			if strings.HasPrefix(c.Request.URL.Path, "/api/") {
+				c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+				return
+			}
+			// Try to serve the exact file first
+			filePath := filepath.Join(distDir, filepath.Clean(c.Request.URL.Path))
+			if info, err := os.Stat(filePath); err == nil && !info.IsDir() {
+				c.File(filePath)
+				return
+			}
+			// SPA fallback — all other paths get index.html
+			c.File(filepath.Join(distDir, "index.html"))
+		})
+	}
 
 	// Start server
 	addr := cfg.BindAddr // preferred override

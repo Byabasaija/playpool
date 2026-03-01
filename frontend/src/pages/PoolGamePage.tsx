@@ -38,8 +38,8 @@ export const PoolGamePage: React.FC = () => {
   const [pocketingBalls, setPocketingBalls] = useState<PocketingAnim[]>([]);
   const [isPortrait, setIsPortrait] = useState(window.innerHeight > window.innerWidth);
   const isTouchDevice = useTouchDevice();
-  // only treat the session as touch-enabled once we actually see a touch event
-  const [touchedOnce, setTouchedOnce] = useState(false);
+  // treat touch devices as touch-enabled immediately on load (no need to wait for first touch)
+  const [touchedOnce, setTouchedOnce] = useState(isTouchDevice);
   useEffect(() => {
     if (touchedOnce) return;
     const handle = (e: PointerEvent) => {
@@ -536,6 +536,12 @@ export const PoolGamePage: React.FC = () => {
     }
   }, [sendWSMessage]);
 
+  // Lock body scroll while on game page
+  useEffect(() => {
+    document.body.classList.add('game-active');
+    return () => document.body.classList.remove('game-active');
+  }, []);
+
   // Keep screen awake during the game (works in PWA / Chrome Android)
   useEffect(() => {
     let wakeLock: any = null;
@@ -550,13 +556,6 @@ export const PoolGamePage: React.FC = () => {
       wakeLock?.release();
     };
   }, []);
-
-  // Lock to landscape when on a touch device (works in PWA / fullscreen contexts)
-  useEffect(() => {
-    if (!isTouchDevice) return;
-    (screen.orientation as any)?.lock?.('landscape').catch(() => {});
-    return () => { (screen.orientation as any)?.unlock?.(); };
-  }, [isTouchDevice]);
 
   // Disconnect countdown tick
   useEffect(() => {
@@ -621,10 +620,11 @@ export const PoolGamePage: React.FC = () => {
     return <GameOverScreen gameOver={gameOver} stakeAmount={gameState.stakeAmount} />;
   }
 
-  // --vh variable set by the resize effect above (mobile viewport height fix)
+  // 100dvh adjusts dynamically as browser bars show/hide (Chrome 108+, Safari 15.4+)
+  // Falls back to --vh CSS var (set by resize effect) for older browsers
   const fullViewport: React.CSSProperties = {
-    width: '100vw',
-    height: 'calc(var(--vh, 1vh) * 100)',
+    width: '100dvw',
+    height: '100dvh',
     overflow: 'hidden',
     background: '#0e1628',
   };
@@ -686,39 +686,15 @@ export const PoolGamePage: React.FC = () => {
     </div>
   ) : null;
 
-  // ── MOBILE LAYOUT (touch devices, landscape) ─────────────────────────────
+  // ── MOBILE LAYOUT (touch devices) ────────────────────────────────────────
   if (effectiveTouch) {
-    return (
-      <div
-        style={{
-          ...fullViewport,
-          display: 'flex',
-          flexDirection: 'column',
-          paddingLeft: 'env(safe-area-inset-left)',
-          paddingRight: 'env(safe-area-inset-right)',
-          paddingBottom: 'env(safe-area-inset-bottom)',
-        }}
-      >
-        {/* Portrait rotate hint */}
-        {isPortrait && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/70 z-50">
-            <div className="text-white text-center px-6">
-              <svg className="w-14 h-14 mx-auto mb-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="5" y="2" width="14" height="20" rx="2" />
-                <path d="M12 18h.01" />
-              </svg>
-              <p className="text-lg font-bold">Rotate to landscape</p>
-              <p className="text-sm text-gray-400 mt-1">Turn your phone sideways to play</p>
-            </div>
-          </div>
-        )}
-
+    // The inner game panel — always laid out as landscape (PowerBar | Canvas | Controls)
+    const gamePanel = (
+      <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#0e1628' }}>
         {playerBarEl}
-
-        {/* Game area: power bar | canvas | controls */}
         <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
           {/* Left — power bar */}
-          <PowerBar poolCanvasRef={poolCanvasRef} assets={assets} />
+          <PowerBar poolCanvasRef={poolCanvasRef} assets={assets} isPortrait={isPortrait} />
 
           {/* Centre — canvas */}
           <div style={{ flex: 1, minWidth: 0, height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -728,34 +704,18 @@ export const PoolGamePage: React.FC = () => {
           {/* Right — icon controls */}
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6, width: 52, flexShrink: 0 }}>
             {spinSetterEl}
-
-            {/* Guide line toggle */}
             <button
               onClick={() => setShowGuideLine(prev => !prev)}
-              style={{
-                width: 44, height: 44,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                borderRadius: 8, border: 'none', cursor: 'pointer',
-                background: showGuideLine ? 'rgba(74,222,128,0.15)' : 'rgba(255,255,255,0.06)',
-                color: showGuideLine ? '#4ade80' : '#6b7280',
-              }}
+              style={{ width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, border: 'none', cursor: 'pointer', background: showGuideLine ? 'rgba(74,222,128,0.15)' : 'rgba(255,255,255,0.06)', color: showGuideLine ? '#4ade80' : '#6b7280' }}
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
                 <circle cx="12" cy="12" r="3"/>
               </svg>
             </button>
-
-            {/* Concede */}
             <button
               onClick={handleConcede}
-              style={{
-                width: 44, height: 44,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                borderRadius: 8, border: 'none', cursor: 'pointer',
-                background: 'rgba(255,255,255,0.06)',
-                color: '#6b7280',
-              }}
+              style={{ width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, border: 'none', cursor: 'pointer', background: 'rgba(255,255,255,0.06)', color: '#6b7280' }}
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/>
@@ -764,9 +724,35 @@ export const PoolGamePage: React.FC = () => {
             </button>
           </div>
         </div>
-
         <FoulNotification message={foulMessage} isFoul={isFoul} />
         {disconnectEl}
+      </div>
+    );
+
+    if (isPortrait) {
+      // CSS-rotate the game 90° so it appears landscape inside the portrait screen.
+      // Inner div uses swapped dimensions (100dvh wide × 100dvw tall) so after
+      // rotation it fills the portrait viewport exactly — no orientation API needed.
+      return (
+        <div style={{ position: 'fixed', inset: 0, overflow: 'hidden', background: '#0e1628' }}>
+          <div style={{
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            width: '100dvh',
+            height: '100dvw',
+            transform: 'translate(-50%, -50%) rotate(90deg)',
+          }}>
+            {gamePanel}
+          </div>
+        </div>
+      );
+    }
+
+    // Already landscape — render directly without rotation
+    return (
+      <div style={{ ...fullViewport, display: 'flex', flexDirection: 'column' }}>
+        {gamePanel}
       </div>
     );
   }

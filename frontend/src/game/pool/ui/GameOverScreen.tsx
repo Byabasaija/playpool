@@ -23,8 +23,8 @@ export default function GameOverScreen({ gameOver, stakeAmount }: GameOverScreen
   })();
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#0e1628]">
-      <div className="p-8 text-center max-w-md mx-auto">
+    <div className="min-h-screen overflow-y-auto bg-[#0e1628] flex items-center justify-center">
+      <div className="p-6 text-center max-w-md mx-auto w-full">
         <div className="mb-6">
           <div className={`h-24 w-24 rounded-full mx-auto flex items-center justify-center text-5xl ${
             youWon ? 'bg-green-900 animate-bounce' : 'bg-red-900'

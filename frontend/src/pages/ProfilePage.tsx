@@ -357,7 +357,7 @@ export const ProfilePage: React.FC = () => {
           <>
             <div className="text-center mb-6">
               <Link to="/">
-                <img src="/logo.webp" alt="PlayPool Logo" width={160} height={113} className="mx-auto mb-4" />
+                <img src="/logo.png" alt="PlayPool Logo" width={160} height={113} className="mx-auto mb-4" />
               </Link>
               <h2 className="text-2xl font-bold">Profile</h2>
             </div>

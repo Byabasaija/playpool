@@ -1,5 +1,5 @@
 import { Routes, Route } from 'react-router-dom';
-import { PWAGate } from './components/PWAGate';
+import { useEffect } from 'react';
 import { LandingPage } from './pages/LandingPage';
 import { PoolGamePage } from './pages/PoolGamePage';
 import { JoinPage } from './pages/JoinPage';
@@ -24,8 +24,13 @@ import { AdminAuditLog } from './admin/pages/AdminAuditLog';
 import { AdminConfig } from './admin/pages/AdminConfig';
 
 function App() {
+  useEffect(() => {
+    (screen.orientation as any)?.lock?.('landscape').catch(() => {});
+    document.documentElement.requestFullscreen?.().catch(() => {});
+  }, []);
+
   return (
-    <PWAGate>
+    <>
     <div className="min-h-screen">
       <Routes>
         {/* Player-facing routes */}
@@ -56,7 +61,7 @@ function App() {
         </Route>
       </Routes>
     </div>
-    </PWAGate>
+    </>
   );
 }
 

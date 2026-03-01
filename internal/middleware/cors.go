@@ -31,11 +31,22 @@ func CORSMiddleware(cfg *config.Config) gin.HandlerFunc {
 
 	// Configure allowed origins based on environment
 	if cfg.Environment == "development" {
-		corsConfig.AllowOrigins = []string{
-			"http://localhost:5173", // Vite dev server
-			"http://127.0.0.1:5173", // Alternative localhost format
-			"http://192.168.1.94:5173", 
-			"http://192.168.1.3:5173", // Local network IP
+		devOrigins := []string{
+			"http://localhost:5173",
+			"http://127.0.0.1:5173",
+			"http://192.168.1.94:5173",
+			"http://192.168.1.3:5173",
+		}
+		corsConfig.AllowOriginFunc = func(origin string) bool {
+			if strings.HasSuffix(origin, ".ngrok-free.app") || strings.HasSuffix(origin, ".ngrok.io") {
+				return true
+			}
+			for _, o := range devOrigins {
+				if o == origin {
+					return true
+				}
+			}
+			return false
 		}
 		corsConfig.AllowCredentials = true
 		corsConfig.AllowAllOrigins = false
@@ -78,9 +89,11 @@ func WebSocketCORSCheck(cfg *config.Config) gin.HandlerFunc {
 		if cfg.Environment == "development" {
 			// Allow localhost variants in dev
 			allowed = strings.HasPrefix(origin, "http://localhost:") ||
-				strings.HasPrefix(origin, "http://127.0.0.1:") || 
-				strings.HasPrefix(origin, "http://192.168.1.94:" ) ||
-				strings.HasPrefix(origin, "http://192.168.1.3:") // Local network IP
+				strings.HasPrefix(origin, "http://127.0.0.1:") ||
+				strings.HasPrefix(origin, "http://192.168.1.94:") ||
+				strings.HasPrefix(origin, "http://192.168.1.3:") ||
+				strings.HasSuffix(origin, ".ngrok-free.app") ||
+				strings.HasSuffix(origin, ".ngrok.io")
 		} else {
 			// Production: check against allowed domains
 			allowedOrigins := []string{

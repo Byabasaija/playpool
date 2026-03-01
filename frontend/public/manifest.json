@@ -4,7 +4,6 @@
   "description": "Multiplayer 8-ball pool — play and win real cash",
   "start_url": "/",
   "display": "standalone",
-  "orientation": "landscape",
   "background_color": "#0e1628",
   "theme_color": "#0e1628",
   "icons": [

@@ -84,6 +84,10 @@ type Config struct {
 	PINLockoutMinutes  int
 	PINTokenTTLSeconds int
 
+	// Static file serving (serve built frontend from Go)
+	ServeStaticFiles bool
+	StaticFilesDir   string
+
 	// Disconnect grace period
 	DisconnectGraceSeconds int
 
@@ -170,6 +174,10 @@ func Load() *Config {
 		PINMaxAttempts:     getEnvInt("PIN_MAX_ATTEMPTS", 5),
 		PINLockoutMinutes:  getEnvInt("PIN_LOCKOUT_MINUTES", 15),
 		PINTokenTTLSeconds: getEnvInt("PIN_TOKEN_TTL_SECONDS", 300),
+
+		// Static file serving
+		ServeStaticFiles: getEnv("SERVE_STATIC_FILES", "false") == "true",
+		StaticFilesDir:   getEnv("STATIC_FILES_DIR", "./frontend/dist"),
 
 		// Disconnect grace period (default 60 seconds = 1 minute)
 		DisconnectGraceSeconds: getEnvInt("DISCONNECT_GRACE_SECONDS", 60),

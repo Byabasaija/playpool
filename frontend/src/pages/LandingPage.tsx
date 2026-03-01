@@ -668,7 +668,7 @@ export const LandingPage: React.FC = () => {
               <div className="text-center mb-6">
                 <div className="mb-3">
                   <Link to="/">
-                    <img src="/logo.webp" alt="PlayPool Logo" width={200} height={141} className="mx-auto"/>
+                    <img src="/logo.png" alt="PlayPool Logo" width={200} height={141} className="mx-auto"/>
                   </Link>
                 </div>
                 <h2 className="text-xl font-bold text-[#373536] mb-1">Welcome back{displayNameInput ? `, ${displayNameInput}` : ''}!</h2>
@@ -704,7 +704,7 @@ export const LandingPage: React.FC = () => {
               <div className="max-w-md mx-auto rounded-2xl p-8">
                 <div className="text-center mb-4">
                   <Link to="/">
-                    <img src="/logo.webp" alt="PlayPool Logo" width={200} height={141} className="mx-auto"/>
+                    <img src="/logo.png" alt="PlayPool Logo" width={200} height={141} className="mx-auto"/>
                   </Link>
                 </div>
                 
@@ -829,7 +829,7 @@ export const LandingPage: React.FC = () => {
             <div className="max-w-md mx-auto rounded-2xl p-8">
               <div className="text-center mb-4">
                 <Link to="/">
-                  <img src="/logo.webp" alt="PlayPool Logo" width={200} height={141} className="mx-auto"/>
+                  <img src="/logo.png" alt="PlayPool Logo" width={200} height={141} className="mx-auto"/>
                 </Link>
               </div>
               
@@ -998,7 +998,7 @@ export const LandingPage: React.FC = () => {
               <div className="text-center mb-4 mb-md-5">
                 <div className="mb-3">
                   <Link to="/">
-                    <img src="/logo.webp" alt="PlayPool Logo" width={200} height={141}/>
+                    <img src="/logo.png" alt="PlayPool Logo" width={200} height={141}/>
                   </Link>
                 </div>
               </div>
@@ -1086,7 +1086,7 @@ export const LandingPage: React.FC = () => {
             <div className="text-center mb-4 mb-md-5">
                      <div className="mb-3">
                         <Link to="/">
-                          <img src="/logo.webp" alt="PlayPool Logo" width={200} height={141}/>
+                          <img src="/logo.png" alt="PlayPool Logo" width={200} height={141}/>
                         </Link>
                     </div>
 

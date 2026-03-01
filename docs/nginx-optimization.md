@@ -211,7 +211,7 @@ server {
 ### Test Compression:
 ```bash
 # Check if gzip is working
-curl -I -H "Accept-Encoding: gzip" https://demo.playmatatu.com/logo.webp
+curl -I -H "Accept-Encoding: gzip" https://demo.playmatatu.com/logo.png
 
 # Should see:
 # Content-Encoding: gzip
@@ -221,7 +221,7 @@ curl -I -H "Accept-Encoding: gzip" https://demo.playmatatu.com/logo.webp
 
 ### Test Cache Headers:
 ```bash
-curl -I https://demo.playmatatu.com/logo.webp
+curl -I https://demo.playmatatu.com/logo.png
 
 # Should see:
 # Cache-Control: public, immutable
@@ -262,7 +262,7 @@ curl -I https://demo.playmatatu.com/logo.webp
 ### Cache Busting:
 When you update assets, change filenames or use query strings:
 ```
-/logo.webp?v=2
+/logo.png?v=2
 /background.webp?v=1.2.0
 ```
 

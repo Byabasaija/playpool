@@ -328,7 +328,7 @@ export const JoinPage: React.FC = () => {
       <div className="max-w-md mx-auto rounded-2xl p-8">
         <div className="text-center mb-6">
           <Link to="/">
-            <img src="/logo.webp" alt="PlayPool Logo" width={180} height={127} className="mx-auto" />
+            <img src="/logo.png" alt="PlayPool Logo" width={180} height={127} className="mx-auto" />
           </Link>
         </div>
         <div className="text-center">
@@ -350,7 +350,7 @@ export const JoinPage: React.FC = () => {
       <div className="max-w-md mx-auto rounded-2xl p-8">
         <div className="text-center mb-6">
           <Link to="/">
-            <img src="/logo.webp" alt="PlayPool Logo" width={200} height={141} className="mx-auto"/>
+            <img src="/logo.png" alt="PlayPool Logo" width={200} height={141} className="mx-auto"/>
           </Link>
         </div>
 
@@ -399,7 +399,7 @@ export const JoinPage: React.FC = () => {
       <div className="max-w-md mx-auto rounded-2xl p-8">
         <div className="text-center mb-4">
           <Link to="/">
-            <img src="/logo.webp" alt="PlayPool Logo" width={200} height={141} className="mx-auto"/>
+            <img src="/logo.png" alt="PlayPool Logo" width={200} height={141} className="mx-auto"/>
           </Link>
         </div>
 
@@ -491,7 +491,7 @@ export const JoinPage: React.FC = () => {
       <div className="text-center mb-4 mb-md-5">
         <div className="mb-3">
           <Link to="/">
-            <img src="/logo.webp" alt="PlayPool Logo" width={200} height={141}/>
+            <img src="/logo.png" alt="PlayPool Logo" width={200} height={141}/>
           </Link>
         </div>
       </div>

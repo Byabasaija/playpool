@@ -313,7 +313,7 @@ export const RematchPage: React.FC = () => {
     <div className="max-w-md mx-auto rounded-2xl p-8">
       <div className="text-center mb-4">
         <Link to="/">
-          <img src="/logo.webp" alt="PlayPool Logo" width={160} height={113} className="mx-auto mb-4" />
+          <img src="/logo.png" alt="PlayPool Logo" width={160} height={113} className="mx-auto mb-4" />
         </Link>
       </div>
       <h1 className="text-2xl font-bold text-gray-900 mb-6 text-center">Rematch</h1>
