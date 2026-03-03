@@ -10,6 +10,10 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// disconnectOnce closes the send channel exactly once, causing writePump to
+// exit and close the WebSocket connection. The client will then reconnect and
+// receive a fresh game_state, recovering from any missed messages.
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
@@ -26,6 +30,15 @@ type Client struct {
 	gameID     string
 	gameToken  string
 	send       chan []byte
+	closeOnce  sync.Once
+}
+
+// disconnect closes the send channel exactly once, which causes writePump to
+// exit, the WebSocket connection to close, and the client to reconnect + resync.
+func (c *Client) disconnect() {
+	c.closeOnce.Do(func() {
+		close(c.send)
+	})
 }
 
 // Hub maintains the set of active clients
@@ -63,8 +76,10 @@ func (h *Hub) BroadcastToGame(gameID string, message interface{}) {
 			select {
 			case client.send <- data:
 			default:
-				// Client's buffer is full
-				log.Printf("Client send buffer full for player %s in game %s, dropping message", client.playerID, gameID)
+				// Buffer full — close the connection so the client reconnects and
+				// receives a fresh game_state instead of silently seeing stale data.
+				log.Printf("[WS] Buffer full for player %s in game %s — closing to force resync", client.playerID, gameID)
+				go client.disconnect()
 			}
 		}
 	}
@@ -86,7 +101,9 @@ func (h *Hub) SendToPlayer(playerID string, message interface{}) {
 		case client.send <- data:
 			// sent
 		default:
-			log.Printf("[WS] SendToPlayer dropped message for player %s (buffer full)", playerID)
+			// Buffer full — close to force reconnect + resync instead of silent drop.
+			log.Printf("[WS] Buffer full for player %s — closing to force resync", playerID)
+			go client.disconnect()
 		}
 	} else {
 		log.Printf("[WS] SendToPlayer no client for player %s", playerID)

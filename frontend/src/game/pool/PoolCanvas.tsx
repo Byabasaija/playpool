@@ -833,10 +833,17 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
             if (deflectLen > 0.01) {
               const ndx = deflectDirX / deflectLen;
               const ndy = deflectDirY / deflectLen;
+              // bearing1: cue → contact point; bearing2: contact → target ball centre
               const bearing1 = Math.atan2(closestEnterY - originY, closestEnterX - originX);
               const bearing2 = Math.atan2(ndy, ndx);
-              const angleDiff = Math.abs(Math.atan2(Math.sin(bearing2 - bearing1), Math.cos(bearing2 - bearing1)));
-              const lineLen = BALL_RADIUS * 5 * ((Math.PI / 2 - angleDiff) / (Math.PI / 2));
+              // Signed cut angle — matches original angleDiff(). The sign encodes
+              // which side of the cue the target deflects to; using Math.abs here
+              // (and then guessing direction) breaks near the ±π wrap boundary.
+              const signedCut = Math.atan2(Math.sin(bearing2 - bearing1), Math.cos(bearing2 - bearing1));
+              const absCut = Math.abs(signedCut);
+
+              // Target ball line — longer on head-on hits, zero on grazing hits.
+              const lineLen = BALL_RADIUS * 5 * ((Math.PI / 2 - absCut) / (Math.PI / 2));
               const targetEndX = closestBall.x + ndx * Math.max(lineLen, BALL_RADIUS);
               const targetEndY = closestBall.y + ndy * Math.max(lineLen, BALL_RADIUS);
 
@@ -848,12 +855,11 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
               ctx.lineTo(tex, tey);
               ctx.stroke();
 
-              const cueBearing = bearing1;
-              const cueDeflectAngle = bearing2 > cueBearing
-                ? cueBearing - (Math.PI / 2 - angleDiff)
-                : cueBearing + (Math.PI / 2 - angleDiff);
-              const cueLineLen = BALL_RADIUS * 5 * angleDiff / (Math.PI / 2);
-              if (cueLineLen > BALL_RADIUS * 0.5) {
+              // Cue deflection line — mirrors original: signed length + fixed angle.
+              // A = bearing2 - 90°; S = signed so negative S flips to the right side.
+              const cueLineLen = BALL_RADIUS * 5 * signedCut / (Math.PI / 2);
+              const cueDeflectAngle = bearing2 - Math.PI / 2;
+              if (Math.abs(cueLineLen) > BALL_RADIUS * 0.5) {
                 const cueEndX = closestEnterX + Math.cos(cueDeflectAngle) * cueLineLen;
                 const cueEndY = closestEnterY + Math.sin(cueDeflectAngle) * cueLineLen;
                 const [cex, cey] = physToCanvas(cueEndX, cueEndY);

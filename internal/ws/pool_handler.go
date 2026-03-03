@@ -103,11 +103,7 @@ func runGameHub(h *Hub) {
 					log.Printf("Error writing close control to old client %s: %v", oldClient.playerID, err)
 				}
 				oldClient.conn.Close()
-				select {
-				case <-oldClient.send:
-				default:
-					close(oldClient.send)
-				}
+				oldClient.disconnect()
 				delete(h.clients, client.playerID)
 				if room, exists := h.gameRooms[oldClient.gameID]; exists {
 					delete(room, client.playerID)
@@ -225,11 +221,7 @@ func runGameHub(h *Hub) {
 					}
 				}
 
-				select {
-				case <-client.send:
-				default:
-					close(client.send)
-				}
+				client.disconnect()
 			}
 			h.mu.Unlock()
 		}
@@ -363,10 +355,13 @@ func (c *Client) handleShotComplete(g *game.PoolGameState, data ShotCompleteData
 	}
 	log.Printf("[WS] shot_complete result: %+v, g.BallInHand=%v, g.BallInHandPlayer=%s", result, g.BallInHand, g.BallInHandPlayer)
 
-	// Broadcast shot result to both players
+	// Broadcast shot result to both players.
+	// shot_number matches the game_update that follows — clients use it to
+	// skip ball positions on that specific update (ordering-safe skip).
 	GameHub.BroadcastToGame(c.gameID, map[string]interface{}{
 		"type":           "shot_result",
 		"player":         c.playerID,
+		"shot_number":    g.ShotNumber,
 		"pocketed_balls": result.PocketedBalls,
 		"foul":           result.Foul,
 		"group_assigned": result.GroupAssigned,

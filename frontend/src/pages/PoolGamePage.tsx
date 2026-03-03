@@ -88,9 +88,11 @@ export const PoolGamePage: React.FC = () => {
   // opponent's cue ball position streamed in real-time during their ball-in-hand
   const [opponentBallInHandPos, setOpponentBallInHandPos] = useState<{ x: number; y: number } | null>(null);
   const cueBallMoveThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // after a shot_result we have authoritative local physics positions; skip
-  // ball positions from the next game_update to prevent server rollback
-  const skipNextBallsUpdateRef = useRef(false);
+  // After a shot_result, skip ball positions on the game_update with the same
+  // shot_number — prevents the server echoing pre-animation positions back.
+  // Using shot_number instead of a boolean flag makes this ordering-safe:
+  // if messages arrive out of order, only the correct update is skipped.
+  const skipShotNumRef = useRef<number>(-1);
 
   // Tracks the cue ball position set by handlePlaceCueBall so handleTakeShot
   // always uses the correct physics origin even when the React closure is stale
@@ -185,6 +187,14 @@ export const PoolGamePage: React.FC = () => {
             },
           });
         }
+
+        // Post-animation resync: request fresh state from server after a short
+        // delay to let shot_complete processing complete first (shooter) or to
+        // recover from any dropped game_update (opponent). The response arrives
+        // as game_state which bypasses the shot-number skip and applies fully.
+        setTimeout(() => {
+          sendWSMessageRef.current({ type: 'get_state', data: {} });
+        }, 400);
       },
       (event) => {
         const isFirst = !firstHitRef.current && event.ballId === 0;
@@ -351,12 +361,14 @@ export const PoolGamePage: React.FC = () => {
         break;
 
       case 'game_update': {
-        // strip balls from game_update right after a shot so the server can't
-        // roll back to pre-shot positions (local physics is the authority)
-        const msgToApply = skipNextBallsUpdateRef.current
-          ? { ...message, balls: undefined }
-          : message;
-        skipNextBallsUpdateRef.current = false;
+        // Skip ball positions on the game_update that matches the shot_number
+        // from the most recent shot_result — prevents the server echoing
+        // pre-animation positions back and rolling back local physics.
+        // Clearing after comparison makes the skip fire exactly once per shot.
+        const shouldSkip = skipShotNumRef.current !== -1 &&
+          message.shot_number === skipShotNumRef.current;
+        if (shouldSkip) skipShotNumRef.current = -1;
+        const msgToApply = shouldSkip ? { ...message, balls: undefined } : message;
         updateFromWSMessage(msgToApply);
         if (message.balls && message.balls.length > 0) setGameStarted(true);
         break;
@@ -410,7 +422,10 @@ export const PoolGamePage: React.FC = () => {
         }
 
         applyShotResult(message);
-        skipNextBallsUpdateRef.current = true;
+        // Record the shot_number to skip on the matching game_update.
+        if (message.shot_number !== undefined) {
+          skipShotNumRef.current = message.shot_number;
+        }
         break;
       }
 
