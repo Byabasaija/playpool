@@ -65,8 +65,8 @@ export async function loadPoolAssets(): Promise<PoolAssets> {
     bs9, bs10, bs11, bs12, bs13, bs14, bs15,
     ballHit, cueHit, cushionHit, pocketHit, ding, cheer,
   ] = await Promise.all([
-    loadImage(`${IMG}/cloth.png`),
-    loadImage(`${IMG}/tableTop.png`),
+    loadImage(`${IMG}/cloth.webp`),
+    loadImage(`${IMG}/tableTop.webp`),
     loadImage(`${IMG}/pockets.png`),
     loadImage(`${IMG}/cue.png`),
     loadImage(`${IMG}/cueShadow.png`),

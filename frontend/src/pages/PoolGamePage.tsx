@@ -431,6 +431,7 @@ export const PoolGamePage: React.FC = () => {
         break;
 
       case 'player_connected':
+        setDisconnectRemaining(null);
         break;
 
       case 'player_disconnected':
@@ -649,6 +650,7 @@ export const PoolGamePage: React.FC = () => {
       showGuideLine={showGuideLine}
       pocketingBalls={pocketingBalls}
       aimAngleRef={aimAngleRef}
+      isPortrait={effectiveTouch && isPortrait}
     />
   );
 
@@ -694,7 +696,7 @@ export const PoolGamePage: React.FC = () => {
         {playerBarEl}
         <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
           {/* Left — power bar */}
-          <PowerBar poolCanvasRef={poolCanvasRef} assets={assets} isPortrait={isPortrait} />
+          <PowerBar poolCanvasRef={poolCanvasRef} assets={assets} isPortrait={effectiveTouch && isPortrait} />
 
           {/* Centre — canvas */}
           <div style={{ flex: 1, minWidth: 0, height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>

@@ -136,6 +136,9 @@ interface PoolCanvasProps {
   onBallInHandPosChanged?: (pos: { cx: number; cy: number } | null) => void;
   // increments when a scratch occurred (resets ghost when ballInHand)
   scratchCount?: number;
+  // when true the game panel parent is CSS-rotated 90° CW (portrait mobile).
+  // clientToCanvas must invert the rotation to produce correct canvas coords.
+  isPortrait?: boolean;
 }
 
 
@@ -155,6 +158,7 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
   onBallInHandPosChanged,
   scratchCount = 0,
   aimAngleRef,
+  isPortrait = false,
 }, ref) => {
   // support high-DPI displays by scaling canvas buffer to devicePixelRatio
   const dpr = window.devicePixelRatio || 1;
@@ -317,6 +321,8 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
   const lastPointerRef = useRef<{ mx: number; my: number } | null>(null);
   const mouseDownRef = useRef(false);
   const lastPointerTypeRef = useRef<string>('mouse'); // 'mouse' | 'touch' | 'pen'
+  const isPortraitRef = useRef(isPortrait);
+  isPortraitRef.current = isPortrait;
 
   // touch rotary aim state (mirrors original 8Ball: startCue, startAng, aimSensitivity)
   const touchStartCueRef = useRef(0);
@@ -946,12 +952,20 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
     const canvas = canvasRef.current;
     if (!canvas) return { mx: 0, my: 0 };
     const rect = canvas.getBoundingClientRect();
-    // use actual drawing buffer size in case CSS scales the element or
-    // the devicePixelRatio differs from 1
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    let mx = (clientX - rect.left) * scaleX;
-    let my = (clientY - rect.top) * scaleY;
+    let mx: number, my: number;
+    if (isPortraitRef.current) {
+      // Parent is CSS-rotated 90° CW so the canvas AABB has swapped axes.
+      // Invert the rotation: viewport-x → canvas-y, viewport-y → canvas-x (flipped).
+      const vxFrac = (clientX - rect.left) / rect.width;
+      const vyFrac = (clientY - rect.top) / rect.height;
+      mx = vyFrac * canvas.width;
+      my = (1 - vxFrac) * canvas.height;
+    } else {
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      mx = (clientX - rect.left) * scaleX;
+      my = (clientY - rect.top) * scaleY;
+    }
     return { mx, my };
   }, []);
 
@@ -1008,8 +1022,12 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
     if (!ballInHandRef.current && cue.phase !== 'aiming') return;
 
     let { mx, my } = clientToCanvas(e.clientX, e.clientY);
+    // offsetX/offsetY are in the element's pre-transform coordinate space and
+    // give more precise coords for mouse events. Skip them in portrait mode
+    // (parent is rotated 90°) since cross-browser behaviour is unreliable there;
+    // clientToCanvas already applies the inverse rotation for that case.
     const evtAny = e as any;
-    if (evtAny.offsetX !== undefined && evtAny.offsetY !== undefined && canvasRef.current) {
+    if (!isPortraitRef.current && evtAny.offsetX !== undefined && evtAny.offsetY !== undefined && canvasRef.current) {
       const canvas = canvasRef.current;
       const scaleX = canvas.width / canvas.clientWidth;
       const scaleY = canvas.height / canvas.clientHeight;
@@ -1025,6 +1043,19 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
     // If ball-in-hand, check if pointer is on the mover. Mover center = physics
     // ball 0 position (or current drag position if already dragging).
     if (ballInHandRef.current) {
+      // On touch (mobile): any tap on the canvas during ball-in-hand starts
+      // dragging from the tapped position. This mirrors the original Phaser
+      // behaviour where the mover sprite's full bounding box was the hit area
+      // and touching near the ball was always interpreted as a drag intent.
+      // On mouse (desktop): require a precise hit on the mover sprite.
+      if (e.pointerType !== 'mouse') {
+        const constrained = constrainBallInHand(mx, my, isBreakShotRef.current);
+        ballInHandDraggingRef.current = true;
+        ballInHandPosRef.current = constrained;
+        try { (e.currentTarget as Element).setPointerCapture(e.pointerId); } catch {}
+        return;
+      }
+      // Mouse: require hit within the mover sprite area
       const cueBall0 = ballsRef.current.find(b => b.id === 0 && b.active);
       let moverCX: number, moverCY: number;
       if (ballInHandDraggingRef.current && ballInHandPosRef.current) {
@@ -1036,13 +1067,12 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
         moverCX = TABLE_CX; moverCY = TABLE_CY;
       }
       if (Math.hypot(mx - moverCX, my - moverCY) <= BALL_R_PX * 5) {
-        // start dragging the mover from the ball's current position
         ballInHandDraggingRef.current = true;
         ballInHandPosRef.current = { cx: moverCX, cy: moverCY };
-        try { (e.currentTarget as Element).setPointerCapture(e.pointerId); } catch {};
-        return; // don't also start an aim gesture
+        try { (e.currentTarget as Element).setPointerCapture(e.pointerId); } catch {}
+        return;
       }
-      // click not on mover — fall through to aim so player can shoot directly
+      // mouse click not on mover — fall through to aim
     }
 
     // Aim setup: compute cue origin from physics ball 0 (always real now)
@@ -1061,7 +1091,7 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
       } else {
         touchStartCueRef.current = aimAngleRef.current;
         touchStartAngRef.current = Math.atan2(my - oy, mx - ox);
-        touchSensitivityRef.current = 0.5;
+        touchSensitivityRef.current = 1.0;
         touchAimActiveRef.current = true;
       }
     }
@@ -1084,7 +1114,7 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
 
     let { mx, my } = clientToCanvas(e.clientX, e.clientY);
     const evtAny = e as any;
-    if (evtAny.offsetX !== undefined && evtAny.offsetY !== undefined && canvasRef.current) {
+    if (!isPortraitRef.current && evtAny.offsetX !== undefined && evtAny.offsetY !== undefined && canvasRef.current) {
       const canvas = canvasRef.current;
       const scaleX = canvas.width / canvas.clientWidth;
       const scaleY = canvas.height / canvas.clientHeight;
@@ -1253,7 +1283,9 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
         width={CANVAS_WIDTH * dpr}
         height={CANVAS_HEIGHT * dpr}
         style={{
-          width: '100%',
+          maxWidth: '100%',
+          maxHeight: '100%',
+          width: 'auto',
           height: 'auto',
           aspectRatio: `${CANVAS_WIDTH}/${CANVAS_HEIGHT}`,
           touchAction: 'none',

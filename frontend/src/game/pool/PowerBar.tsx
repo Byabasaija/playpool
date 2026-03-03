@@ -32,20 +32,24 @@ export default function PowerBar({ poolCanvasRef, isPortrait = false }: PowerBar
   const onDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    startY.current = e.clientY;
+    // Portrait: bar is horizontal in viewport — track clientX for left/right drag
+    // Landscape: bar is vertical in viewport — track clientY for up/down drag
+    startY.current = isPortrait ? e.clientX : e.clientY;
     dragStarted.current = false;
     setFill(0);
     // Capture pointer so drag works even if finger leaves the element
     try { barRef.current?.setPointerCapture(e.pointerId); } catch {}
-  }, []);
+  }, [isPortrait]);
 
   const onMove = useCallback((e: React.PointerEvent) => {
     if (startY.current === null) return;
     e.preventDefault();
     e.stopPropagation();
-    // Portrait: bar sits at the bottom of the screen — drag UP (decreasing clientY) = more power
-    // Landscape: bar on the left — drag DOWN (increasing clientY) = more power
-    const dy = isPortrait ? (startY.current - e.clientY) : (e.clientY - startY.current);
+    // Portrait: bar horizontal at bottom — drag LEFT (decreasing clientX) = more power
+    //   (layout-down = viewport-left since game panel is rotated 90° CW)
+    // Landscape: bar vertical at left — drag DOWN (increasing clientY) = more power
+    const primary = isPortrait ? e.clientX : e.clientY;
+    const dy = isPortrait ? (startY.current - primary) : (primary - startY.current);
 
     // Only start drag after meaningful downward movement
     if (!dragStarted.current) {
