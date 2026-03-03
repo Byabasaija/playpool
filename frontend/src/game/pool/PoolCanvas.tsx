@@ -564,13 +564,12 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
         return 0;
       });
 
-      // Draw shadows — cue ball uses drag position during mover drag so it
-      // follows the mover visually before physics is updated on pointer-up.
+      // Draw shadows — cue ball uses dragged position while placing (not during animation).
       const shadowSize = BALL_R_PX * 4;
       for (const ball of sortedBalls) {
         if (!ball.active) continue;
         let bx: number, by: number;
-        if (ball.id === 0 && isDraggingMover && ballInHandPos) {
+        if (ball.id === 0 && ballInHandPos && !animating) {
           bx = ballInHandPos.cx; by = ballInHandPos.cy;
         } else {
           [bx, by] = physToCanvas(ball.x, ball.y);
@@ -581,11 +580,11 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
         ctx.restore();
       }
 
-      // Draw balls — same: cue ball follows drag position when dragging mover
+      // Draw balls — cue ball follows dragged position while placing, physics during shot.
       for (const ball of sortedBalls) {
         if (!ball.active) continue;
         let bx: number, by: number;
-        if (ball.id === 0 && isDraggingMover && ballInHandPos) {
+        if (ball.id === 0 && ballInHandPos && !animating) {
           bx = ballInHandPos.cx; by = ballInHandPos.cy;
         } else {
           [bx, by] = physToCanvas(ball.x, ball.y);
@@ -599,9 +598,9 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
       if (ballInHand) {
         let moverPos: { cx: number; cy: number } | null = null;
         if (myTurn) {
-          if (ballInHandDraggingRef.current && ballInHandPos) {
+          if (ballInHandPos && !animating) {
             moverPos = ballInHandPos;
-          } else {
+          } else if (!animating) {
             const cb = currentBalls.find(b => b.id === 0 && b.active);
             if (cb) { const [mx2, my2] = physToCanvas(cb.x, cb.y); moverPos = { cx: mx2, cy: my2 }; }
           }
@@ -619,7 +618,7 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
       }
 
       // === BALL GROUP MARKERS ===
-      if (myTurn && !animating && !ballInHand && myGroup !== 'ANY') {
+      if (myTurn && !animating && myGroup !== 'ANY') {
         for (const ball of sortedBalls) {
           if (!ball.active || ball.id === 0) continue;
           const isSolid = ball.id >= 1 && ball.id <= 7;
@@ -673,9 +672,9 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
       // when we're in ball-in-hand, always consider the ghost position as the
       // cue origin; ignore the real cueBall coordinate which may linger at the
       // pocket.  otherwise use the live cue ball if present.
-      // Use drag position as cue origin only while actively dragging the mover;
-      // otherwise always aim from the real physics ball.
-      const effectiveCueOrigin = isDraggingMover && ballInHandPos ? 'ghost' : 'real';
+      // Use the dragged/placed position as cue origin whenever one exists —
+      // this covers both active dragging and after release (before shot commits).
+      const effectiveCueOrigin = ballInHandPos ? 'ghost' : 'real';
       // Cue is visible whenever it's our turn — ball-in-hand no longer hides it.
       // Hide only while actively dragging or hovering the mover.
       const showCue = cueBall &&
@@ -732,11 +731,20 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
 
           if (cueOffset <= baseGap && !shotFiredRef.current) {
             shotFiredRef.current = true;
-            // if the player shot without dragging the mover, auto-place the ball
-            // at its current physics position so breakBallPlaced is set correctly
+            // Commit the cue ball position at shot time: use the dragged position
+            // if the player placed it, otherwise fall back to the physics ball.
+            // ballInHandPosRef is kept (not nulled) so the cue stick animates from
+            // the correct origin; it is cleared by useEffect when ballInHand prop
+            // becomes false after the shot completes.
             if (ballInHandRef.current) {
-              const cb = ballsRef.current.find(b => b.id === 0 && b.active);
-              if (cb) { ballInHandRef.current = false; onPlaceCueBallRef.current(cb.x, cb.y); }
+              ballInHandRef.current = false;
+              if (ballInHandPosRef.current) {
+                const [phyX, phyY] = canvasToPhys(ballInHandPosRef.current.cx, ballInHandPosRef.current.cy);
+                onPlaceCueBallRef.current(phyX, phyY);
+              } else {
+                const cb = ballsRef.current.find(b => b.id === 0 && b.active);
+                if (cb) { onPlaceCueBallRef.current(cb.x, cb.y); }
+              }
             }
             onTakeShotRef.current({ angle: cue.shotAngle, power: cue.shotPower, screw: 0, english: 0 });
           }
@@ -825,7 +833,7 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
             if (deflectLen > 0.01) {
               const ndx = deflectDirX / deflectLen;
               const ndy = deflectDirY / deflectLen;
-              const bearing1 = Math.atan2(closestEnterY - cueBall.y, closestEnterX - cueBall.x);
+              const bearing1 = Math.atan2(closestEnterY - originY, closestEnterX - originX);
               const bearing2 = Math.atan2(ndy, ndx);
               const angleDiff = Math.abs(Math.atan2(Math.sin(bearing2 - bearing1), Math.cos(bearing2 - bearing1)));
               const lineLen = BALL_RADIUS * 5 * ((Math.PI / 2 - angleDiff) / (Math.PI / 2));
@@ -978,11 +986,17 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
     let duration = 1 / (shotPower / 1000);
     duration = Math.max(80, Math.min(600, duration * 1000));
 
-    const cueBall = ballsRef.current.find((b) => b.id === 0 && b.active);
-    if (cueBall) {
-      const [scx, scy] = physToCanvas(cueBall.x, cueBall.y);
-      cue.strikeCanvasX = scx;
-      cue.strikeCanvasY = scy;
+    // Use dragged position if ball-in-hand, otherwise live physics position.
+    if (ballInHandPosRef.current) {
+      cue.strikeCanvasX = ballInHandPosRef.current.cx;
+      cue.strikeCanvasY = ballInHandPosRef.current.cy;
+    } else {
+      const cueBall = ballsRef.current.find((b) => b.id === 0 && b.active);
+      if (cueBall) {
+        const [scx, scy] = physToCanvas(cueBall.x, cueBall.y);
+        cue.strikeCanvasX = scx;
+        cue.strikeCanvasY = scy;
+      }
     }
 
     cue.phase = 'striking';
@@ -1043,22 +1057,10 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
     // If ball-in-hand, check if pointer is on the mover. Mover center = physics
     // ball 0 position (or current drag position if already dragging).
     if (ballInHandRef.current) {
-      // On touch (mobile): any tap on the canvas during ball-in-hand starts
-      // dragging from the tapped position. This mirrors the original Phaser
-      // behaviour where the mover sprite's full bounding box was the hit area
-      // and touching near the ball was always interpreted as a drag intent.
-      // On mouse (desktop): require a precise hit on the mover sprite.
-      if (e.pointerType !== 'mouse') {
-        const constrained = constrainBallInHand(mx, my, isBreakShotRef.current);
-        ballInHandDraggingRef.current = true;
-        ballInHandPosRef.current = constrained;
-        try { (e.currentTarget as Element).setPointerCapture(e.pointerId); } catch {}
-        return;
-      }
-      // Mouse: require hit within the mover sprite area
+      // Find the current mover position (last dragged or physics ball).
       const cueBall0 = ballsRef.current.find(b => b.id === 0 && b.active);
       let moverCX: number, moverCY: number;
-      if (ballInHandDraggingRef.current && ballInHandPosRef.current) {
+      if (ballInHandPosRef.current) {
         moverCX = ballInHandPosRef.current.cx;
         moverCY = ballInHandPosRef.current.cy;
       } else if (cueBall0) {
@@ -1066,20 +1068,26 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
       } else {
         moverCX = TABLE_CX; moverCY = TABLE_CY;
       }
-      if (Math.hypot(mx - moverCX, my - moverCY) <= BALL_R_PX * 5) {
+      // Touch: generous hit radius so it's easy to grab on mobile.
+      // Mouse: standard radius. Both fall through to aim/shot if outside radius.
+      const hitRadius = e.pointerType !== 'mouse' ? BALL_R_PX * 8 : BALL_R_PX * 5;
+      if (Math.hypot(mx - moverCX, my - moverCY) <= hitRadius) {
         ballInHandDraggingRef.current = true;
         ballInHandPosRef.current = { cx: moverCX, cy: moverCY };
         try { (e.currentTarget as Element).setPointerCapture(e.pointerId); } catch {}
         return;
       }
-      // mouse click not on mover — fall through to aim
+      // Pointer not on mover — fall through to aim/shot handling.
     }
 
-    // Aim setup: compute cue origin from physics ball 0 (always real now)
+    // Aim setup: use dragged position if available, otherwise physics ball 0.
     {
       const cueBall = ballsRef.current.find((b) => b.id === 0 && b.active);
       let ox: number, oy: number;
-      if (cueBall) {
+      if (ballInHandPosRef.current) {
+        ox = ballInHandPosRef.current.cx;
+        oy = ballInHandPosRef.current.cy;
+      } else if (cueBall) {
         [ox, oy] = physToCanvas(cueBall.x, cueBall.y);
       } else {
         ox = TABLE_CX; oy = TABLE_CY;
@@ -1133,14 +1141,18 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
       return;
     }
 
-    // hover detection for mover — test against physics ball 0 position.
+    // hover detection for mover — use dragged position if available.
     // Does NOT return early; aim and power drag still run below.
     if (ballInHandRef.current && !ballInHandDraggingRef.current) {
-      const cb0 = ballsRef.current.find(b => b.id === 0 && b.active);
-      if (cb0) {
-        const [bx, by] = physToCanvas(cb0.x, cb0.y);
-        ballInHandHoverRef.current = Math.hypot(mx - bx, my - by) <= BALL_R_PX * 5;
+      let bx: number, by: number;
+      if (ballInHandPosRef.current) {
+        bx = ballInHandPosRef.current.cx;
+        by = ballInHandPosRef.current.cy;
+      } else {
+        const cb0 = ballsRef.current.find(b => b.id === 0 && b.active);
+        if (cb0) { [bx, by] = physToCanvas(cb0.x, cb0.y); } else { bx = TABLE_CX; by = TABLE_CY; }
       }
+      ballInHandHoverRef.current = Math.hypot(mx - bx, my - by) <= BALL_R_PX * 5;
       moverAlphaRef.current = ballInHandHoverRef.current ? 1 : 0.8;
     }
 
@@ -1233,13 +1245,9 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
     mouseDownRef.current = false;
     touchAimActiveRef.current = false;
 
-    if (ballInHandRef.current && ballInHandDraggingRef.current && ballInHandPosRef.current) {
-      const { cx, cy } = ballInHandPosRef.current;
-      const [px, py] = canvasToPhys(cx, cy);
-      // clear local flag immediately so future clicks will fire shots
-      ballInHandRef.current = false;
-      onPlaceCueBallRef.current(px, py);
-      ballInHandPosRef.current = null;
+    if (ballInHandRef.current && ballInHandDraggingRef.current) {
+      // Drop the ball without committing — player can pick it up again and
+      // re-position before taking their shot. Position is committed at shot time.
       ballInHandDraggingRef.current = false;
       draggingUIRef.current = false;
       try { (e.currentTarget as Element).releasePointerCapture(e.pointerId); } catch (err) {}
