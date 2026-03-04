@@ -1,5 +1,7 @@
 package game
 
+import "math"
+
 // CushionLine represents a cushion wall segment with precomputed collision surfaces.
 type CushionLine struct {
 	Name      string `json:"name"`
@@ -130,8 +132,8 @@ func Standard8BallRack() [NumBalls]Vec2 {
 	var pos [NumBalls]Vec2
 
 	i := 15000 * AdjustmentScale // 34500
-	e := 1.782                   // 1.732 + 0.05 (fixed, no random)
-	s := 1.05                    // 1.0 + 0.05 (fixed, no random)
+	e := math.Sqrt(3)            // √3 ≈ 1.732: exact row spacing for touching balls
+	s := 1.0                     // exact Y spacing for touching balls
 	br := BallRadius
 
 	// Cue ball (far left)

@@ -96,7 +96,6 @@ func runGameHub(h *Hub) {
 		case client := <-h.register:
 			h.mu.Lock()
 
-			isReconnect := false
 			if oldClient, exists := h.clients[client.playerID]; exists {
 				log.Printf("[WS] Player %s reconnecting - closing old connection", client.playerID)
 				if err := oldClient.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "replaced by new connection"), time.Now().Add(5*time.Second)); err != nil {
@@ -108,7 +107,6 @@ func runGameHub(h *Hub) {
 				if room, exists := h.gameRooms[oldClient.gameID]; exists {
 					delete(room, client.playerID)
 				}
-				isReconnect = true
 			}
 
 			h.clients[client.playerID] = client
@@ -180,7 +178,10 @@ func runGameHub(h *Hub) {
 				}
 			}
 
-			if isReconnect && g.Status == game.StatusInProgress {
+			// Broadcast player_connected whenever the game is in progress.
+			// This covers both replacing a live connection (isReconnect) and
+			// reconnecting after the old socket was already cleaned up (reload).
+			if g.Status == game.StatusInProgress {
 				h.BroadcastToGame(client.gameID, map[string]interface{}{
 					"type":    "player_connected",
 					"player":  client.playerID,

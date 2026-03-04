@@ -72,7 +72,6 @@ export default function FoulNotification({ message, isFoul, pocketedBalls }: Fou
     >
       {balls ? (
         <div className="flex items-center gap-1.5">
-          <span>Pocketed:</span>
           {balls.map(id => <BallSprite key={id} ballId={id} size={22} />)}
         </div>
       ) : (

@@ -368,8 +368,10 @@ export class PhysicsEngine {
       ball.firstContactMade = true;
     }
 
-    const newBallNormal = targetNormal.times(BALL_RESTITUTION).plus(ballNormal.times(1 - BALL_RESTITUTION));
-    const newTargetNormal = ballNormal.times(BALL_RESTITUTION).plus(targetNormal.times(1 - BALL_RESTITUTION));
+    // Standard equal-mass COR: Δv = (1+e)/2 × (u1−u2), v1 = u1−Δv, v2 = u2+Δv
+    const dv = ballNormal.minus(targetNormal).times((1 + BALL_RESTITUTION) / 2);
+    const newBallNormal = ballNormal.minus(dv);
+    const newTargetNormal = targetNormal.plus(dv);
 
     ball.velocity = ballTangent.plus(newBallNormal);
     target.velocity = targetTangent.plus(newTargetNormal);

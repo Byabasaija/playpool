@@ -404,7 +404,14 @@ func (g *PoolGameState) ApplyShotResult(playerID string, clientData ClientShotDa
 		g.switchTurn()
 		g.BallInHand = true
 		g.BallInHandPlayer = g.CurrentTurn
-		g.Balls[0].Active = true
+		// For non-scratch fouls ball 0 is already active on the table.
+		// For scratch (cueBallPocketed), ball 0 was just set inactive above —
+		// leave it inactive so the server does not send it back at pocket coordinates.
+		// The client's ball-in-hand useEffect restores it to the head spot visually,
+		// and PlaceCueBall will re-activate it once the player places it.
+		if !cueBallPocketed {
+			g.Balls[0].Active = true
+		}
 		result.TurnChange = true
 		result.NextTurn = g.CurrentTurn
 		result.BallInHand = true
