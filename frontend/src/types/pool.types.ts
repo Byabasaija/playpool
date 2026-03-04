@@ -77,6 +77,7 @@ export type PoolWSMessageType =
 export interface PoolWSMessage {
   type: PoolWSMessageType;
   message?: string;
+  breaker?: string; // game_starting: player ID who won the coin toss
   // game_state / game_update fields
   game_id?: string;
   my_id?: string;

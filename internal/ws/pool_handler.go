@@ -151,6 +151,7 @@ func runGameHub(h *Hub) {
 
 					h.BroadcastToGame(client.gameID, map[string]interface{}{
 						"type":    "game_starting",
+						"breaker": gRef.CurrentTurn,
 						"message": "Both players connected! Break shot...",
 					})
 

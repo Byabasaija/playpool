@@ -32,6 +32,7 @@ export const PoolGamePage: React.FC = () => {
   const [animating, setAnimating] = useState(false);
   const [foulMessage, setFoulMessage] = useState<string | null>(null);
   const [isFoul, setIsFoul] = useState(false);
+  const [notifPocketedBalls, setNotifPocketedBalls] = useState<number[] | null>(null);
   const [screw, setScrew] = useState(0);
   const [english, setEnglish] = useState(0);
   const [showGuideLine, setShowGuideLine] = useState(true);
@@ -140,7 +141,7 @@ export const PoolGamePage: React.FC = () => {
 
   // Sound manager (created once assets load)
   const soundRef = useRef<SoundManager | null>(null);
-  const firstHitRef = useRef(false);
+
 
   // Collision tracking for shot_complete (client-authoritative physics)
   const isMyShotRef = useRef(false);
@@ -197,9 +198,7 @@ export const PoolGamePage: React.FC = () => {
         }, 400);
       },
       (event) => {
-        const isFirst = !firstHitRef.current && event.ballId === 0;
-        if (isFirst) firstHitRef.current = true;
-        soundRef.current?.playCollision(event, isFirst);
+        soundRef.current?.playCollision(event);
 
         if (isMyShotRef.current) {
           console.log('[Shot] onCollision event:', event.type, 'ballId:', event.ballId, 'targetId:', event.targetId);
@@ -349,6 +348,11 @@ export const PoolGamePage: React.FC = () => {
 
       case 'game_starting':
         setGameStarted(true);
+        if (message.breaker) {
+          const iBreak = message.breaker === gameState.playerId;
+          setFoulMessage(iBreak ? 'You won the coin toss — you break!' : 'Opponent won the coin toss — they break!');
+          setIsFoul(false);
+        }
         break;
 
       case 'game_state':
@@ -378,7 +382,6 @@ export const PoolGamePage: React.FC = () => {
         const relayParams = message.shot_params;
         if (relayParams) {
           setAnimating(true);
-          firstHitRef.current = false;
           soundRef.current?.resumeAudioContext();
           animatorRef.current?.start(
             gameState.balls,
@@ -413,10 +416,12 @@ export const PoolGamePage: React.FC = () => {
         if (message.foul) {
           setFoulMessage(message.foul.message);
           setIsFoul(true);
+          setNotifPocketedBalls(null);
         } else if (message.pocketed_balls && message.pocketed_balls.length > 0) {
           const pocketed = message.pocketed_balls.filter(id => id !== 0);
           if (pocketed.length > 0) {
-            setFoulMessage(`Pocketed: ${pocketed.join(', ')}`);
+            setNotifPocketedBalls(pocketed);
+            setFoulMessage('pocketed');
             setIsFoul(false);
           }
         }
@@ -500,6 +505,7 @@ export const PoolGamePage: React.FC = () => {
       usedPending: ballsForShot !== gameState.balls,
     });
     sendWSMessage({ type: 'take_shot', data: fullParams });
+    soundRef.current?.playCueStrike();
 
     // Reset collision tracking for this shot
     isMyShotRef.current = true;
@@ -513,7 +519,6 @@ export const PoolGamePage: React.FC = () => {
 
     // Start local animation immediately
     setAnimating(true);
-    firstHitRef.current = false;
     soundRef.current?.resumeAudioContext();
     animatorRef.current?.start(
       ballsForShot,
@@ -741,7 +746,7 @@ export const PoolGamePage: React.FC = () => {
             </button>
           </div>
         </div>
-        <FoulNotification message={foulMessage} isFoul={isFoul} />
+        <FoulNotification message={foulMessage} isFoul={isFoul} pocketedBalls={notifPocketedBalls} />
         {disconnectEl}
       </div>
     );
@@ -809,7 +814,7 @@ export const PoolGamePage: React.FC = () => {
         </div>
       </div>
 
-      <FoulNotification message={foulMessage} isFoul={isFoul} />
+      <FoulNotification message={foulMessage} isFoul={isFoul} pocketedBalls={notifPocketedBalls} />
       {disconnectEl}
     </div>
   );

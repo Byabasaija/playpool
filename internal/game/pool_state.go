@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"math"
+	"math/rand"
 	"sync"
 	"time"
 )
@@ -163,8 +164,12 @@ func (g *PoolGameState) Initialize() error {
 		}
 	}
 
-	// Player 1 breaks
-	g.CurrentTurn = g.Player1.ID
+	// Coin toss: randomly pick who breaks
+	if rand.Intn(2) == 0 {
+		g.CurrentTurn = g.Player1.ID
+	} else {
+		g.CurrentTurn = g.Player2.ID
+	}
 	g.IsBreakShot = true
 	g.ShotNumber = 0
 

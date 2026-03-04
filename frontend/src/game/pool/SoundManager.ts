@@ -27,19 +27,20 @@ export class SoundManager {
     this.enabled = enabled;
   }
 
+  /** Play the cue-stick-hitting-cue-ball sound at shot start. */
+  playCueStrike(): void {
+    if (this.enabled) this.play(this.assets.audio.cueHit, 0.8);
+  }
+
   /** Play a sound effect for a physics collision event. */
-  playCollision(event: CollisionEvent, isFirstHit: boolean): void {
+  playCollision(event: CollisionEvent): void {
     if (!this.enabled) return;
     const vol = Math.min(1, event.speed / 4000);
     if (vol < 0.05) return;
 
     switch (event.type) {
       case 'ball':
-        if (event.ballId === 0 && isFirstHit) {
-          this.play(this.assets.audio.cueHit, vol);
-        } else {
-          this.play(this.assets.audio.ballHit, vol);
-        }
+        this.play(this.assets.audio.ballHit, vol);
         break;
       case 'line':
       case 'vertex':
