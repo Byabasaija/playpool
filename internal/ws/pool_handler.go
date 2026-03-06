@@ -177,18 +177,35 @@ func runGameHub(h *Hub) {
 					p2State["type"] = "game_state"
 					h.SendToPlayer(gRef.Player1.ID, p1State)
 					h.SendToPlayer(gRef.Player2.ID, p2State)
+
+					// Start server-side thinking timer for the break-shot player.
+					launchThinkingTimer(gRef.Token, gRef.ID, gRef.CurrentTurn, gRef.ShotNumber, gRef.GetTurnExpiresAt())
 				}(g)
 			} else if g.Status == game.StatusWaiting {
 				h.SendToPlayer(client.playerID, map[string]interface{}{
 					"type":    "waiting_for_opponent",
 					"message": "Waiting for opponent...",
 				})
+			} else if g.Status == game.StatusCompleted {
+				// Game is already over — send the appropriate terminal message.
+				if g.WinType == "draw" && g.Winner == "" {
+					// Cancelled because both players disconnected
+					h.SendToPlayer(client.playerID, map[string]interface{}{
+						"type":    "game_cancelled",
+						"message": "Game was cancelled — both players disconnected. Your stake has been refunded.",
+					})
+				} else {
+					// Normal game over — send final state so GameOverScreen renders.
+					state := g.GetGameStateForPlayer(client.playerID)
+					state["type"] = "game_state"
+					h.SendToPlayer(client.playerID, state)
+				}
 			} else {
-				// Reconnect: game already in progress.
-				// Send game logic state (no ball positions) — the server never stores
-				// X/Y positions; the client physics engine owns those.
+				// Reconnect: game in progress.
+				// Send server-side state including ball active flags (positions may be
+				// stale but active/inactive is always correct). The sync_request below
+				// asks the live opponent for accurate X/Y which overrides these on arrival.
 				state := g.GetGameStateForPlayer(client.playerID)
-				delete(state, "balls")
 				state["type"] = "game_state"
 				h.SendToPlayer(client.playerID, state)
 
@@ -202,7 +219,7 @@ func runGameHub(h *Hub) {
 						"target": client.playerID,
 					})
 				} else {
-					log.Printf("[WS] Reconnect: opponent not connected for player %s — physics state unavailable", client.playerID)
+					log.Printf("[WS] Reconnect: opponent offline — using server ball state only for player %s", client.playerID)
 				}
 			}
 
@@ -257,21 +274,81 @@ func runGameHub(h *Hub) {
 								state["type"] = "game_update"
 								h.SendToPlayer(pid, state)
 							}
+							launchThinkingTimer(client.gameToken, client.gameID, nextTurn, shotNum, g.GetTurnExpiresAt())
 						}
 
 						go func(token, gameID, playerID string) {
+							const graceSeconds = 30
+
+							// Brief delay to ignore transient flaps (e.g. page refresh).
 							time.Sleep(500 * time.Millisecond)
-							if g2, err := game.Manager.GetGameByToken(token); err == nil {
-								if p := g2.GetPlayerByID(playerID); p != nil && !p.Connected && p.DisconnectedAt != nil && time.Since(*p.DisconnectedAt) >= 500*time.Millisecond {
-									graceSeconds := game.Manager.GetConfig().DisconnectGraceSeconds
-									h.BroadcastToGame(gameID, map[string]interface{}{
-										"type":            "player_disconnected",
-										"player":          playerID,
-										"grace_seconds":   graceSeconds,
-										"disconnected_at": p.DisconnectedAt.Unix(),
-										"message":         fmt.Sprintf("Opponent disconnected. Waiting %d seconds...", graceSeconds),
-									})
-								}
+
+							g2, err := game.Manager.GetGameByToken(token)
+							if err != nil || g2.Status != game.StatusInProgress {
+								return
+							}
+							p := g2.GetPlayerByID(playerID)
+							if p == nil || p.Connected {
+								return // already reconnected
+							}
+
+							oppID := g2.GetOpponentID(playerID)
+							opp := g2.GetPlayerByID(oppID)
+
+							if opp != nil && !opp.Connected {
+								// Both players offline — cancel and refund stakes immediately.
+								g2.CancelByBothDisconnect()
+								g2.SaveToRedis()
+								h.BroadcastToGame(gameID, map[string]interface{}{
+									"type":    "game_cancelled",
+									"message": "Game cancelled — both players disconnected. Stakes refunded.",
+								})
+								log.Printf("[WS] Both players disconnected — cancelled game %s, stakes refunded", gameID)
+								return
+							}
+
+							// Only playerID is disconnected — notify and start 30-second forfeit timer.
+							h.BroadcastToGame(gameID, map[string]interface{}{
+								"type":          "player_disconnected",
+								"player":        playerID,
+								"grace_seconds": graceSeconds,
+								"message":       fmt.Sprintf("Opponent disconnected. Waiting %d seconds...", graceSeconds),
+							})
+
+							time.Sleep(graceSeconds * time.Second)
+
+							g3, err2 := game.Manager.GetGameByToken(token)
+							if err2 != nil || g3.Status != game.StatusInProgress {
+								return // game already resolved
+							}
+							p2 := g3.GetPlayerByID(playerID)
+							if p2 == nil || p2.Connected {
+								return // player came back in time
+							}
+							opp2 := g3.GetPlayerByID(oppID)
+							if opp2 != nil && !opp2.Connected {
+								// Both still offline after grace — cancel + refund.
+								g3.CancelByBothDisconnect()
+								g3.SaveToRedis()
+								h.BroadcastToGame(gameID, map[string]interface{}{
+									"type":    "game_cancelled",
+									"message": "Game cancelled — both players disconnected. Stakes refunded.",
+								})
+								log.Printf("[WS] Both players still offline after grace — cancelled game %s", gameID)
+								return
+							}
+
+							// Forfeit the player who did not reconnect.
+							g3.ForfeitByDisconnect(playerID)
+							g3.SaveToRedis()
+							log.Printf("[WS] Player %s forfeited by disconnect in game %s — winner: %s", playerID, gameID, g3.Winner)
+
+							// Broadcast final state — winner field triggers GameOverScreen on both clients.
+							for _, pid := range []string{g3.Player1.ID, g3.Player2.ID} {
+								state := g3.GetGameStateForPlayer(pid)
+								delete(state, "balls")
+								state["type"] = "game_update"
+								h.SendToPlayer(pid, state)
 							}
 						}(client.gameToken, client.gameID, client.playerID)
 					}
@@ -431,7 +508,7 @@ func (c *Client) handleTakeShot(g *game.PoolGameState, data TakeShotData) {
 		return
 	}
 
-	g.SetShotInProgress(c.playerID, params)
+	shotNum := g.SetShotInProgress(c.playerID, params)
 
 	// Relay shot params AND the shooter's ball snapshot to the opponent.
 	// The opponent seeds their PhysicsEngine from this snapshot instead of their
@@ -442,10 +519,98 @@ func (c *Client) handleTakeShot(g *game.PoolGameState, data TakeShotData) {
 		"shot_params": params,
 		"balls":       data.Balls,
 	})
+
+	// Safety timeout: if shot_complete never arrives (e.g. client crashes during
+	// animation), resolve the stuck shot after 90 seconds. Uses shotNum to guard
+	// against resolving a later shot taken by the same player after several turns.
+	go func(token, gameID, playerID string, expectedShotNum int) {
+		time.Sleep(90 * time.Second)
+
+		g2, err := game.Manager.GetGameByToken(token)
+		if err != nil {
+			return
+		}
+		resolved, nextTurn, resolvedShotNum := g2.ResolveStuckShotBySeq(playerID, expectedShotNum)
+		if !resolved {
+			return
+		}
+		g2.SaveToRedis()
+		GameHub.BroadcastToGame(gameID, map[string]interface{}{
+			"type":           "shot_result",
+			"player":         playerID,
+			"shot_number":    resolvedShotNum,
+			"pocketed_balls": []int{},
+			"foul":           map[string]interface{}{"type": "turn_timeout", "message": "Shot timed out"},
+			"turn_change":    true,
+			"next_turn":      nextTurn,
+			"ball_in_hand":   true,
+			"game_over":      false,
+		})
+		for _, pid := range []string{g2.Player1.ID, g2.Player2.ID} {
+			state := g2.GetGameStateForPlayer(pid)
+			delete(state, "balls")
+			state["type"] = "game_update"
+			GameHub.SendToPlayer(pid, state)
+		}
+		log.Printf("[WS] Shot timeout resolved for player %s in game %s", playerID, gameID)
+		// Start thinking timer for the opponent's new turn.
+		launchThinkingTimer(token, gameID, nextTurn, resolvedShotNum, g2.GetTurnExpiresAt())
+	}(c.gameToken, c.gameID, c.playerID, shotNum)
+}
+
+// launchThinkingTimer starts a goroutine that enforces the server-side thinking
+// time limit. It sleeps until expiresAt + 2 seconds grace (giving the client's
+// own turn_timeout message time to arrive first), then calls
+// EnforceThinkingTimeout. capturedShotNum guards against resolving a later
+// thinking window when the same player gets another turn before the timer fires.
+// If it fires successfully it cascades — launching a new timer for the next player.
+func launchThinkingTimer(token, gameID, playerID string, capturedShotNum int, expiresAt time.Time) {
+	go func() {
+		sleepDur := time.Until(expiresAt) + 2*time.Second
+		if sleepDur > 0 {
+			time.Sleep(sleepDur)
+		}
+
+		g, err := game.Manager.GetGameByToken(token)
+		if err != nil {
+			return
+		}
+		resolved, nextTurn, shotNum := g.EnforceThinkingTimeout(playerID, capturedShotNum)
+		if !resolved {
+			return
+		}
+		g.SaveToRedis()
+		GameHub.BroadcastToGame(gameID, map[string]interface{}{
+			"type":           "shot_result",
+			"player":         playerID,
+			"shot_number":    shotNum,
+			"pocketed_balls": []int{},
+			"foul":           map[string]interface{}{"type": "turn_timeout", "message": "Turn time expired"},
+			"turn_change":    true,
+			"next_turn":      nextTurn,
+			"ball_in_hand":   true,
+			"game_over":      false,
+		})
+		for _, pid := range []string{g.Player1.ID, g.Player2.ID} {
+			state := g.GetGameStateForPlayer(pid)
+			delete(state, "balls")
+			state["type"] = "game_update"
+			GameHub.SendToPlayer(pid, state)
+		}
+		log.Printf("[WS] Thinking timeout enforced for player %s in game %s", playerID, gameID)
+		// Cascade: start the timer for the next player's thinking window.
+		launchThinkingTimer(token, gameID, nextTurn, shotNum, g.GetTurnExpiresAt())
+	}()
 }
 
 // handleShotComplete processes the shot_complete message from the shooting client.
 func (c *Client) handleShotComplete(g *game.PoolGameState, data ShotCompleteData) {
+	// Sanity-cap break_cushion_count: there are only 15 non-cue balls, so any
+	// higher value is physically impossible and indicates a buggy or malicious client.
+	if data.BreakCushionCount > 15 {
+		c.sendError("invalid break_cushion_count")
+		return
+	}
 	clientData := game.ClientShotData{
 		PocketedBalls:       data.PocketedBalls,
 		FirstContactBallID:  data.FirstContactBallID,
@@ -485,6 +650,11 @@ func (c *Client) handleShotComplete(g *game.PoolGameState, data ShotCompleteData
 
 	// Save to Redis
 	g.SaveToRedis()
+
+	// Start server-side thinking timer for the next player's turn.
+	if !result.GameOver && result.NextTurn != "" {
+		launchThinkingTimer(c.gameToken, c.gameID, result.NextTurn, g.ShotNumber, g.GetTurnExpiresAt())
+	}
 }
 
 // handlePlaceCueBall processes cue ball placement.
@@ -522,16 +692,31 @@ func (c *Client) handleConcede(g *game.PoolGameState) {
 	c.broadcastGameState(g)
 }
 
-// handleTurnTimeout processes a shot clock expiry — switches turn and gives opponent ball-in-hand.
+// handleTurnTimeout processes a shot clock expiry reported by the client.
+// Broadcasts shot_result so both players see the timeout notification, then
+// launches a new thinking timer for the opponent's turn.
 func (c *Client) handleTurnTimeout(g *game.PoolGameState) {
-	if err := g.TurnTimeout(c.playerID); err != nil {
+	nextTurn, shotNum, err := g.TurnTimeout(c.playerID)
+	if err != nil {
 		log.Printf("[WS] TurnTimeout error for player %s: %v", c.playerID, err)
 		c.sendError(err.Error())
 		return
 	}
 
 	g.SaveToRedis()
+	GameHub.BroadcastToGame(c.gameID, map[string]interface{}{
+		"type":           "shot_result",
+		"player":         c.playerID,
+		"shot_number":    shotNum,
+		"pocketed_balls": []int{},
+		"foul":           map[string]interface{}{"type": "turn_timeout", "message": "Turn time expired"},
+		"turn_change":    true,
+		"next_turn":      nextTurn,
+		"ball_in_hand":   true,
+		"game_over":      false,
+	})
 	c.broadcastGameState(g)
+	launchThinkingTimer(c.gameToken, c.gameID, nextTurn, shotNum, g.GetTurnExpiresAt())
 }
 
 // broadcastGameState sends personalized game logic state to each player.

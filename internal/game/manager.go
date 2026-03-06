@@ -69,7 +69,6 @@ func InitializeManager(db *sqlx.DB, rdb *redis.Client, cfg *config.Config) {
 	Manager = NewGameManager(db, rdb, cfg)
 	// Start background jobs
 	go Manager.StartExpiryChecker()
-	go Manager.StartDisconnectChecker()
 	// Rehydrate queue from DB into Redis (if configured)
 	if err := Manager.RehydrateQueueFromDB(); err != nil {
 		log.Printf("[REHYDRATE] Error rehydrating queue from DB: %v", err)
@@ -508,6 +507,19 @@ func (gm *GameManager) RecoverGamesFromRedis() error {
 			if p2Data, ok := gameData["player2"].(map[string]interface{}); ok {
 				game.Player2 = parsePoolPlayerFromData(p2Data)
 			}
+			// Restore player tokens (stored separately because json:"-" excludes them from PoolPlayer)
+			if p1Token, ok := gameData["player1_token"].(string); ok && game.Player1 != nil {
+				game.Player1.PlayerToken = p1Token
+			}
+			if p2Token, ok := gameData["player2_token"].(string); ok && game.Player2 != nil {
+				game.Player2.PlayerToken = p2Token
+			}
+			// Restore turn expiry so the thinking timer can be re-launched correctly.
+			if expiresStr, ok := gameData["turn_expires_at"].(string); ok && expiresStr != "" {
+				if t, err := time.Parse(time.RFC3339Nano, expiresStr); err == nil {
+					game.TurnExpiresAt = t
+				}
+			}
 
 			if game.ID == "" || game.Player1 == nil || game.Player2 == nil {
 				log.Printf("[RECOVERY] Skipping incomplete game %s", token)
@@ -704,49 +716,6 @@ func (gm *GameManager) checkExpiredGames() {
 					log.Printf("[DB] published session_cancelled: session=%d subscribers=%d", g.SessionID, n)
 				}
 			}
-		}
-	}
-}
-
-// StartDisconnectChecker runs a background job to check for forfeit due to disconnect
-func (gm *GameManager) StartDisconnectChecker() {
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		gm.checkDisconnectForfeits()
-	}
-}
-
-// checkDisconnectForfeits checks for players who disconnected >grace period
-func (gm *GameManager) checkDisconnectForfeits() {
-	gm.mu.RLock()
-	gamesToCheck := make([]*PoolGameState, 0)
-	for _, game := range gm.games {
-		if game.Status == StatusInProgress {
-			gamesToCheck = append(gamesToCheck, game)
-		}
-	}
-	gm.mu.RUnlock()
-
-	now := time.Now()
-	gracePeriod := time.Duration(gm.config.DisconnectGraceSeconds) * time.Second
-
-	for _, game := range gamesToCheck {
-		game.mu.RLock()
-		p1Disconnected := !game.Player1.Connected && game.Player1.DisconnectedAt != nil
-		p2Disconnected := !game.Player2.Connected && game.Player2.DisconnectedAt != nil
-
-		var forfeitPlayerID string
-		if p1Disconnected && now.Sub(*game.Player1.DisconnectedAt) > gracePeriod {
-			forfeitPlayerID = game.Player1.ID
-		} else if p2Disconnected && now.Sub(*game.Player2.DisconnectedAt) > gracePeriod {
-			forfeitPlayerID = game.Player2.ID
-		}
-		game.mu.RUnlock()
-
-		if forfeitPlayerID != "" {
-			game.ForfeitByDisconnect(forfeitPlayerID)
 		}
 	}
 }

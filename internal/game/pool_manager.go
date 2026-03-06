@@ -67,6 +67,11 @@ func (gm *GameManager) savePoolGameToRedis(g *PoolGameState) error {
 		"last_activity":       g.LastActivity,
 		"session_id":          g.SessionID,
 		"game_type":           "pool",
+		// Player tokens are excluded from PoolPlayer JSON (json:"-") but must
+		// survive a server restart so reconnecting players can authenticate.
+		"player1_token":   g.Player1.PlayerToken,
+		"player2_token":   g.Player2.PlayerToken,
+		"turn_expires_at": g.TurnExpiresAt,
 	}
 
 	data, err := json.Marshal(gameData)

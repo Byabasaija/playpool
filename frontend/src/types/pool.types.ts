@@ -50,6 +50,7 @@ export interface PoolGameState {
   status: string | null;
   winner: string | null;
   winType: string | null;
+  turnExpiresAt: string | null;
 }
 
 export interface PoolGameOverData {
@@ -75,6 +76,7 @@ export type PoolWSMessageType =
   | 'sync_request'
   | 'sync_response'
   | 'cue_aim'
+  | 'game_cancelled'
   | 'error';
 
 export interface PoolWSMessage {
@@ -120,6 +122,8 @@ export interface PoolWSMessage {
   // cue_aim fields
   aim_angle?: number;
   aim_power?: number;
+  // turn timer
+  turn_expires_at?: string;
   // idle/disconnect fields
   forfeit_at?: string;
   remaining_seconds?: number;

@@ -102,6 +102,7 @@ type PoolGameState struct {
 	CompletedAt      *time.Time          `json:"completed_at,omitempty"`
 	LastActivity     time.Time           `json:"last_activity"`
 	SessionID        int                 `json:"session_id,omitempty"`
+	TurnExpiresAt    time.Time           `json:"turn_expires_at"`
 	ShotInProgress   bool                `json:"-"`
 	ShotPlayerID     string              `json:"-"`
 	ShotParams       ShotParams          `json:"-"`
@@ -173,6 +174,7 @@ func (g *PoolGameState) Initialize() error {
 	}
 	g.IsBreakShot = true
 	g.ShotNumber = 0
+	g.resetTurnTimer()
 
 	now := time.Now()
 	g.StartedAt = &now
@@ -181,6 +183,24 @@ func (g *PoolGameState) Initialize() error {
 
 	log.Printf("[POOL INIT] Game %s initialized, %s breaks", g.ID, g.CurrentTurn)
 	return nil
+}
+
+// turnTimerDuration is the server-enforced thinking time limit per turn.
+// Matches the client's SHOT_TIMER_SECONDS (30s). The server goroutine adds a
+// 2-second grace period on top, giving the client's turn_timeout time to arrive.
+const turnTimerDuration = 30 * time.Second
+
+// resetTurnTimer sets TurnExpiresAt to now + turnTimerDuration.
+// Must be called with g.mu held (write lock).
+func (g *PoolGameState) resetTurnTimer() {
+	g.TurnExpiresAt = time.Now().Add(turnTimerDuration)
+}
+
+// GetTurnExpiresAt returns the current turn expiry time (thread-safe).
+func (g *PoolGameState) GetTurnExpiresAt() time.Time {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.TurnExpiresAt
 }
 
 // ValidateCanShoot checks if a player can take a shot (turn, status, power).
@@ -207,12 +227,15 @@ func (g *PoolGameState) ValidateCanShoot(playerID string, params ShotParams) err
 }
 
 // SetShotInProgress marks that a shot is being animated client-side.
-func (g *PoolGameState) SetShotInProgress(playerID string, params ShotParams) {
+// Returns the current ShotNumber so the caller can pass it to
+// ResolveStuckShotBySeq and avoid resolving a later shot by the same player.
+func (g *PoolGameState) SetShotInProgress(playerID string, params ShotParams) int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.ShotInProgress = true
 	g.ShotPlayerID = playerID
 	g.ShotParams = params
+	return g.ShotNumber
 }
 
 // IsShotInProgress returns whether a shot is in progress for the given player.
@@ -245,8 +268,77 @@ func (g *PoolGameState) ResolveStuckShot(playerID string) (bool, string, int) {
 	g.BallInHand = true
 	g.BallInHandPlayer = g.CurrentTurn
 	g.LastActivity = time.Now()
+	g.resetTurnTimer()
 
 	log.Printf("[POOL] Resolved stuck shot #%d for disconnected player %s — ball-in-hand for %s",
+		g.ShotNumber, playerID, g.BallInHandPlayer)
+
+	return true, g.CurrentTurn, g.ShotNumber
+}
+
+// ResolveStuckShotBySeq is like ResolveStuckShot but also checks that the
+// current ShotNumber matches expectedShotNum. This prevents a stale timeout
+// goroutine from resolving a later shot by the same player if several turns
+// completed before the 90-second timer fired.
+func (g *PoolGameState) ResolveStuckShotBySeq(playerID string, expectedShotNum int) (bool, string, int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if !g.ShotInProgress || g.ShotPlayerID != playerID {
+		return false, "", 0
+	}
+	if g.ShotNumber != expectedShotNum {
+		return false, "", 0
+	}
+	if g.Status != StatusInProgress {
+		return false, "", 0
+	}
+
+	g.ShotInProgress = false
+	g.ShotPlayerID = ""
+	g.ShotNumber++
+	g.switchTurn()
+	g.BallInHand = true
+	g.BallInHandPlayer = g.CurrentTurn
+	g.LastActivity = time.Now()
+	g.resetTurnTimer()
+
+	log.Printf("[POOL] Shot timeout #%d for player %s — ball-in-hand for %s",
+		g.ShotNumber, playerID, g.BallInHandPlayer)
+
+	return true, g.CurrentTurn, g.ShotNumber
+}
+
+// EnforceThinkingTimeout is called by the server-side thinking timer goroutine
+// when a player fails to fire a shot within the turn time limit.
+// capturedShotNum must match the current g.ShotNumber, preventing a stale
+// goroutine from resolving a later thinking window after several turns pass.
+func (g *PoolGameState) EnforceThinkingTimeout(playerID string, capturedShotNum int) (bool, string, int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if g.Status != StatusInProgress {
+		return false, "", 0
+	}
+	if g.CurrentTurn != playerID {
+		return false, "", 0
+	}
+	if g.ShotNumber != capturedShotNum {
+		return false, "", 0
+	}
+	if g.ShotInProgress {
+		// Shot already started — P1#6 goroutine handles this window.
+		return false, "", 0
+	}
+
+	g.ShotNumber++
+	g.switchTurn()
+	g.BallInHand = true
+	g.BallInHandPlayer = g.CurrentTurn
+	g.LastActivity = time.Now()
+	g.resetTurnTimer()
+
+	log.Printf("[POOL] Thinking timeout #%d for player %s — ball-in-hand for %s",
 		g.ShotNumber, playerID, g.BallInHandPlayer)
 
 	return true, g.CurrentTurn, g.ShotNumber
@@ -463,6 +555,9 @@ func (g *PoolGameState) ApplyShotResult(playerID string, clientData ClientShotDa
 		result.BallInHand = false
 	}
 
+	if !result.GameOver {
+		g.resetTurnTimer()
+	}
 	g.LastActivity = time.Now()
 
 	// Record move
@@ -498,16 +593,21 @@ func (g *PoolGameState) PlaceCueBall(playerID string, x, y float64) error {
 		return errors.New("position out of bounds")
 	}
 
-	// Check no overlap with other balls
-	for _, b := range g.Balls {
-		if !b.Active || b.ID == 0 {
-			continue
-		}
-		dx := x - b.X
-		dy := y - b.Y
-		dist := math.Sqrt(dx*dx + dy*dy)
-		if dist < 2*BallRadius {
-			return errors.New("overlapping with another ball")
+	// Overlap check only on the break: object balls are still at rack positions,
+	// so server-side X/Y is accurate. After the break the server never updates
+	// ball positions (clients own physics state), so checking against stale rack
+	// coordinates would produce false rejections and false accepts.
+	if g.IsBreakShot {
+		for _, b := range g.Balls {
+			if !b.Active || b.ID == 0 {
+				continue
+			}
+			dx := x - b.X
+			dy := y - b.Y
+			dist := math.Sqrt(dx*dx + dy*dy)
+			if dist < 2*BallRadius {
+				return errors.New("overlapping with another ball")
+			}
 		}
 	}
 
@@ -566,6 +666,7 @@ func (g *PoolGameState) GetGameStateForPlayer(playerID string) map[string]interf
 		"stake_amount":          g.StakeAmount,
 		"winner":                g.Winner,
 		"win_type":              g.WinType,
+		"turn_expires_at":       g.TurnExpiresAt,
 	}
 }
 
@@ -661,6 +762,30 @@ func (g *PoolGameState) GetOpponent() *PoolPlayer {
 	return g.Player1
 }
 
+// CancelByBothDisconnect terminates the game when both players are offline,
+// refunding the stake to each player via the draw-refund path in SaveFinalGameState.
+func (g *PoolGameState) CancelByBothDisconnect() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if g.Status != StatusInProgress {
+		return
+	}
+
+	g.Status = StatusCompleted
+	g.WinType = "draw" // triggers the draw-refund path (both players refunded)
+	g.Winner = ""
+	now := time.Now()
+	g.CompletedAt = &now
+	g.LastActivity = now
+
+	log.Printf("[POOL] Game %s cancelled — both players disconnected, stakes refunded", g.ID)
+
+	if Manager != nil {
+		Manager.SaveFinalGameState(g)
+	}
+}
+
 // ForfeitByDisconnect forfeits the game due to disconnect.
 func (g *PoolGameState) ForfeitByDisconnect(disconnectedPlayerID string) {
 	g.mu.Lock()
@@ -717,23 +842,27 @@ func (g *PoolGameState) SaveToRedis() {
 }
 
 // TurnTimeout handles a player's shot clock expiring.
-// Switches the turn to the opponent and gives them ball-in-hand.
-func (g *PoolGameState) TurnTimeout(playerID string) error {
+// Switches the turn, gives ball-in-hand to the opponent, and resets the timer.
+// Returns (nextTurn, shotNumber, error) so the caller can broadcast shot_result
+// and launch the next thinking timer without re-reading under contention.
+func (g *PoolGameState) TurnTimeout(playerID string) (string, int, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
 	if g.CurrentTurn != playerID {
-		return errors.New("not your turn")
+		return "", 0, errors.New("not your turn")
 	}
 	if g.Status != StatusInProgress {
-		return errors.New("game not in progress")
+		return "", 0, errors.New("game not in progress")
 	}
 
+	g.ShotNumber++
 	g.switchTurn()
 	g.BallInHand = true
 	g.BallInHandPlayer = g.CurrentTurn
 	g.LastActivity = time.Now()
-	return nil
+	g.resetTurnTimer()
+	return g.CurrentTurn, g.ShotNumber, nil
 }
 
 // === Internal helpers ===

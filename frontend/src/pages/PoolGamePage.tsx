@@ -18,7 +18,7 @@ import SpinSetter from '../game/pool/SpinSetter';
 import FoulNotification from '../game/pool/FoulNotification';
 import GameOverScreen from '../game/pool/ui/GameOverScreen';
 
-const SHOT_TIMER_SECONDS = 30;
+const SHOT_TIMER_FALLBACK_SECONDS = 30;
 
 export const PoolGamePage: React.FC = () => {
   const [assets, setAssets] = useState<PoolAssets | null>(null);
@@ -29,6 +29,7 @@ export const PoolGamePage: React.FC = () => {
   const [resolvedGameToken, setResolvedGameToken] = useState('');
   const [resolvedPlayerToken, setResolvedPlayerToken] = useState('');
   const [gameStarted, setGameStarted] = useState(false);
+  const [gameCancelled, setGameCancelled] = useState(false);
   const [animating, setAnimating] = useState(false);
   const [foulMessage, setFoulMessage] = useState<string | null>(null);
   const [isFoul, setIsFoul] = useState(false);
@@ -241,9 +242,14 @@ export const PoolGamePage: React.FC = () => {
   }, [assets]);
 
   // --- Shot timer: 30s countdown when it's a player's turn ---
-  const startShotTimer = useCallback(() => {
+  const startShotTimer = useCallback((expiresAt: string | null) => {
     if (shotTimerRef.current) clearInterval(shotTimerRef.current);
-    setShotTimer(SHOT_TIMER_SECONDS);
+    // Seed from the server's authoritative expiry timestamp so both players
+    // count down from the same clock. Fall back to the constant if not yet set.
+    const initialSeconds = expiresAt
+      ? Math.max(0, Math.ceil((new Date(expiresAt).getTime() - Date.now()) / 1000))
+      : SHOT_TIMER_FALLBACK_SECONDS;
+    setShotTimer(initialSeconds);
     shotTimerRef.current = setInterval(() => {
       setShotTimer(prev => {
         if (prev === null || prev <= 1) {
@@ -264,15 +270,16 @@ export const PoolGamePage: React.FC = () => {
     setShotTimer(null);
   }, []);
 
-  // Start/restart timer when *my* turn begins; stop when it ends or animation/game stops
+  // Start/restart timer when *my* turn begins; stop when it ends or animation/game stops.
+  // Pass the server's turnExpiresAt so the display is seeded from the authoritative clock.
   useEffect(() => {
     if (gameStarted && gameState.myTurn && !animating && !gameOver) {
-      startShotTimer();
+      startShotTimer(gameState.turnExpiresAt);
     } else {
       stopShotTimer();
     }
     return () => stopShotTimer();
-  }, [gameState.myTurn, gameStarted, animating, gameOver, startShotTimer, stopShotTimer]);
+  }, [gameState.myTurn, gameState.turnExpiresAt, gameStarted, animating, gameOver, startShotTimer, stopShotTimer]);
 
   // Pause timer during animation
   useEffect(() => {
@@ -351,7 +358,8 @@ export const PoolGamePage: React.FC = () => {
         setBreakBallPlaced(false);
         setOpponentBallInHandPos(null);
         opponentAimRef.current = null;
-        if (message.balls && message.balls.length > 0) setGameStarted(true);
+        // Always mark started — game_state is only sent after the game has been initialised.
+        setGameStarted(true);
         break;
 
       case 'game_update':
@@ -453,7 +461,7 @@ export const PoolGamePage: React.FC = () => {
         break;
 
       case 'player_disconnected':
-        if (message.grace_seconds && message.disconnected_at) {
+        if (message.grace_seconds) {
           setDisconnectRemaining(message.grace_seconds);
         }
         break;
@@ -482,8 +490,14 @@ export const PoolGamePage: React.FC = () => {
         // Seed the renderer so the next shot starts from the correct positions.
         if (message.balls && message.balls.length > 0) {
           setBallPositions(message.balls);
+          setGameStarted(true); // ensure game shows even if game_state had no balls
           console.log('[Pool] sync_response received — seeded', message.balls.length, 'balls');
         }
+        break;
+
+      case 'game_cancelled':
+        // Both players disconnected — server cancelled the game and refunded stakes.
+        setGameCancelled(true);
         break;
 
       case 'error':
@@ -670,6 +684,25 @@ export const PoolGamePage: React.FC = () => {
   // Game over
   if (gameOver) {
     return <GameOverScreen gameOver={gameOver} stakeAmount={gameState.stakeAmount} />;
+  }
+
+  // Both players disconnected — game cancelled, stakes refunded
+  if (gameCancelled) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#0e1628]">
+        <div className="text-center text-white max-w-sm px-6">
+          <div className="text-4xl mb-4">↩</div>
+          <h2 className="text-xl font-bold mb-2">Game Cancelled</h2>
+          <p className="text-gray-400 text-sm mb-6">Both players disconnected. Your stake has been refunded to your account.</p>
+          <button
+            onClick={() => window.location.href = '/'}
+            className="px-6 py-2 bg-green-700 hover:bg-green-600 rounded-lg text-sm font-semibold transition-colors"
+          >
+            Back to Home
+          </button>
+        </div>
+      </div>
+    );
   }
 
   // 100dvh adjusts dynamically as browser bars show/hide (Chrome 108+, Safari 15.4+)

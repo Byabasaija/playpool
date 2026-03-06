@@ -27,6 +27,7 @@ const initialState: PoolGameState = {
   status: null,
   winner: null,
   winType: null,
+  turnExpiresAt: null,
 };
 
 type Action =
@@ -87,6 +88,7 @@ function reducer(state: PoolGameState, action: Action): PoolGameState {
       if (has('status')) next.status = d.status || null;
       if (has('winner')) next.winner = d.winner || null;
       if (has('win_type')) next.winType = d.win_type || null;
+      if (has('turn_expires_at')) next.turnExpiresAt = d.turn_expires_at || null;
 
       return next;
     }

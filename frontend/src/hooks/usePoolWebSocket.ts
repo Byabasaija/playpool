@@ -22,7 +22,6 @@ export function usePoolWebSocket({
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const MAX_RECONNECT_ATTEMPTS = 5;
 
   // Store callbacks in refs so connect() doesn't depend on them
   const onMessageRef = useRef(onMessage);
@@ -93,12 +92,11 @@ export function usePoolWebSocket({
       if (event.reason?.includes('replaced by new connection')) return;
       if (!autoReconnect) return;
 
-      if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
-        reconnectAttemptsRef.current++;
-        const delay = 1000 * reconnectAttemptsRef.current;
-        console.log(`[Pool WS] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current})`);
-        reconnectTimerRef.current = setTimeout(connect, delay);
-      }
+      // Retry indefinitely with exponential backoff, capped at 30s.
+      reconnectAttemptsRef.current++;
+      const delay = Math.min(1000 * reconnectAttemptsRef.current, 30000);
+      console.log(`[Pool WS] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current})`);
+      reconnectTimerRef.current = setTimeout(connect, delay);
     };
 
     ws.onerror = (error) => {
