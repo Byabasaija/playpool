@@ -72,6 +72,8 @@ export type PoolWSMessageType =
   | 'player_conceded'
   | 'game_over'
   | 'session_cancelled'
+  | 'sync_request'
+  | 'sync_response'
   | 'error';
 
 export interface PoolWSMessage {
@@ -119,6 +121,8 @@ export interface PoolWSMessage {
   remaining_seconds?: number;
   grace_seconds?: number;
   disconnected_at?: number;
+  // sync_request field: which reconnecting player needs physics state
+  target?: string;
 }
 
 // Outgoing message types
@@ -151,11 +155,19 @@ export interface GetStateMessage {
 export interface ShotCompleteMessage {
   type: 'shot_complete';
   data: {
-    ball_positions: BallState[];
     pocketed_balls: number[];
     first_contact_ball_id: number;
     cushion_after_contact: boolean;
     break_cushion_count: number;
+  };
+}
+
+export interface SyncResponseMessage {
+  type: 'sync_response';
+  data: {
+    /** ID of the reconnecting player who needs the physics state. */
+    target: string;
+    balls: BallState[];
   };
 }
 
@@ -171,4 +183,5 @@ export type PoolOutgoingMessage =
   | ConcedeMessage
   | GetStateMessage
   | ShotCompleteMessage
+  | SyncResponseMessage
   | TurnTimeoutMessage;

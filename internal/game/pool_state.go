@@ -34,10 +34,10 @@ type PoolPlayer struct {
 
 // BallState represents a ball's position and status for serialization.
 type BallState struct {
-	ID       int     `json:"id"`
-	X        float64 `json:"x"`
-	Y        float64 `json:"y"`
-	Active   bool    `json:"active"`
+	ID     int     `json:"id"`
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Active bool    `json:"active"`
 }
 
 // ShotParams represents the input for a shot.
@@ -49,17 +49,18 @@ type ShotParams struct {
 }
 
 // ClientShotData is the data the client sends after its physics animation completes.
+// Ball positions are intentionally absent — clients own their physics state.
+// The server only needs game events to evaluate rules.
 type ClientShotData struct {
-	BallPositions       []BallState `json:"ball_positions"`
-	PocketedBalls       []int       `json:"pocketed_balls"`
-	FirstContactBallID  int         `json:"first_contact_ball_id"`  // -1 if no contact
-	CushionAfterContact bool        `json:"cushion_after_contact"`
-	BreakCushionCount   int         `json:"break_cushion_count"`    // count of non-cue balls that hit cushions
+	PocketedBalls       []int `json:"pocketed_balls"`
+	FirstContactBallID  int   `json:"first_contact_ball_id"` // -1 if no contact
+	CushionAfterContact bool  `json:"cushion_after_contact"`
+	BreakCushionCount   int   `json:"break_cushion_count"` // count of non-cue balls that hit cushions
 }
 
 // FoulInfo describes a foul that occurred during a shot.
 type FoulInfo struct {
-	Type    string `json:"type"`    // "scratch", "wrong_first_contact", "no_cushion", "illegal_8ball", "break_foul"
+	Type    string `json:"type"` // "scratch", "wrong_first_contact", "no_cushion", "illegal_8ball", "break_foul"
 	Message string `json:"message"`
 }
 
@@ -81,29 +82,29 @@ type ShotResult struct {
 
 // PoolGameState represents the complete state of an 8-ball pool game.
 type PoolGameState struct {
-	ID               string       `json:"id"`
-	Token            string       `json:"token"`
-	Player1          *PoolPlayer  `json:"player1"`
-	Player2          *PoolPlayer  `json:"player2"`
+	ID               string              `json:"id"`
+	Token            string              `json:"token"`
+	Player1          *PoolPlayer         `json:"player1"`
+	Player2          *PoolPlayer         `json:"player2"`
 	Balls            [NumBalls]BallState `json:"balls"`
-	CurrentTurn      string       `json:"current_turn"`
-	Status           GameStatus   `json:"status"`
-	Winner           string       `json:"winner,omitempty"`
-	WinType          string       `json:"win_type,omitempty"`
-	StakeAmount      int          `json:"stake_amount"`
-	ShotNumber       int          `json:"shot_number"`
-	IsBreakShot      bool         `json:"is_break_shot"`
-	BallInHand       bool         `json:"ball_in_hand"`
-	BallInHandPlayer string       `json:"ball_in_hand_player,omitempty"`
-	ExpiresAt        time.Time    `json:"expires_at"`
-	CreatedAt        time.Time    `json:"created_at"`
-	StartedAt        *time.Time   `json:"started_at,omitempty"`
-	CompletedAt      *time.Time   `json:"completed_at,omitempty"`
-	LastActivity     time.Time    `json:"last_activity"`
-	SessionID        int          `json:"session_id,omitempty"`
-	ShotInProgress   bool         `json:"-"`
-	ShotPlayerID     string       `json:"-"`
-	ShotParams       ShotParams   `json:"-"`
+	CurrentTurn      string              `json:"current_turn"`
+	Status           GameStatus          `json:"status"`
+	Winner           string              `json:"winner,omitempty"`
+	WinType          string              `json:"win_type,omitempty"`
+	StakeAmount      int                 `json:"stake_amount"`
+	ShotNumber       int                 `json:"shot_number"`
+	IsBreakShot      bool                `json:"is_break_shot"`
+	BallInHand       bool                `json:"ball_in_hand"`
+	BallInHandPlayer string              `json:"ball_in_hand_player,omitempty"`
+	ExpiresAt        time.Time           `json:"expires_at"`
+	CreatedAt        time.Time           `json:"created_at"`
+	StartedAt        *time.Time          `json:"started_at,omitempty"`
+	CompletedAt      *time.Time          `json:"completed_at,omitempty"`
+	LastActivity     time.Time           `json:"last_activity"`
+	SessionID        int                 `json:"session_id,omitempty"`
+	ShotInProgress   bool                `json:"-"`
+	ShotPlayerID     string              `json:"-"`
+	ShotParams       ShotParams          `json:"-"`
 	mu               sync.RWMutex
 }
 
@@ -221,6 +222,36 @@ func (g *PoolGameState) IsShotInProgress(playerID string) bool {
 	return g.ShotInProgress && g.ShotPlayerID == playerID
 }
 
+// ResolveStuckShot clears a stuck shot-in-progress caused by the shooter
+// disconnecting mid-animation. Increments the shot counter, switches the turn,
+// and gives ball-in-hand to the opponent — exactly like a turn timeout.
+// Returns (resolved, nextTurn, shotNumber) so the caller can broadcast
+// a shot_result without re-reading the game state under contention.
+func (g *PoolGameState) ResolveStuckShot(playerID string) (bool, string, int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if !g.ShotInProgress || g.ShotPlayerID != playerID {
+		return false, "", 0
+	}
+	if g.Status != StatusInProgress {
+		return false, "", 0
+	}
+
+	g.ShotInProgress = false
+	g.ShotPlayerID = ""
+	g.ShotNumber++
+	g.switchTurn()
+	g.BallInHand = true
+	g.BallInHandPlayer = g.CurrentTurn
+	g.LastActivity = time.Now()
+
+	log.Printf("[POOL] Resolved stuck shot #%d for disconnected player %s — ball-in-hand for %s",
+		g.ShotNumber, playerID, g.BallInHandPlayer)
+
+	return true, g.CurrentTurn, g.ShotNumber
+}
+
 // GetCurrentBallPositions returns a copy of the current ball positions.
 func (g *PoolGameState) GetCurrentBallPositions() []BallState {
 	g.mu.RLock()
@@ -242,11 +273,6 @@ func (g *PoolGameState) ApplyShotResult(playerID string, clientData ClientShotDa
 		return nil, errors.New("no shot in progress for this player")
 	}
 	g.ShotInProgress = false
-
-	// Basic validation of client data
-	if len(clientData.BallPositions) != NumBalls {
-		return nil, errors.New("invalid ball count in shot result")
-	}
 
 	g.ShotNumber++
 	result := &ShotResult{
@@ -356,15 +382,12 @@ func (g *PoolGameState) ApplyShotResult(playerID string, clientData ClientShotDa
 		}
 	}
 
-	// === UPDATE BALL POSITIONS from client data ===
-	for _, bp := range clientData.BallPositions {
-		if bp.ID >= 0 && bp.ID < NumBalls {
-			g.Balls[bp.ID] = BallState{
-				ID:     bp.ID,
-				X:      bp.X,
-				Y:      bp.Y,
-				Active: bp.Active,
-			}
+	// === TRACK POCKETED BALLS (active flag only) ===
+	// Server never stores X/Y positions — clients own their physics state.
+	// Reconnect is handled via peer sync (sync_request → sync_response).
+	for _, id := range pocketed {
+		if id >= 0 && id < NumBalls {
+			g.Balls[id].Active = false
 		}
 	}
 
@@ -785,4 +808,3 @@ func (g *PoolGameState) updateBallGroupStatus(player *PoolPlayer) {
 		player.BallGroup = Group8Ball
 	}
 }
-

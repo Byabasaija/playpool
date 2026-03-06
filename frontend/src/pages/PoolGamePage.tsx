@@ -89,12 +89,6 @@ export const PoolGamePage: React.FC = () => {
   // opponent's cue ball position streamed in real-time during their ball-in-hand
   const [opponentBallInHandPos, setOpponentBallInHandPos] = useState<{ x: number; y: number } | null>(null);
   const cueBallMoveThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // After a shot_result, skip ball positions on the game_update with the same
-  // shot_number — prevents the server echoing pre-animation positions back.
-  // Using shot_number instead of a boolean flag makes this ordering-safe:
-  // if messages arrive out of order, only the correct update is skipped.
-  const skipShotNumRef = useRef<number>(-1);
-
   // Tracks the cue ball position set by handlePlaceCueBall so handleTakeShot
   // always uses the correct physics origin even when the React closure is stale
   // (race: auto-place + shot fire synchronously before React re-renders).
@@ -180,7 +174,6 @@ export const PoolGamePage: React.FC = () => {
           sendWSMessageRef.current({
             type: 'shot_complete',
             data: {
-              ball_positions: finalPositions.map(b => ({ id: b.id, x: b.x, y: b.y, active: b.active })),
               pocketed_balls: cd.pocketedBalls,
               first_contact_ball_id: cd.firstContactBallId,
               cushion_after_contact: cd.cushionAfterContact,
@@ -188,14 +181,6 @@ export const PoolGamePage: React.FC = () => {
             },
           });
         }
-
-        // Post-animation resync: request fresh state from server after a short
-        // delay to let shot_complete processing complete first (shooter) or to
-        // recover from any dropped game_update (opponent). The response arrives
-        // as game_state which bypasses the shot-number skip and applies fully.
-        setTimeout(() => {
-          sendWSMessageRef.current({ type: 'get_state', data: {} });
-        }, 400);
       },
       (event) => {
         soundRef.current?.playCollision(event);
@@ -364,19 +349,11 @@ export const PoolGamePage: React.FC = () => {
         if (message.balls && message.balls.length > 0) setGameStarted(true);
         break;
 
-      case 'game_update': {
-        // Skip ball positions on the game_update that matches the shot_number
-        // from the most recent shot_result — prevents the server echoing
-        // pre-animation positions back and rolling back local physics.
-        // Clearing after comparison makes the skip fire exactly once per shot.
-        const shouldSkip = skipShotNumRef.current !== -1 &&
-          message.shot_number === skipShotNumRef.current;
-        if (shouldSkip) skipShotNumRef.current = -1;
-        const msgToApply = shouldSkip ? { ...message, balls: undefined } : message;
-        updateFromWSMessage(msgToApply);
-        if (message.balls && message.balls.length > 0) setGameStarted(true);
+      case 'game_update':
+        // Balls are omitted from game_update — clients own positions via physics.
+        // Full ball state only arrives in game_state (connect / reconnect).
+        updateFromWSMessage(message);
         break;
-      }
 
       case 'shot_relay': {
         const relayParams = message.shot_params;
@@ -427,10 +404,6 @@ export const PoolGamePage: React.FC = () => {
         }
 
         applyShotResult(message);
-        // Record the shot_number to skip on the matching game_update.
-        if (message.shot_number !== undefined) {
-          skipShotNumRef.current = message.shot_number;
-        }
         break;
       }
 
@@ -442,11 +415,12 @@ export const PoolGamePage: React.FC = () => {
         break;
 
       case 'ball_placed':
-        // Ball positions (including the placed cue ball) are updated by the
-        // game_update that broadcastGameState sends immediately after this message.
-        // Using gameState.balls.map() here risks a stale closure — handleWSMessage
-        // may not have refreshed with the latest gameState.balls by the time this
-        // message arrives, causing non-cue balls to revert to pre-foul positions.
+        // game_update no longer carries ball positions — apply the placed cue
+        // ball directly here for both players. updateCueBall only touches ball 0
+        // so it cannot spread stale non-cue ball positions from a closure capture.
+        if (message.x !== undefined && message.y !== undefined) {
+          updateCueBall(message.x, message.y, true);
+        }
         setOpponentBallInHandPos(null);
         break;
 
@@ -464,11 +438,35 @@ export const PoolGamePage: React.FC = () => {
         updateFromWSMessage(message);
         break;
 
+      case 'sync_request':
+        // Server asks us to relay our live physics state to a reconnecting opponent.
+        // We respond with our current ball positions; the server forwards them.
+        if (message.target) {
+          sendWSMessageRef.current({
+            type: 'sync_response',
+            data: {
+              target: message.target,
+              balls: gameState.balls,
+            },
+          });
+          console.log('[Pool] sync_request received — relaying', gameState.balls.length, 'balls to', message.target);
+        }
+        break;
+
+      case 'sync_response':
+        // Server forwarded the opponent's live physics state after our reconnect.
+        // Seed the renderer so the next shot starts from the correct positions.
+        if (message.balls && message.balls.length > 0) {
+          setBallPositions(message.balls);
+          console.log('[Pool] sync_response received — seeded', message.balls.length, 'balls');
+        }
+        break;
+
       case 'error':
         console.error('[Pool] Error:', message.message);
         break;
     }
-  }, [updateFromWSMessage, applyShotResult, gameState.balls, animating]);
+  }, [updateFromWSMessage, applyShotResult, updateCueBall, setBallPositions, gameState.balls, animating]);
 
   const { connected, send: sendWSMessage } = usePoolWebSocket({
     gameToken: tokensReady ? resolvedGameToken : '',

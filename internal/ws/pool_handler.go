@@ -27,11 +27,18 @@ type PlaceCueBallData struct {
 
 // ShotCompleteData is sent by the shooting client after its physics animation finishes.
 type ShotCompleteData struct {
-	BallPositions       []game.BallState `json:"ball_positions"`
-	PocketedBalls       []int            `json:"pocketed_balls"`
-	FirstContactBallID  int              `json:"first_contact_ball_id"`
-	CushionAfterContact bool             `json:"cushion_after_contact"`
-	BreakCushionCount   int              `json:"break_cushion_count"`
+	PocketedBalls       []int `json:"pocketed_balls"`
+	FirstContactBallID  int   `json:"first_contact_ball_id"`
+	CushionAfterContact bool  `json:"cushion_after_contact"`
+	BreakCushionCount   int   `json:"break_cushion_count"`
+}
+
+// SyncResponseData is sent by the connected opponent to relay their live physics
+// state to a reconnecting player. The server simply forwards it without storing
+// ball positions — the server never owns X/Y state in the deterministic model.
+type SyncResponseData struct {
+	Target string           `json:"target"`
+	Balls  []game.BallState `json:"balls"`
 }
 
 // GameHub is the single hub for all games.
@@ -166,15 +173,25 @@ func runGameHub(h *Hub) {
 					"message": "Waiting for opponent...",
 				})
 			} else {
+				// Reconnect: game already in progress.
+				// Send game logic state (no ball positions) — the server never stores
+				// X/Y positions; the client physics engine owns those.
 				state := g.GetGameStateForPlayer(client.playerID)
+				delete(state, "balls")
 				state["type"] = "game_state"
 				h.SendToPlayer(client.playerID, state)
 
+				// Ask the connected opponent to relay their live physics state.
+				// The opponent responds with sync_response which the server
+				// forwards directly to the reconnecting player.
 				oppID := g.GetOpponentID(client.playerID)
 				if oppID != "" {
-					oppState := g.GetGameStateForPlayer(oppID)
-					oppState["type"] = "game_state"
-					h.SendToPlayer(oppID, oppState)
+					h.SendToPlayer(oppID, map[string]interface{}{
+						"type":   "sync_request",
+						"target": client.playerID,
+					})
+				} else {
+					log.Printf("[WS] Reconnect: opponent not connected for player %s — physics state unavailable", client.playerID)
 				}
 			}
 
@@ -204,7 +221,33 @@ func runGameHub(h *Hub) {
 
 				if g, err := game.Manager.GetGameByToken(client.gameToken); err == nil {
 					g.SetPlayerDisconnected(client.playerID)
+
 					if g.Status == game.StatusInProgress {
+						// If this player disconnected mid-shot, auto-resolve it so the
+						// game doesn't freeze. Treat it as a turn timeout: opponent gets
+						// ball-in-hand. The grace-period forfeit below still applies.
+						if resolved, nextTurn, shotNum := g.ResolveStuckShot(client.playerID); resolved {
+							g.SaveToRedis()
+							h.BroadcastToGame(client.gameID, map[string]interface{}{
+								"type":           "shot_result",
+								"player":         client.playerID,
+								"shot_number":    shotNum,
+								"pocketed_balls": []int{},
+								"foul":           map[string]interface{}{"type": "disconnect", "message": "Shooter disconnected"},
+								"turn_change":    true,
+								"next_turn":      nextTurn,
+								"ball_in_hand":   true,
+								"game_over":      false,
+							})
+							// Send no-balls game_update so clients apply the new turn/ball-in-hand
+							for _, pid := range []string{g.Player1.ID, g.Player2.ID} {
+								state := g.GetGameStateForPlayer(pid)
+								delete(state, "balls")
+								state["type"] = "game_update"
+								h.SendToPlayer(pid, state)
+							}
+						}
+
 						go func(token, gameID, playerID string) {
 							time.Sleep(500 * time.Millisecond)
 							if g2, err := game.Manager.GetGameByToken(token); err == nil {
@@ -310,6 +353,24 @@ func (c *Client) handleMessage(msg WSMessage) {
 		log.Printf("[WS] turn_timeout message from player %s", c.playerID)
 		c.handleTurnTimeout(g)
 
+	case "sync_response":
+		// The connected opponent is relaying their live physics state to a
+		// reconnecting player. Forward it directly without server-side storage.
+		var data SyncResponseData
+		if err := json.Unmarshal(msg.Data, &data); err != nil {
+			c.sendError("Invalid sync response data")
+			return
+		}
+		if data.Target == "" {
+			c.sendError("sync_response missing target")
+			return
+		}
+		GameHub.SendToPlayer(data.Target, map[string]interface{}{
+			"type":  "sync_response",
+			"balls": data.Balls,
+		})
+		log.Printf("[WS] sync_response forwarded from player %s to player %s (%d balls)", c.playerID, data.Target, len(data.Balls))
+
 	default:
 		c.sendError("Unknown message type")
 	}
@@ -343,7 +404,6 @@ func (c *Client) handleTakeShot(g *game.PoolGameState, data TakeShotData) {
 // handleShotComplete processes the shot_complete message from the shooting client.
 func (c *Client) handleShotComplete(g *game.PoolGameState, data ShotCompleteData) {
 	clientData := game.ClientShotData{
-		BallPositions:       data.BallPositions,
 		PocketedBalls:       data.PocketedBalls,
 		FirstContactBallID:  data.FirstContactBallID,
 		CushionAfterContact: data.CushionAfterContact,
@@ -431,15 +491,20 @@ func (c *Client) handleTurnTimeout(g *game.PoolGameState) {
 	c.broadcastGameState(g)
 }
 
-// broadcastGameState sends personalized state to each player.
+// broadcastGameState sends personalized game logic state to each player.
+// Ball positions are intentionally omitted — clients own their positions via
+// deterministic physics. Full ball positions are only sent in game_state
+// messages (on connect / reconnect) so the client can seed its physics engine.
 func (c *Client) broadcastGameState(g *game.PoolGameState) {
 	if g.Player1 != nil {
 		state := g.GetGameStateForPlayer(g.Player1.ID)
+		delete(state, "balls")
 		state["type"] = "game_update"
 		GameHub.SendToPlayer(g.Player1.ID, state)
 	}
 	if g.Player2 != nil {
 		state := g.GetGameStateForPlayer(g.Player2.ID)
+		delete(state, "balls")
 		state["type"] = "game_update"
 		GameHub.SendToPlayer(g.Player2.ID, state)
 	}
