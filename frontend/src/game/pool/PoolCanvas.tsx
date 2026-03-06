@@ -1264,8 +1264,9 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
         moverCX = TABLE_CX; moverCY = TABLE_CY;
       }
       // Touch: generous hit radius so it's easy to grab on mobile.
-      // Mouse: standard radius. Both fall through to aim/shot if outside radius.
-      const hitRadius = e.pointerType !== 'mouse' ? BALL_R_PX * 8 : BALL_R_PX * 5;
+      // Mouse: tighter radius — 3× keeps it easy to grab but doesn't block
+      // aiming when the cue ball is close to another ball.
+      const hitRadius = e.pointerType !== 'mouse' ? BALL_R_PX * 8 : BALL_R_PX * 3;
       if (Math.hypot(mx - moverCX, my - moverCY) <= hitRadius) {
         ballInHandDraggingRef.current = true;
         ballInHandPosRef.current = { cx: moverCX, cy: moverCY };
@@ -1347,7 +1348,7 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
         const cb0 = ballsRef.current.find(b => b.id === 0 && b.active);
         if (cb0) { [bx, by] = physToCanvas(cb0.x, cb0.y); } else { bx = TABLE_CX; by = TABLE_CY; }
       }
-      ballInHandHoverRef.current = Math.hypot(mx - bx, my - by) <= BALL_R_PX * 5;
+      ballInHandHoverRef.current = Math.hypot(mx - bx, my - by) <= (e.pointerType !== 'mouse' ? BALL_R_PX * 8 : BALL_R_PX * 3);
       moverAlphaRef.current = ballInHandHoverRef.current ? 1 : 0.8;
     }
 
