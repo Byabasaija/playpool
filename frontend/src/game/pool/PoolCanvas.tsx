@@ -134,6 +134,13 @@ interface PoolCanvasProps {
   // fires on every drag move (canvas coords) so the parent can throttle-stream
   // the position to the opponent via WebSocket.
   onBallInHandPosChanged?: (pos: { cx: number; cy: number } | null) => void;
+  // live aim data for the opponent's ghost cue while it is their turn.
+  // Use a ref (not state) so the RAF draw loop reads it directly each frame
+  // without recreating the loop on every streaming update (~50 ms).
+  opponentAimRef?: React.MutableRefObject<{ angle: number; power: number } | null>;
+  // fires whenever the local player's aim angle or power changes so the parent
+  // can throttle-stream it to the opponent via WebSocket.
+  onAimChanged?: (angle: number, power: number) => void;
   // increments when a scratch occurred (resets ghost when ballInHand)
   scratchCount?: number;
   // when true the game panel parent is CSS-rotated 90° CW (portrait mobile).
@@ -156,6 +163,8 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
   showGuideLine = true, pocketingBalls = [],
   opponentCueBallPos,
   onBallInHandPosChanged,
+  opponentAimRef,
+  onAimChanged,
   scratchCount = 0,
   aimAngleRef,
   isPortrait = false,
@@ -352,6 +361,8 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
     const clamped = Math.max(0, Math.min(barHConst, dist));
     dragDistRef.current = clamped;
     powerRef.current = computePowerFromDrag(clamped);
+    // stream aim+power to opponent
+    onAimChangedRef.current?.(aimAngleRef.current, clamped / barHConst);
   };
 
   const endPowerDrag = () => {
@@ -387,6 +398,8 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
   onTakeShotRef.current = onTakeShot;
   const onPlaceCueBallRef = useRef(onPlaceCueBall);
   onPlaceCueBallRef.current = onPlaceCueBall;
+  const onAimChangedRef = useRef(onAimChanged);
+  onAimChangedRef.current = onAimChanged;
   const myTurnRef = useRef(myTurn);
   myTurnRef.current = myTurn;
   const animatingRef = useRef(animating);
@@ -567,10 +580,16 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
       // Draw shadows — cue ball uses dragged position while placing (not during animation).
       const shadowSize = BALL_R_PX * 4;
       for (const ball of sortedBalls) {
-        if (!ball.active) continue;
+        // Allow inactive cue ball to render when the opponent is placing it —
+        // the ball is inactive (still in pocket) until PlaceCueBall is confirmed,
+        // but we must draw it at the live drag position so the observer sees it.
+        const opponentPlacingCue = ball.id === 0 && !myTurn && !!opponentCueBallPos && !animating;
+        if (!ball.active && !opponentPlacingCue) continue;
         let bx: number, by: number;
-        if (ball.id === 0 && ballInHandPos && !animating) {
+        if (ball.id === 0 && myTurn && ballInHandPos && !animating) {
           bx = ballInHandPos.cx; by = ballInHandPos.cy;
+        } else if (opponentPlacingCue) {
+          [bx, by] = physToCanvas(opponentCueBallPos!.x, opponentCueBallPos!.y);
         } else {
           [bx, by] = physToCanvas(ball.x, ball.y);
         }
@@ -582,39 +601,50 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
 
       // Draw balls — cue ball follows dragged position while placing, physics during shot.
       for (const ball of sortedBalls) {
-        if (!ball.active) continue;
+        // Same inactive-cue-ball exception: render it at the opponent's live position.
+        const opponentPlacingCue = ball.id === 0 && !myTurn && !!opponentCueBallPos && !animating;
+        if (!ball.active && !opponentPlacingCue) continue;
         let bx: number, by: number;
-        if (ball.id === 0 && ballInHandPos && !animating) {
+        if (ball.id === 0 && myTurn && ballInHandPos && !animating) {
           bx = ballInHandPos.cx; by = ballInHandPos.cy;
+        } else if (opponentPlacingCue) {
+          // Observer: draw inactive cue ball at opponent's live drag position.
+          [bx, by] = physToCanvas(opponentCueBallPos!.x, opponentCueBallPos!.y);
         } else {
           [bx, by] = physToCanvas(ball.x, ball.y);
         }
         drawBall(ctx, assets, ball.id, bx, by, BALL_R_PX);
       }
 
-      // Mover overlay — shown on top of the real cue ball for the placing player.
-      // Position: drag position if actively dragging, otherwise physics ball 0.
-      // For the observer: streamed opponent position if available.
-      if (ballInHand) {
+      // Mover overlay — shooter's own grab indicator.
+      if (ballInHand && myTurn) {
         let moverPos: { cx: number; cy: number } | null = null;
-        if (myTurn) {
-          if (ballInHandPos && !animating) {
-            moverPos = ballInHandPos;
-          } else if (!animating) {
-            const cb = currentBalls.find(b => b.id === 0 && b.active);
-            if (cb) { const [mx2, my2] = physToCanvas(cb.x, cb.y); moverPos = { cx: mx2, cy: my2 }; }
-          }
-        } else if (opponentCueBallPos) {
-          const [ocx, ocy] = physToCanvas(opponentCueBallPos.x, opponentCueBallPos.y);
-          moverPos = { cx: ocx, cy: ocy };
+        if (ballInHandPos && !animating) {
+          moverPos = ballInHandPos;
+        } else if (!animating) {
+          const cb = currentBalls.find(b => b.id === 0 && b.active);
+          if (cb) { const [mx2, my2] = physToCanvas(cb.x, cb.y); moverPos = { cx: mx2, cy: my2 }; }
         }
         if (moverPos) {
           const size = BALL_R_PX * 5;
           ctx.save();
-          ctx.globalAlpha = myTurn ? moverAlphaRef.current : 0.6;
+          ctx.globalAlpha = moverAlphaRef.current;
           ctx.drawImage(assets.images.mover, moverPos.cx - size / 2, moverPos.cy - size / 2, size, size);
           ctx.restore();
         }
+      }
+
+      // Observer mover — independent of ballInHand so it also works during break shot
+      // (where ballInHand is false on the observer's side because the server never sets
+      // BallInHand=true for the initial break). Shows whenever a live drag position is
+      // being streamed from the opponent.
+      if (!myTurn && opponentCueBallPos && !animating) {
+        const [ocx, ocy] = physToCanvas(opponentCueBallPos.x, opponentCueBallPos.y);
+        const size = BALL_R_PX * 5;
+        ctx.save();
+        ctx.globalAlpha = 0.6;
+        ctx.drawImage(assets.images.mover, ocx - size / 2, ocy - size / 2, size, size);
+        ctx.restore();
       }
 
       // === BALL GROUP MARKERS ===
@@ -674,7 +704,10 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
       // pocket.  otherwise use the live cue ball if present.
       // Use the dragged/placed position as cue origin whenever one exists —
       // this covers both active dragging and after release (before shot commits).
-      const effectiveCueOrigin = ballInHandPos ? 'ghost' : 'real';
+      // Only apply when it's our turn — stale ballInHandPos must not persist
+      // into the opponent's ball-in-hand phase (turn switches but ballInHand
+      // stays true, leaving the ref non-null from our previous drag).
+      const effectiveCueOrigin = (myTurn && ballInHandPos) ? 'ghost' : 'real';
       // Cue is visible whenever it's our turn — ball-in-hand no longer hides it.
       // Hide only while actively dragging or hovering the mover.
       const showCue = cueBall &&
@@ -946,6 +979,162 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
 
       }
 
+      // === OPPONENT GHOST CUE ===
+      // When it is the opponent's turn and they are aiming, render a semi-transparent
+      // copy of the cue at their streamed angle so the local player can see them aim.
+      const opponentAim = opponentAimRef?.current;
+      // opponentAim being non-null is the correct gate — it is cleared the moment
+      // a cue_ball_move arrives (opponent started dragging) and set again only
+      // when they start streaming cue_aim. No need for !opponentCueBallPos guard
+      // here: that was suppressing the ghost cue during the aiming window after
+      // ball placement (opponentCueBallPos stays non-null until ball_placed fires).
+      if (!myTurn && !animating && opponentAim && cueBall) {
+        // Ghost origin — prefer the streamed placed position (physics coords) so
+        // the guide originates from where the opponent actually placed the ball,
+        // not the stale physics cueBall that hasn't received the update yet.
+        const ghostOriginX = opponentCueBallPos ? opponentCueBallPos.x : cueBall.x;
+        const ghostOriginY = opponentCueBallPos ? opponentCueBallPos.y : cueBall.y;
+        const [gcx, gcy] = physToCanvas(ghostOriginX, ghostOriginY);
+        const ghostDrawLen = BALL_R_PX * 18;
+        const ghostDrawThick = BALL_R_PX * 0.8;
+        const ghostBaseGap = BALL_R_PX * 1.5;
+        // opponentAim.power is normalised 0-1; mirror the local cue's pullback formula
+        const ghostOffset = ghostBaseGap + opponentAim.power * barHConst * 0.5;
+        const GHOST_ALPHA = 0.45;
+
+        // --- Ghost guide line (same raycasting as local guide) ---
+        if (showGuideLine) {
+          const dirX = Math.cos(opponentAim.angle);
+          const dirY = Math.sin(opponentAim.angle);
+          const rayEndX = ghostOriginX + dirX * 500000;
+          const rayEndY = ghostOriginY + dirY * 500000;
+          const collisionRadius = BALL_RADIUS * 2;
+
+          let closestBall: BallState | null = null;
+          let closestEnterX = 0, closestEnterY = 0;
+          let closestDistSq = Infinity;
+          for (const b of currentBalls) {
+            if (b.id === 0 || !b.active) continue;
+            const hit = lineIntersectCircle(
+              ghostOriginX, ghostOriginY, rayEndX, rayEndY,
+              b.x, b.y, collisionRadius,
+            );
+            if (hit.intersects) {
+              const dSq = (b.x - ghostOriginX) ** 2 + (b.y - ghostOriginY) ** 2;
+              if (dSq < closestDistSq) {
+                closestDistSq = dSq;
+                closestBall = b;
+                closestEnterX = hit.enterX;
+                closestEnterY = hit.enterY;
+              }
+            }
+          }
+
+          ctx.save();
+          ctx.globalAlpha = GHOST_ALPHA;
+          ctx.lineWidth = 1;
+          ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+
+          if (closestBall) {
+            const [fromX, fromY] = physToCanvas(ghostOriginX, ghostOriginY);
+            const [toX, toY] = physToCanvas(closestEnterX, closestEnterY);
+            ctx.beginPath();
+            ctx.moveTo(fromX, fromY);
+            ctx.lineTo(toX, toY);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(toX, toY, BALL_R_PX, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+            ctx.stroke();
+
+            const deflectDirX = closestBall.x - closestEnterX;
+            const deflectDirY = closestBall.y - closestEnterY;
+            const deflectLen = Math.sqrt(deflectDirX ** 2 + deflectDirY ** 2);
+            if (deflectLen > 0.01) {
+              const ndx = deflectDirX / deflectLen;
+              const ndy = deflectDirY / deflectLen;
+              const bearing1 = Math.atan2(closestEnterY - ghostOriginY, closestEnterX - ghostOriginX);
+              const bearing2 = Math.atan2(ndy, ndx);
+              const signedCut = Math.atan2(Math.sin(bearing2 - bearing1), Math.cos(bearing2 - bearing1));
+              const absCut = Math.abs(signedCut);
+              const lineLen = BALL_RADIUS * 5 * ((Math.PI / 2 - absCut) / (Math.PI / 2));
+              const targetEndX = closestBall.x + ndx * Math.max(lineLen, BALL_RADIUS);
+              const targetEndY = closestBall.y + ndy * Math.max(lineLen, BALL_RADIUS);
+              const [tbx, tby] = physToCanvas(closestBall.x, closestBall.y);
+              const [tex, tey] = physToCanvas(targetEndX, targetEndY);
+              ctx.beginPath();
+              ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+              ctx.moveTo(tbx, tby);
+              ctx.lineTo(tex, tey);
+              ctx.stroke();
+              const cueLineLen = BALL_RADIUS * 5 * signedCut / (Math.PI / 2);
+              const cueDeflectAngle = bearing2 - Math.PI / 2;
+              if (Math.abs(cueLineLen) > BALL_RADIUS * 0.5) {
+                const cueEndX = closestEnterX + Math.cos(cueDeflectAngle) * cueLineLen;
+                const cueEndY = closestEnterY + Math.sin(cueDeflectAngle) * cueLineLen;
+                const [cex, cey] = physToCanvas(cueEndX, cueEndY);
+                ctx.beginPath();
+                ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+                ctx.moveTo(toX, toY);
+                ctx.lineTo(cex, cey);
+                ctx.stroke();
+              }
+            }
+          } else {
+            const halfW = 138000 / 2 - BALL_RADIUS;
+            const halfH = 69000 / 2 - BALL_RADIUS;
+            let wallHitX = rayEndX, wallHitY = rayEndY, bestT = Infinity;
+            if (dirX !== 0) {
+              const targetX = dirX > 0 ? halfW : -halfW;
+              const t = (targetX - ghostOriginX) / dirX;
+              if (t > 0) {
+                const yAtT = ghostOriginY + t * dirY;
+                if (Math.abs(yAtT) <= halfH && t < bestT) { bestT = t; wallHitX = targetX; wallHitY = yAtT; }
+              }
+            }
+            if (dirY !== 0) {
+              const targetY = dirY > 0 ? halfH : -halfH;
+              const t = (targetY - ghostOriginY) / dirY;
+              if (t > 0) {
+                const xAtT = ghostOriginX + t * dirX;
+                if (Math.abs(xAtT) <= halfW && t < bestT) { bestT = t; wallHitX = xAtT; wallHitY = targetY; }
+              }
+            }
+            const [fromX, fromY] = physToCanvas(ghostOriginX, ghostOriginY);
+            const [toX, toY] = physToCanvas(wallHitX, wallHitY);
+            ctx.beginPath();
+            ctx.moveTo(fromX, fromY);
+            ctx.lineTo(toX, toY);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(toX, toY, BALL_R_PX, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
+
+        // --- Ghost cue stick ---
+        ctx.save();
+        ctx.globalAlpha = GHOST_ALPHA;
+        ctx.translate(gcx, gcy);
+        ctx.rotate(opponentAim.angle);
+
+        const ghostX = -(ghostOffset + ghostDrawLen);
+        const ghostY = -ghostDrawThick / 2;
+
+        // shadow
+        ctx.save();
+        ctx.translate(3, 4);
+        ctx.globalAlpha = GHOST_ALPHA * 0.35;
+        ctx.drawImage(assets.images.cueShadow, ghostX, ghostY, ghostDrawLen, ghostDrawThick);
+        ctx.restore();
+
+        ctx.globalAlpha = GHOST_ALPHA;
+        ctx.drawImage(assets.images.cue, ghostX, ghostY, ghostDrawLen, ghostDrawThick);
+        ctx.restore();
+      }
+
       // finally, undo the DPR scale we applied at the start of the frame
       ctx.restore();
     };
@@ -957,7 +1146,7 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
 
     loop();
     return () => cancelAnimationFrame(animId);
-  }, [balls, myTurn, animating, ballInHand, isBreakShot, myGroup, assets, pocketingBalls, showGuideLine]);
+  }, [balls, myTurn, animating, ballInHand, isBreakShot, myGroup, assets, pocketingBalls, showGuideLine, opponentCueBallPos]);
 
   // --- Coordinate conversion (stable, no deps) ---
   const DEBUG_AIM = false; // set true to log pointer/ball coords for troubleshooting
@@ -1207,7 +1396,6 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
       // keep aim fixed when pulling; it was set at drag start
       return;
     }
-
     if (settingPowerRef.current) return;
 
     // update aim continuously except when we are currently
@@ -1232,6 +1420,7 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
     if (DEBUG_AIM) console.log('pointerMove aim', mx.toFixed(1), my.toFixed(1), 'ball', cx.toFixed(1), cy.toFixed(1));
     if (e.pointerType === 'mouse' && !mouseDownRef.current) {
       aimAngleRef.current = Math.atan2(my - cy, mx - cx);
+      onAimChangedRef.current?.(aimAngleRef.current, dragDistRef.current / barHConst);
     } else if (touchAimActiveRef.current) {
       const currentAng = Math.atan2(my - cy, mx - cx);
       let delta = currentAng - touchStartAngRef.current;
@@ -1243,6 +1432,7 @@ const PoolCanvas = React.forwardRef<PoolCanvasHandle, PoolCanvasProps>(({
         touchStartAngRef.current = currentAng;
         touchSensitivityRef.current = Math.min(1, touchSensitivityRef.current + 0.1);
       }
+      onAimChangedRef.current?.(aimAngleRef.current, dragDistRef.current / barHConst);
     }
   }, [clientToCanvas]);
 

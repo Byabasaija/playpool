@@ -89,6 +89,10 @@ export const PoolGamePage: React.FC = () => {
   // opponent's cue ball position streamed in real-time during their ball-in-hand
   const [opponentBallInHandPos, setOpponentBallInHandPos] = useState<{ x: number; y: number } | null>(null);
   const cueBallMoveThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Ref for streaming opponent's live cue-aim angle+power to the ghost cue renderer.
+  // Using a ref (not state) avoids recreating the RAF draw loop on every update.
+  const opponentAimRef = useRef<{ angle: number; power: number } | null>(null);
+  const cueAimThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Tracks the cue ball position set by handlePlaceCueBall so handleTakeShot
   // always uses the correct physics origin even when the React closure is stale
   // (race: auto-place + shot fire synchronously before React re-renders).
@@ -346,6 +350,7 @@ export const PoolGamePage: React.FC = () => {
         setLocalBallInHand(false);
         setBreakBallPlaced(false);
         setOpponentBallInHandPos(null);
+        opponentAimRef.current = null;
         if (message.balls && message.balls.length > 0) setGameStarted(true);
         break;
 
@@ -356,12 +361,21 @@ export const PoolGamePage: React.FC = () => {
         break;
 
       case 'shot_relay': {
+        // Opponent fired — stop showing their ghost cue immediately.
+        opponentAimRef.current = null;
         const relayParams = message.shot_params;
         if (relayParams) {
+          // Use the shooter's ball snapshot if provided — this guarantees both
+          // clients seed PhysicsEngine from the exact same starting state.
+          // Fall back to local gameState.balls only if the snapshot is missing
+          // (e.g. old server version or unexpected message format).
+          const relayBalls = message.balls && message.balls.length > 0
+            ? message.balls
+            : gameState.balls;
           setAnimating(true);
           soundRef.current?.resumeAudioContext();
           animatorRef.current?.start(
-            gameState.balls,
+            relayBalls,
             { angle: relayParams.angle, power: relayParams.power, screw: relayParams.screw, english: relayParams.english },
           );
         }
@@ -408,9 +422,19 @@ export const PoolGamePage: React.FC = () => {
       }
 
       case 'cue_ball_move':
-        // opponent is dragging their cue ball — update position in real-time
+        // opponent is dragging their cue ball — clear any stale ghost cue aim
+        // data so the ghost cue doesn't linger at the old ball position.
+        opponentAimRef.current = null;
+        // update position in real-time
         if (message.x !== undefined && message.y !== undefined) {
           setOpponentBallInHandPos({ x: message.x, y: message.y });
+        }
+        break;
+
+      case 'cue_aim':
+        // opponent is aiming — update their ghost cue angle+power in real-time
+        if (message.aim_angle !== undefined && message.aim_power !== undefined) {
+          opponentAimRef.current = { angle: message.aim_angle, power: message.aim_power };
         }
         break;
 
@@ -502,7 +526,7 @@ export const PoolGamePage: React.FC = () => {
       ballCount: ballsForShot.length,
       usedPending: ballsForShot !== gameState.balls,
     });
-    sendWSMessage({ type: 'take_shot', data: fullParams });
+    sendWSMessage({ type: 'take_shot', data: { ...fullParams, balls: ballsForShot } });
     soundRef.current?.playCueStrike();
 
     // Reset collision tracking for this shot
@@ -523,6 +547,15 @@ export const PoolGamePage: React.FC = () => {
       fullParams,
     );
   }, [sendWSMessage, screw, english, gameState.balls]);
+
+  const handleAimChanged = useCallback((angle: number, power: number) => {
+    // throttle to ~50 ms — smooth enough for a ghost cue without flooding the socket
+    if (cueAimThrottleRef.current) return;
+    cueAimThrottleRef.current = setTimeout(() => {
+      cueAimThrottleRef.current = null;
+    }, 50);
+    sendWSMessage({ type: 'cue_aim', data: { angle, power } });
+  }, [sendWSMessage]);
 
   const handleBallInHandPosChanged = useCallback((pos: { cx: number; cy: number } | null) => {
     if (!pos) return;
@@ -664,6 +697,8 @@ export const PoolGamePage: React.FC = () => {
       onPlaceCueBall={handlePlaceCueBall}
       onBallInHandPosChanged={handleBallInHandPosChanged}
       opponentCueBallPos={opponentBallInHandPos}
+      opponentAimRef={opponentAimRef}
+      onAimChanged={handleAimChanged}
       assets={assets}
       showGuideLine={showGuideLine}
       pocketingBalls={pocketingBalls}

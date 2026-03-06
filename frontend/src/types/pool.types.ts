@@ -74,6 +74,7 @@ export type PoolWSMessageType =
   | 'session_cancelled'
   | 'sync_request'
   | 'sync_response'
+  | 'cue_aim'
   | 'error';
 
 export interface PoolWSMessage {
@@ -116,6 +117,9 @@ export interface PoolWSMessage {
   // ball_placed fields
   x?: number;
   y?: number;
+  // cue_aim fields
+  aim_angle?: number;
+  aim_power?: number;
   // idle/disconnect fields
   forfeit_at?: string;
   remaining_seconds?: number;
@@ -128,7 +132,11 @@ export interface PoolWSMessage {
 // Outgoing message types
 export interface TakeShotMessage {
   type: 'take_shot';
-  data: ShotParams;
+  data: ShotParams & {
+    /** Shooter's exact ball positions at fire time. Relayed to opponent via shot_relay
+     *  so both clients seed PhysicsEngine from identical state, preventing divergence. */
+    balls: BallState[];
+  };
 }
 
 export interface PlaceCueBallMessage {
@@ -176,10 +184,16 @@ export interface TurnTimeoutMessage {
   data: Record<string, never>;
 }
 
+export interface CueAimMessage {
+  type: 'cue_aim';
+  data: { angle: number; power: number };
+}
+
 export type PoolOutgoingMessage =
   | TakeShotMessage
   | PlaceCueBallMessage
   | CueBallMoveMessage
+  | CueAimMessage
   | ConcedeMessage
   | GetStateMessage
   | ShotCompleteMessage

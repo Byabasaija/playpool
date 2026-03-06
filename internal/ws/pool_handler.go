@@ -18,6 +18,10 @@ type TakeShotData struct {
 	Power   float64 `json:"power"`
 	Screw   float64 `json:"screw"`
 	English float64 `json:"english"`
+	// Balls is the shooter's physics state at the moment of firing.
+	// The server relays it unchanged in shot_relay so the opponent can seed
+	// their PhysicsEngine from the exact same starting state, preventing divergence.
+	Balls []game.BallState `json:"balls"`
 }
 
 type PlaceCueBallData struct {
@@ -31,6 +35,13 @@ type ShotCompleteData struct {
 	FirstContactBallID  int   `json:"first_contact_ball_id"`
 	CushionAfterContact bool  `json:"cushion_after_contact"`
 	BreakCushionCount   int   `json:"break_cushion_count"`
+}
+
+// CueAimData carries the shooter's current aim angle and normalised power (0–1)
+// for real-time opponent ghost-cue rendering. The server only relays it.
+type CueAimData struct {
+	Angle float64 `json:"angle"`
+	Power float64 `json:"power"`
 }
 
 // SyncResponseData is sent by the connected opponent to relay their live physics
@@ -332,6 +343,35 @@ func (c *Client) handleMessage(msg WSMessage) {
 		}
 		c.handleShotComplete(g, data)
 
+	case "cue_ball_move":
+		// Shooter is dragging the cue ball during ball-in-hand — relay their
+		// current position to the opponent in real-time so they see the ghost
+		// ball moving. No game logic runs; this is a pure pass-through relay.
+		var data PlaceCueBallData // reuses {X, Y float64} — same shape
+		if err := json.Unmarshal(msg.Data, &data); err != nil {
+			c.sendError("Invalid cue_ball_move data")
+			return
+		}
+		GameHub.SendToPlayer(c.opponentID, map[string]interface{}{
+			"type": "cue_ball_move",
+			"x":    data.X,
+			"y":    data.Y,
+		})
+
+	case "cue_aim":
+		// Shooter is aiming — relay their current angle and normalised power to the
+		// opponent so they can render a ghost cue. No game logic runs; pure relay.
+		var data CueAimData
+		if err := json.Unmarshal(msg.Data, &data); err != nil {
+			c.sendError("Invalid cue_aim data")
+			return
+		}
+		GameHub.SendToPlayer(c.opponentID, map[string]interface{}{
+			"type":      "cue_aim",
+			"aim_angle": data.Angle,
+			"aim_power": data.Power,
+		})
+
 	case "place_cue_ball":
 		var data PlaceCueBallData
 		if err := json.Unmarshal(msg.Data, &data); err != nil {
@@ -393,11 +433,14 @@ func (c *Client) handleTakeShot(g *game.PoolGameState, data TakeShotData) {
 
 	g.SetShotInProgress(c.playerID, params)
 
-	// Relay shot params to opponent so they start client-side animation
+	// Relay shot params AND the shooter's ball snapshot to the opponent.
+	// The opponent seeds their PhysicsEngine from this snapshot instead of their
+	// own local state, guaranteeing both clients run from identical starting positions.
 	GameHub.SendToPlayer(c.opponentID, map[string]interface{}{
 		"type":        "shot_relay",
 		"player":      c.playerID,
 		"shot_params": params,
+		"balls":       data.Balls,
 	})
 }
 
