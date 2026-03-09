@@ -3,7 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" sizes="192x192" href="/pwa-icon-192.png" />
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/pwa-icon-192.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="stylesheet" href="/index.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="theme-color" content="#0e1628" />
@@ -16,8 +17,11 @@
     <link rel="preconnect" href="https://api.playpool.com" crossorigin />
 
     <!-- Preload critical images for faster loading and prevent CLS -->
-    <link rel="preload" as="image" href="/logo.png" type="image/webp" fetchpriority="high" />
-    <link rel="preload" as="image" href="/background.webp" type="image/webp" />
+    <link rel="preload" as="image" href="/logo.png" type="image/png" fetchpriority="high" />
+    <!-- Preload heaviest game assets so they're ready before the game screen -->
+    <link rel="preload" as="image" href="/pool/img/fullTable.webp" type="image/webp" />
+    <link rel="preload" as="image" href="/pool/img/cloth.webp" type="image/webp" />
+    <link rel="preload" as="image" href="/pool/img/tableTop.webp" type="image/webp" />
     
     <title>PlayPool - Play, Win, Repeat</title>
     <meta name="description" content="PlayPool is a fun and engaging pool game where players compete to win real cash by playing strategically. Join the excitement and play now!" />

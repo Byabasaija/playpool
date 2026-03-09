@@ -18,7 +18,7 @@ function RailBallSprite({ ballId, size = 22 }: { ballId: number; size?: number }
   const frame = isSolid ? ballId - 1 : ballId - 9;
   const col = frame % GUI_COLS;
   const row = Math.floor(frame / GUI_COLS);
-  const src = isSolid ? '/pool/img/guiSolids.png' : '/pool/img/guiStripes.png';
+  const src = isSolid ? '/pool/img/guiSolids.webp' : '/pool/img/guiStripes.webp';
 
   const scaleX = size / GUI_FRAME_W;
   const scaleY = size / GUI_FRAME_H;
