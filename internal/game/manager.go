@@ -1889,3 +1889,134 @@ func (gm *GameManager) ProcessWinnerPayout(sessionID, winnerPlayerID, stakeAmoun
 	// Winnings are now accumulated in player account for manual withdrawal
 	return nil
 }
+
+// ErrInsufficientBalance is returned by CreateRematchGame when either player
+// does not have enough winnings to cover the stake.
+var ErrInsufficientBalance = errors.New("insufficient_balance")
+
+// RematchGameResult holds the new game identifiers for a rematch.
+type RematchGameResult struct {
+	NewGameToken string
+	SessionID    int
+	// PlayerLinks maps each original player ID to their personalised game link.
+	PlayerLinks map[string]string
+}
+
+// CreateRematchGame creates a fresh game for the same two players, deducting
+// the stake directly from each player's winnings account into escrow.
+// No matchmaking queue row is involved — this is a direct balance deduction.
+func (gm *GameManager) CreateRematchGame(original *PoolGameState) (*RematchGameResult, error) {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+
+	p1DBID := original.Player1.DBPlayerID
+	p2DBID := original.Player2.DBPlayerID
+	stakeAmount := float64(original.StakeAmount)
+
+	// Generate all new identifiers upfront so we know the game token before
+	// inserting the DB session row (avoids a two-step UPDATE).
+	gameID := generateGameID()
+	gameToken := generateToken(16)
+	p1ID := "p1_" + generateToken(8)
+	p2ID := "p2_" + generateToken(8)
+	p1Token := generateToken(16)
+	p2Token := generateToken(16)
+
+	var sessionID int
+
+	if gm.db != nil && p1DBID > 0 && p2DBID > 0 {
+		tx, err := gm.db.Beginx()
+		if err != nil {
+			return nil, fmt.Errorf("rematch: failed to begin tx: %w", err)
+		}
+		defer tx.Rollback()
+
+		// Resolve accounts (creates them if missing).
+		p1Acc, err := accounts.GetOrCreateAccount(gm.db, accounts.AccountPlayerWinnings, &p1DBID)
+		if err != nil {
+			return nil, fmt.Errorf("rematch: get p1 account: %w", err)
+		}
+		p2Acc, err := accounts.GetOrCreateAccount(gm.db, accounts.AccountPlayerWinnings, &p2DBID)
+		if err != nil {
+			return nil, fmt.Errorf("rematch: get p2 account: %w", err)
+		}
+		escrowAcc, err := accounts.GetOrCreateAccount(gm.db, accounts.AccountEscrow, nil)
+		if err != nil {
+			return nil, fmt.Errorf("rematch: get escrow account: %w", err)
+		}
+
+		// Insert game_sessions row first so we have a session ID for the
+		// escrow_ledger entries and account_transactions reference.
+		expiryTime := time.Now().Add(time.Duration(gm.config.GameExpiryMinutes) * time.Minute)
+		if err := tx.QueryRowx(
+			`INSERT INTO game_sessions (game_token, player1_id, player2_id, stake_amount, status, created_at, expiry_time)
+			 VALUES ($1,$2,$3,$4,$5,NOW(),$6) RETURNING id`,
+			gameToken, p1DBID, p2DBID, original.StakeAmount, string(StatusWaiting), expiryTime,
+		).Scan(&sessionID); err != nil {
+			return nil, fmt.Errorf("rematch: create session: %w", err)
+		}
+
+		sessionRef := sql.NullInt64{Int64: int64(sessionID), Valid: true}
+
+		// Deduct P1 stake: player_winnings → escrow.
+		// accounts.Transfer uses SELECT FOR UPDATE — atomically checks balance.
+		if err := accounts.Transfer(tx, p1Acc.ID, escrowAcc.ID, stakeAmount,
+			"SESSION", sessionRef, "Rematch stake P1"); err != nil {
+			return nil, ErrInsufficientBalance
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO escrow_ledger (session_id, entry_type, player_id, amount, balance_after, description, created_at)
+			 VALUES ($1,$2,$3,$4,$5,$6,NOW())`,
+			sessionID, "STAKE_IN", p1DBID, stakeAmount, 0.0, "Rematch stake P1"); err != nil {
+			return nil, fmt.Errorf("rematch: p1 escrow_ledger: %w", err)
+		}
+
+		// Deduct P2 stake: player_winnings → escrow.
+		if err := accounts.Transfer(tx, p2Acc.ID, escrowAcc.ID, stakeAmount,
+			"SESSION", sessionRef, "Rematch stake P2"); err != nil {
+			return nil, ErrInsufficientBalance
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO escrow_ledger (session_id, entry_type, player_id, amount, balance_after, description, created_at)
+			 VALUES ($1,$2,$3,$4,$5,$6,NOW())`,
+			sessionID, "STAKE_IN", p2DBID, stakeAmount, 0.0, "Rematch stake P2"); err != nil {
+			return nil, fmt.Errorf("rematch: p2 escrow_ledger: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("rematch: commit: %w", err)
+		}
+	}
+
+	// Create in-memory game state (StatusWaiting — initialised when both connect).
+	newGame := NewPoolGame(
+		gameID, gameToken,
+		p1ID, original.Player1.PhoneNumber, p1Token, p1DBID, original.Player1.DisplayName,
+		p2ID, original.Player2.PhoneNumber, p2Token, p2DBID, original.Player2.DisplayName,
+		original.StakeAmount,
+	)
+	newGame.SessionID = sessionID
+
+	gm.games[gameID] = newGame
+	gm.playerToGame[p1ID] = gameID
+	gm.playerToGame[p2ID] = gameID
+	go newGame.SaveToRedis()
+
+	// Build personalised game links.
+	baseURL := ""
+	if gm.config != nil {
+		baseURL = gm.config.FrontendURL
+	}
+	playerLinks := map[string]string{
+		original.Player1.ID: baseURL + "/g/" + gameToken + "?pt=" + p1Token,
+		original.Player2.ID: baseURL + "/g/" + gameToken + "?pt=" + p2Token,
+	}
+
+	log.Printf("[REMATCH] New game created: %s (token=%s, session=%d)", gameID, gameToken, sessionID)
+
+	return &RematchGameResult{
+		NewGameToken: gameToken,
+		SessionID:    sessionID,
+		PlayerLinks:  playerLinks,
+	}, nil
+}

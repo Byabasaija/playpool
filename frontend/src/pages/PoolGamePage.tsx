@@ -1,10 +1,11 @@
 // Pool game page — mobile-first layout with 8 Ball Pool style UI.
 
 import { useEffect, useState, useCallback, useRef } from 'react';
+
 import { useTouchDevice } from '../hooks/useTouchDevice';
 import { usePoolGameState } from '../hooks/usePoolGameState';
 import { usePoolWebSocket } from '../hooks/usePoolWebSocket';
-import { PoolWSMessage } from '../types/pool.types';
+import { PoolWSMessage, type RematchStatus } from '../types/pool.types';
 import { ShotAnimator, type BallFrame, type PocketEvent } from '../game/pool/ShotAnimator';
 import { loadPoolAssets, PoolAssets } from '../game/pool/AssetLoader';
 import { SoundManager } from '../game/pool/SoundManager';
@@ -17,10 +18,12 @@ import PlayerBar from '../game/pool/PlayerBar';
 import SpinSetter from '../game/pool/SpinSetter';
 import FoulNotification from '../game/pool/FoulNotification';
 import GameOverScreen from '../game/pool/ui/GameOverScreen';
+import PocketedRail from '../game/pool/PocketedRail';
 
 const SHOT_TIMER_FALLBACK_SECONDS = 30;
 
 export const PoolGamePage: React.FC = () => {
+
   const [assets, setAssets] = useState<PoolAssets | null>(null);
   const [assetsError, setAssetsError] = useState(false);
   const aimAngleRef = useRef(0);
@@ -36,7 +39,7 @@ export const PoolGamePage: React.FC = () => {
   const [notifPocketedBalls, setNotifPocketedBalls] = useState<number[] | null>(null);
   const [screw, setScrew] = useState(0);
   const [english, setEnglish] = useState(0);
-  const [showGuideLine, setShowGuideLine] = useState(true);
+  const showGuideLine = true; // guide line always on (toggle hidden)
   const [pocketingBalls, setPocketingBalls] = useState<PocketingAnim[]>([]);
   const [isPortrait, setIsPortrait] = useState(window.innerHeight > window.innerWidth);
   const isTouchDevice = useTouchDevice();
@@ -67,6 +70,10 @@ export const PoolGamePage: React.FC = () => {
 
   // Disconnect state
   const [disconnectRemaining, setDisconnectRemaining] = useState<number | null>(null);
+  const [rematchStatus, setRematchStatus] = useState<RematchStatus>({ status: 'idle' });
+
+  // Pocketed ball rail — ordered list of ball IDs as they fall in (oldest first)
+  const [pocketedOrder, setPocketedOrder] = useState<number[]>([]);
 
   const urlParams = new URLSearchParams(window.location.search);
   const playerToken = urlParams.get('pt');
@@ -231,6 +238,10 @@ export const PoolGamePage: React.FC = () => {
       setTimeout(() => {
         setPocketingBalls(prev => prev.filter(p => p.ballId !== evt.ballId));
       }, 400);
+      // Add to rail (skip cue ball — it comes back into play)
+      if (evt.ballId !== 0) {
+        setPocketedOrder(prev => [...prev, evt.ballId]);
+      }
     });
   }
 
@@ -344,6 +355,7 @@ export const PoolGamePage: React.FC = () => {
 
       case 'game_starting':
         setGameStarted(true);
+        setPocketedOrder([]);
         if (message.breaker) {
           const iBreak = message.breaker === gameState.playerId;
           setFoulMessage(iBreak ? 'You won the coin toss — you break!' : 'Opponent won the coin toss — they break!');
@@ -358,6 +370,12 @@ export const PoolGamePage: React.FC = () => {
         setBreakBallPlaced(false);
         setOpponentBallInHandPos(null);
         opponentAimRef.current = null;
+        // Reconstruct pocketed rail from ball state (order unknown — sort by id)
+        if (message.balls) {
+          setPocketedOrder(
+            message.balls.filter(b => b.id !== 0 && !b.active).map(b => b.id).sort((a, b) => a - b)
+          );
+        }
         // Always mark started — game_state is only sent after the game has been initialised.
         setGameStarted(true);
         break;
@@ -498,6 +516,43 @@ export const PoolGamePage: React.FC = () => {
       case 'game_cancelled':
         // Both players disconnected — server cancelled the game and refunded stakes.
         setGameCancelled(true);
+        break;
+
+      case 'rematch_pending':
+        // Server confirmed our rematch request was sent to opponent.
+        setRematchStatus({ status: 'waiting_opponent', expiresAt: message.expires_at ?? '' });
+        break;
+
+      case 'rematch_invite':
+        // Opponent wants a rematch — show the accept panel.
+        console.log('[Rematch] rematch_invite received', message);
+        setRematchStatus({
+          status: 'incoming_invite',
+          fromName: message.from_name ?? 'Opponent',
+          stake: message.stake ?? 0,
+          expiresAt: message.expires_at ?? '',
+        });
+        break;
+
+      case 'rematch_ready': {
+        // New game created — do a full page reload to ensure clean state.
+        // Using navigate() keeps the same component instance (gameOver persists).
+        const link = message.game_link ?? '';
+        if (link.startsWith('http')) {
+          const url = new URL(link);
+          window.location.href = url.pathname + url.search;
+        } else {
+          window.location.href = link;
+        }
+        break;
+      }
+
+      case 'rematch_failed':
+        setRematchStatus({ status: 'failed', message: message.message ?? 'Rematch failed' });
+        break;
+
+      case 'rematch_expired':
+        setRematchStatus({ status: 'expired' });
         break;
 
       case 'error':
@@ -683,7 +738,20 @@ export const PoolGamePage: React.FC = () => {
 
   // Game over
   if (gameOver) {
-    return <GameOverScreen gameOver={gameOver} stakeAmount={gameState.stakeAmount} />;
+    return (
+      <GameOverScreen
+        gameOver={gameOver}
+        stakeAmount={gameState.stakeAmount}
+        rematchStatus={rematchStatus}
+        onRematch={() => {
+          setRematchStatus({ status: 'requesting' });
+          sendWSMessageRef.current({ type: 'rematch_request', data: {} });
+        }}
+        onRematchAccept={() => {
+          sendWSMessageRef.current({ type: 'rematch_accept', data: {} });
+        }}
+      />
+    );
   }
 
   // Both players disconnected — game cancelled, stakes refunded
@@ -740,6 +808,15 @@ export const PoolGamePage: React.FC = () => {
     />
   );
 
+  const spinSetterEl = (
+    <SpinSetter
+      screw={screw}
+      english={english}
+      onChange={(s, e) => { setScrew(s); setEnglish(e); }}
+      disabled={!gameState.myTurn || animating}
+    />
+  );
+
   const playerBarEl = (
     <PlayerBar
       myName={gameState.myDisplayName || 'You'}
@@ -752,15 +829,8 @@ export const PoolGamePage: React.FC = () => {
       opponentConnected={gameState.opponentConnected}
       balls={gameState.balls}
       shotTimer={shotTimer}
-    />
-  );
-
-  const spinSetterEl = (
-    <SpinSetter
-      screw={screw}
-      english={english}
-      onChange={(s, e) => { setScrew(s); setEnglish(e); }}
-      disabled={!gameState.myTurn || animating}
+      spinSetter={spinSetterEl}
+      onConcede={handleConcede}
     />
   );
 
@@ -789,28 +859,8 @@ export const PoolGamePage: React.FC = () => {
             {canvasEl}
           </div>
 
-          {/* Right — icon controls */}
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6, width: 52, flexShrink: 0 }}>
-            {spinSetterEl}
-            <button
-              onClick={() => setShowGuideLine(prev => !prev)}
-              style={{ width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, border: 'none', cursor: 'pointer', background: showGuideLine ? 'rgba(74,222,128,0.15)' : 'rgba(255,255,255,0.06)', color: showGuideLine ? '#4ade80' : '#6b7280' }}
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                <circle cx="12" cy="12" r="3"/>
-              </svg>
-            </button>
-            <button
-              onClick={handleConcede}
-              style={{ width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, border: 'none', cursor: 'pointer', background: 'rgba(255,255,255,0.06)', color: '#6b7280' }}
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/>
-                <line x1="4" y1="22" x2="4" y2="15"/>
-              </svg>
-            </button>
-          </div>
+          {/* Right — pocketed ball rail */}
+          <PocketedRail pocketedOrder={pocketedOrder} />
         </div>
         <FoulNotification message={foulMessage} isFoul={isFoul} pocketedBalls={notifPocketedBalls} />
         {disconnectEl}
@@ -856,28 +906,8 @@ export const PoolGamePage: React.FC = () => {
           {canvasEl}
         </div>
 
-        {/* Right controls */}
-        <div className="flex flex-col items-center gap-1.5 z-10 ml-1">
-          {spinSetterEl}
-
-          <button
-            onClick={() => setShowGuideLine(prev => !prev)}
-            className={`text-xs font-semibold px-2 py-1 rounded transition-colors duration-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 ${
-              showGuideLine
-                ? 'text-green-400 bg-green-900/40 hover:bg-green-800/60 focus:ring-green-400'
-                : 'text-gray-500 bg-gray-800/40 hover:bg-gray-700/60 focus:ring-gray-400'
-            }`}
-          >
-            Guide
-          </button>
-
-          <button
-            onClick={handleConcede}
-            className="text-xs font-semibold px-2 py-1 rounded bg-gray-800/40 text-gray-600 hover:bg-red-800/60 hover:text-red-400 transition-colors duration-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-red-400"
-          >
-            Concede
-          </button>
-        </div>
+        {/* Right — pocketed ball rail */}
+        <PocketedRail pocketedOrder={pocketedOrder} />
       </div>
 
       <FoulNotification message={foulMessage} isFoul={isFoul} pocketedBalls={notifPocketedBalls} />

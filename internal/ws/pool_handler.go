@@ -2,14 +2,31 @@ package ws
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/playpool/backend/internal/game"
+)
+
+// rematchIntent holds a pending rematch offer keyed by the original game token.
+type rematchIntent struct {
+	originalGameToken string
+	initiatorID       string
+	opponentID        string
+	initiatorName     string
+	stakeAmount       int
+	expiresAt         time.Time
+}
+
+var (
+	rematchMu      sync.Mutex
+	rematchIntents = make(map[string]*rematchIntent) // key: original game token
 )
 
 // Pool-specific message data types
@@ -488,9 +505,155 @@ func (c *Client) handleMessage(msg WSMessage) {
 		})
 		log.Printf("[WS] sync_response forwarded from player %s to player %s (%d balls)", c.playerID, data.Target, len(data.Balls))
 
+	case "rematch_request":
+		c.handleRematchRequest(g)
+
+	case "rematch_accept":
+		c.handleRematchAccept(g)
+
 	default:
 		c.sendError("Unknown message type")
 	}
+}
+
+const rematchTTL = 25 * time.Second
+
+// handleRematchRequest stores a rematch intent and notifies the opponent.
+func (c *Client) handleRematchRequest(g *game.PoolGameState) {
+	if g.Status != game.StatusCompleted {
+		c.sendError("Game is not finished")
+		return
+	}
+
+	opponentID := g.GetOpponentID(c.playerID)
+	if opponentID == "" {
+		c.sendError("Opponent not found")
+		return
+	}
+
+	initiatorPlayer := g.GetPlayerByID(c.playerID)
+	initiatorName := ""
+	if initiatorPlayer != nil {
+		initiatorName = initiatorPlayer.DisplayName
+	}
+
+	expiresAt := time.Now().Add(rematchTTL)
+
+	rematchMu.Lock()
+	existing, exists := rematchIntents[c.gameToken]
+	if exists && time.Now().Before(existing.expiresAt) {
+		rematchMu.Unlock()
+		c.sendError("Rematch already pending")
+		return
+	}
+	intent := &rematchIntent{
+		originalGameToken: c.gameToken,
+		initiatorID:       c.playerID,
+		opponentID:        opponentID,
+		initiatorName:     initiatorName,
+		stakeAmount:       g.StakeAmount,
+		expiresAt:         expiresAt,
+	}
+	rematchIntents[c.gameToken] = intent
+	rematchMu.Unlock()
+
+	// Notify opponent of the incoming invite.
+	GameHub.mu.RLock()
+	_, opponentConnected := GameHub.clients[opponentID]
+	GameHub.mu.RUnlock()
+	log.Printf("[REMATCH] Sending invite to opponent %s (connected=%v)", opponentID, opponentConnected)
+	GameHub.SendToPlayer(opponentID, map[string]interface{}{
+		"type":       "rematch_invite",
+		"from_name":  initiatorName,
+		"stake":      g.StakeAmount,
+		"expires_at": expiresAt.Format(time.RFC3339),
+	})
+
+	// Confirm to the initiator that their invite was sent.
+	GameHub.SendToPlayer(c.playerID, map[string]interface{}{
+		"type":       "rematch_pending",
+		"expires_at": expiresAt.Format(time.RFC3339),
+	})
+
+	// Clean up expired intent and notify initiator if the timer fires without
+	// the opponent accepting.
+	capturedToken := c.gameToken
+	capturedInitiatorID := c.playerID
+	go func() {
+		time.Sleep(rematchTTL + time.Second)
+		rematchMu.Lock()
+		if stored, ok := rematchIntents[capturedToken]; ok && time.Now().After(stored.expiresAt) {
+			delete(rematchIntents, capturedToken)
+			rematchMu.Unlock()
+			GameHub.SendToPlayer(capturedInitiatorID, map[string]interface{}{
+				"type":    "rematch_expired",
+				"message": "Opponent didn't respond in time",
+			})
+		} else {
+			rematchMu.Unlock()
+		}
+	}()
+
+	log.Printf("[REMATCH] Request from %s in game %s — waiting for %s", c.playerID, c.gameToken, opponentID)
+}
+
+// handleRematchAccept processes the opponent's accept, atomically checks both
+// balances, creates the new game, and sends personalised links to both players.
+func (c *Client) handleRematchAccept(g *game.PoolGameState) {
+	rematchMu.Lock()
+	intent, exists := rematchIntents[c.gameToken]
+	if !exists || time.Now().After(intent.expiresAt) {
+		if exists {
+			delete(rematchIntents, c.gameToken)
+		}
+		rematchMu.Unlock()
+		c.sendError("Rematch offer expired or not found")
+		return
+	}
+	if c.playerID != intent.opponentID {
+		rematchMu.Unlock()
+		c.sendError("Only the invited player can accept")
+		return
+	}
+	// Consume the intent.
+	initiatorID := intent.initiatorID
+	delete(rematchIntents, c.gameToken)
+	rematchMu.Unlock()
+
+	result, err := game.Manager.CreateRematchGame(g)
+	if err != nil {
+		reason := "failed"
+		msg := err.Error()
+		if errors.Is(err, game.ErrInsufficientBalance) {
+			reason = "insufficient_balance"
+			msg = "One or both players have insufficient balance for this stake"
+		}
+		GameHub.SendToPlayer(initiatorID, map[string]interface{}{
+			"type":    "rematch_failed",
+			"reason":  reason,
+			"message": msg,
+		})
+		GameHub.SendToPlayer(c.playerID, map[string]interface{}{
+			"type":    "rematch_failed",
+			"reason":  reason,
+			"message": msg,
+		})
+		log.Printf("[REMATCH] CreateRematchGame failed for game %s: %v", c.gameToken, err)
+		return
+	}
+
+	// Send each player their personalised link to the new game.
+	// result.PlayerLinks is keyed by the original player IDs (initiatorID / c.playerID).
+	GameHub.SendToPlayer(initiatorID, map[string]interface{}{
+		"type":      "rematch_ready",
+		"game_link": result.PlayerLinks[initiatorID],
+	})
+	GameHub.SendToPlayer(c.playerID, map[string]interface{}{
+		"type":      "rematch_ready",
+		"game_link": result.PlayerLinks[c.playerID],
+	})
+
+	log.Printf("[REMATCH] Game %s → new game %s (session=%d)", c.gameToken, result.NewGameToken, result.SessionID)
 }
 
 // handleTakeShot validates the shot and relays it to the opponent.

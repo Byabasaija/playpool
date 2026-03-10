@@ -1,6 +1,6 @@
 // Top bar with player avatars, circular shot timer, ball indicators, and stake — 8 Ball Pool style.
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import { type BallGroup, type BallState } from './types';
 
 interface PlayerBarProps {
@@ -14,6 +14,8 @@ interface PlayerBarProps {
   opponentConnected: boolean;
   balls: BallState[];
   shotTimer: number | null; // seconds remaining (null = no timer active)
+  spinSetter?: ReactNode;
+  onConcede?: () => void;
 }
 
 const SOLIDS = [1, 2, 3, 4, 5, 6, 7];
@@ -174,6 +176,7 @@ function Avatar({ name, isActive, timer, connected, size = 36 }: {
 export default function PlayerBar({
   myName, opponentName, myGroup, opponentGroup, myTurn,
   stakeAmount, myConnected, opponentConnected, balls, shotTimer,
+  spinSetter, onConcede,
 }: PlayerBarProps) {
   // responsive sizing
   const [winW, setWinW] = useState(window.innerWidth);
@@ -229,13 +232,35 @@ export default function PlayerBar({
         </div>
       </div>
 
-      {/* Center — stake */}
-      <div className="flex flex-col items-center gap-0 px-3 flex-shrink-0">
-        <span className="text-[13px] text-yellow-400 font-bold leading-tight">
-          {stakeAmount > 0 ? `${stakeAmount.toLocaleString()}` : 'Free'}
-        </span>
-        {stakeAmount > 0 && (
-          <span className="text-[8px] text-yellow-600 font-medium leading-tight">UGX</span>
+      {/* Center — spin + stake + concede */}
+      <div className="flex items-center gap-2 flex-shrink-0 px-1">
+        {spinSetter}
+        <div className="flex flex-col items-center gap-0">
+          <span className="text-[13px] text-yellow-400 font-bold leading-tight">
+            {stakeAmount > 0 ? `${stakeAmount.toLocaleString()}` : 'Free'}
+          </span>
+          {stakeAmount > 0 && (
+            <span className="text-[8px] text-yellow-600 font-medium leading-tight">UGX</span>
+          )}
+        </div>
+        {onConcede && (
+          <button
+            onClick={onConcede}
+            title="Concede"
+            style={{
+              width: 34, height: 34,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              borderRadius: 7, border: 'none', cursor: 'pointer',
+              background: 'rgba(255,255,255,0.06)',
+              color: '#6b7280',
+              flexShrink: 0,
+            }}
+          >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/>
+              <line x1="4" y1="22" x2="4" y2="15"/>
+            </svg>
+          </button>
         )}
       </div>
 

@@ -77,6 +77,11 @@ export type PoolWSMessageType =
   | 'sync_response'
   | 'cue_aim'
   | 'game_cancelled'
+  | 'rematch_pending'
+  | 'rematch_invite'
+  | 'rematch_ready'
+  | 'rematch_failed'
+  | 'rematch_expired'
   | 'error';
 
 export interface PoolWSMessage {
@@ -131,6 +136,12 @@ export interface PoolWSMessage {
   disconnected_at?: number;
   // sync_request field: which reconnecting player needs physics state
   target?: string;
+  // rematch fields
+  from_name?: string;
+  stake?: number;
+  expires_at?: string;
+  game_link?: string;
+  reason?: string;
 }
 
 // Outgoing message types
@@ -193,6 +204,16 @@ export interface CueAimMessage {
   data: { angle: number; power: number };
 }
 
+export interface RematchRequestMessage {
+  type: 'rematch_request';
+  data: Record<string, never>;
+}
+
+export interface RematchAcceptMessage {
+  type: 'rematch_accept';
+  data: Record<string, never>;
+}
+
 export type PoolOutgoingMessage =
   | TakeShotMessage
   | PlaceCueBallMessage
@@ -202,4 +223,15 @@ export type PoolOutgoingMessage =
   | GetStateMessage
   | ShotCompleteMessage
   | SyncResponseMessage
-  | TurnTimeoutMessage;
+  | TurnTimeoutMessage
+  | RematchRequestMessage
+  | RematchAcceptMessage;
+
+// Rematch state for the game over screen
+export type RematchStatus =
+  | { status: 'idle' }
+  | { status: 'requesting' }
+  | { status: 'waiting_opponent'; expiresAt: string }
+  | { status: 'incoming_invite'; fromName: string; stake: number; expiresAt: string }
+  | { status: 'failed'; message: string }
+  | { status: 'expired' };

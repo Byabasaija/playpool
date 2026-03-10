@@ -1,11 +1,15 @@
 // Game over screen — shown when a pool game ends.
 
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { type PoolGameOverData } from '../../../types/pool.types';
+import { type PoolGameOverData, type RematchStatus } from '../../../types/pool.types';
 
 interface GameOverScreenProps {
   gameOver: PoolGameOverData;
   stakeAmount: number;
+  rematchStatus?: RematchStatus;
+  onRematch?: () => void;
+  onRematchAccept?: () => void;
 }
 
 const STYLES = `
@@ -129,10 +133,37 @@ function EightBallSVG() {
   );
 }
 
-export default function GameOverScreen({ gameOver, stakeAmount }: GameOverScreenProps) {
+/** Countdown seconds remaining until expiresAt. */
+function useCountdown(expiresAt: string | undefined): number {
+  const [seconds, setSeconds] = useState(() =>
+    expiresAt ? Math.max(0, Math.ceil((new Date(expiresAt).getTime() - Date.now()) / 1000)) : 0
+  );
+  useEffect(() => {
+    if (!expiresAt) return;
+    const tick = () => setSeconds(Math.max(0, Math.ceil((new Date(expiresAt).getTime() - Date.now()) / 1000)));
+    tick();
+    const id = setInterval(tick, 500);
+    return () => clearInterval(id);
+  }, [expiresAt]);
+  return seconds;
+}
+
+export default function GameOverScreen({
+  gameOver,
+  stakeAmount,
+  rematchStatus = { status: 'idle' },
+  onRematch,
+  onRematchAccept,
+}: GameOverScreenProps) {
   const navigate = useNavigate();
   const youWon = gameOver.isWinner;
+  const [accepting, setAccepting] = useState(false);
   const winnings = Math.round((stakeAmount || 1000) * 2 * 0.85);
+
+  const inviteExpiresAt = rematchStatus.status === 'incoming_invite' ? rematchStatus.expiresAt : undefined;
+  const waitExpiresAt  = rematchStatus.status === 'waiting_opponent' ? rematchStatus.expiresAt : undefined;
+  const inviteCountdown = useCountdown(inviteExpiresAt);
+  const waitCountdown   = useCountdown(waitExpiresAt);
 
   const howLabel = (() => {
     if (youWon) {
@@ -157,6 +188,19 @@ export default function GameOverScreen({ gameOver, stakeAmount }: GameOverScreen
   const accent   = youWon ? '#f59e0b' : '#ef4444';
   const accentLo = youWon ? 'rgba(251,191,36,0.18)' : 'rgba(239,68,68,0.14)';
   const accentBorder = youWon ? 'rgba(251,191,36,0.35)' : 'rgba(239,68,68,0.30)';
+
+  // Derive rematch button label + action
+  const rematchDisabled =
+    rematchStatus.status === 'requesting' ||
+    rematchStatus.status === 'waiting_opponent';
+
+  const rematchLabel = (() => {
+    switch (rematchStatus.status) {
+      case 'requesting':      return 'Sending...';
+      case 'waiting_opponent': return `Waiting... ${waitCountdown}s`;
+      default:                return 'Rematch';
+    }
+  })();
 
   return (
     <>
@@ -350,6 +394,76 @@ export default function GameOverScreen({ gameOver, stakeAmount }: GameOverScreen
             )}
           </div>
 
+          {/* --- Rematch status banners --- */}
+          {rematchStatus.status === 'failed' && (
+            <div style={{
+              marginBottom: '12px',
+              padding: '10px 14px',
+              borderRadius: '10px',
+              background: 'rgba(239,68,68,0.12)',
+              border: '1px solid rgba(239,68,68,0.30)',
+              fontSize: '13px',
+              color: '#fca5a5',
+            }}>
+              {rematchStatus.message}
+            </div>
+          )}
+          {rematchStatus.status === 'expired' && (
+            <div style={{
+              marginBottom: '12px',
+              padding: '10px 14px',
+              borderRadius: '10px',
+              background: 'rgba(156,163,175,0.10)',
+              border: '1px solid rgba(156,163,175,0.20)',
+              fontSize: '13px',
+              color: 'rgba(255,255,255,0.45)',
+            }}>
+              Opponent didn't respond in time
+            </div>
+          )}
+
+          {/* --- Incoming invite overlay --- */}
+          {rematchStatus.status === 'incoming_invite' && (
+            <div style={{
+              marginBottom: '16px',
+              padding: '16px',
+              borderRadius: '14px',
+              background: 'rgba(59,130,246,0.12)',
+              border: '1px solid rgba(59,130,246,0.30)',
+              textAlign: 'center',
+            }}>
+              <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.55)', marginBottom: '4px' }}>
+                Rematch invite
+              </div>
+              <div style={{ fontSize: '15px', fontWeight: 700, color: '#fff', marginBottom: '2px' }}>
+                {rematchStatus.fromName} wants a rematch
+              </div>
+              <div style={{ fontSize: '13px', color: 'rgba(147,197,253,0.85)', marginBottom: '12px' }}>
+                {rematchStatus.stake.toLocaleString()} UGX • {inviteCountdown}s remaining
+              </div>
+              <button
+                onClick={() => { setAccepting(true); onRematchAccept?.(); }}
+                disabled={accepting}
+                style={{
+                  width: '100%',
+                  padding: '11px 0',
+                  borderRadius: '10px',
+                  border: '1px solid rgba(59,130,246,0.50)',
+                  background: 'linear-gradient(135deg, rgba(59,130,246,0.35), rgba(37,99,235,0.35))',
+                  color: '#93c5fd',
+                  fontSize: '13px',
+                  fontWeight: 700,
+                  letterSpacing: '0.8px',
+                  textTransform: 'uppercase',
+                  cursor: accepting ? 'default' : 'pointer',
+                  opacity: accepting ? 0.5 : 1,
+                }}
+              >
+                {accepting ? 'Joining...' : 'Accept Rematch'}
+              </button>
+            </div>
+          )}
+
           {/* --- Buttons --- */}
           <div style={{
             display: 'flex',
@@ -376,29 +490,34 @@ export default function GameOverScreen({ gameOver, stakeAmount }: GameOverScreen
             >
               Home
             </button>
-            <button
-              onClick={() => navigate('/')}
-              style={{
-                flex: 1,
-                padding: '13px 0',
-                borderRadius: '12px',
-                border: `1px solid ${accentBorder}`,
-                background: youWon
-                  ? 'linear-gradient(135deg, rgba(245,158,11,0.28), rgba(180,83,9,0.28))'
-                  : 'linear-gradient(135deg, rgba(239,68,68,0.28), rgba(153,27,27,0.28))',
-                color: accent,
-                fontSize: '13px',
-                fontWeight: 700,
-                letterSpacing: '0.8px',
-                textTransform: 'uppercase',
-                cursor: 'pointer',
-                textShadow: `0 0 12px ${accentLo}`,
-              }}
-              onMouseEnter={e => (e.currentTarget.style.opacity = '0.8')}
-              onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
-            >
-              Rematch
-            </button>
+            {/* Only show Rematch button when not showing the incoming invite panel */}
+            {rematchStatus.status !== 'incoming_invite' && (
+              <button
+                onClick={onRematch}
+                disabled={rematchDisabled || !onRematch}
+                style={{
+                  flex: 1,
+                  padding: '13px 0',
+                  borderRadius: '12px',
+                  border: `1px solid ${accentBorder}`,
+                  background: youWon
+                    ? 'linear-gradient(135deg, rgba(245,158,11,0.28), rgba(180,83,9,0.28))'
+                    : 'linear-gradient(135deg, rgba(239,68,68,0.28), rgba(153,27,27,0.28))',
+                  color: rematchDisabled ? 'rgba(255,255,255,0.35)' : accent,
+                  fontSize: '13px',
+                  fontWeight: 700,
+                  letterSpacing: '0.8px',
+                  textTransform: 'uppercase',
+                  cursor: rematchDisabled ? 'default' : 'pointer',
+                  textShadow: rematchDisabled ? 'none' : `0 0 12px ${accentLo}`,
+                  opacity: rematchDisabled ? 0.6 : 1,
+                }}
+                onMouseEnter={e => { if (!rematchDisabled) e.currentTarget.style.opacity = '0.8'; }}
+                onMouseLeave={e => { if (!rematchDisabled) e.currentTarget.style.opacity = '1'; }}
+              >
+                {rematchLabel}
+              </button>
+            )}
           </div>
 
         </div>
