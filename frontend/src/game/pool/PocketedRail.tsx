@@ -1,5 +1,13 @@
 // Miniclip-style side rail — all pocketed balls in chronological order.
 // Newest ball enters from the funnel at the top; balls stack downward.
+// Height is proportional to the table height (TABLE_H / CANVAS_HEIGHT of parent).
+
+import { TABLE_H, CANVAS_HEIGHT } from './canvasLayout';
+
+// The rail height should match the table height on screen.
+// Since the canvas fills its container height-constrained, TABLE_H/CANVAS_HEIGHT
+// gives the table's fraction of the parent flex container.
+const TABLE_H_RATIO = TABLE_H / CANVAS_HEIGHT; // ≈ 0.69
 
 const RAIL_W  = 44;  // total panel width
 const TUBE_W  = 28;  // inner tube width (ball + side gaps)
@@ -70,63 +78,76 @@ export default function PocketedRail({ pocketedOrder }: PocketedRailProps) {
   return (
     <>
       <style>{STYLES}</style>
+
+      {/* Full-height outer wrapper — centers the rail to match the table height */}
       <div style={{
         width: RAIL_W,
         height: '100%',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
-        background: 'linear-gradient(180deg, #111827 0%, #0d1424 100%)',
-        borderLeft: '1px solid rgba(255,255,255,0.07)',
+        justifyContent: 'center',
         flexShrink: 0,
-        overflow: 'hidden',
       }}>
 
-        {/* ── Funnel opening ── */}
-        <svg
-          width={RAIL_W}
-          height={FUNNEL_H}
-          style={{ flexShrink: 0, display: 'block' }}
-        >
-          {/* Funnel fill */}
-          <polygon
-            points={`0,0 ${RAIL_W},0 ${TUBE_R},${FUNNEL_H} ${TUBE_L},${FUNNEL_H}`}
-            fill="#1c2a42"
-          />
-          {/* Left slant border */}
-          <line x1={1} y1={0} x2={TUBE_L} y2={FUNNEL_H}
-            stroke="rgba(255,255,255,0.18)" strokeWidth={1} />
-          {/* Right slant border */}
-          <line x1={RAIL_W - 1} y1={0} x2={TUBE_R} y2={FUNNEL_H}
-            stroke="rgba(255,255,255,0.18)" strokeWidth={1} />
-          {/* Top rim highlight */}
-          <line x1={0} y1={0} x2={RAIL_W} y2={0}
-            stroke="rgba(255,255,255,0.22)" strokeWidth={1.5} />
-        </svg>
-
-        {/* ── Tube ── */}
+        {/* Inner rail — height proportional to the table on screen */}
         <div style={{
-          width: TUBE_W,
-          flex: 1,
-          borderLeft:  '1px solid rgba(255,255,255,0.10)',
-          borderRight: '1px solid rgba(255,255,255,0.10)',
+          width: RAIL_W,
+          height: `${TABLE_H_RATIO * 100}%`,
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
-          gap: 3,
-          paddingTop: 4,
+          background: 'linear-gradient(180deg, #111827 0%, #0d1424 100%)',
+          borderLeft: '1px solid rgba(255,255,255,0.07)',
           overflow: 'hidden',
         }}>
-          {display.map(ballId => (
-            <div
-              key={ballId}
-              style={{ animation: 'railBallIn 0.38s cubic-bezier(0.34,1.4,0.64,1) both', flexShrink: 0 }}
-            >
-              <RailBall ballId={ballId} />
-            </div>
-          ))}
-        </div>
 
+          {/* ── Funnel opening ── */}
+          <svg
+            width={RAIL_W}
+            height={FUNNEL_H}
+            style={{ flexShrink: 0, display: 'block' }}
+          >
+            {/* Funnel fill */}
+            <polygon
+              points={`0,0 ${RAIL_W},0 ${TUBE_R},${FUNNEL_H} ${TUBE_L},${FUNNEL_H}`}
+              fill="#1c2a42"
+            />
+            {/* Left slant border */}
+            <line x1={1} y1={0} x2={TUBE_L} y2={FUNNEL_H}
+              stroke="rgba(255,255,255,0.18)" strokeWidth={1} />
+            {/* Right slant border */}
+            <line x1={RAIL_W - 1} y1={0} x2={TUBE_R} y2={FUNNEL_H}
+              stroke="rgba(255,255,255,0.18)" strokeWidth={1} />
+            {/* Top rim highlight */}
+            <line x1={0} y1={0} x2={RAIL_W} y2={0}
+              stroke="rgba(255,255,255,0.22)" strokeWidth={1.5} />
+          </svg>
+
+          {/* ── Tube ── */}
+          <div style={{
+            width: TUBE_W,
+            flex: 1,
+            borderLeft:  '1px solid rgba(255,255,255,0.10)',
+            borderRight: '1px solid rgba(255,255,255,0.10)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 3,
+            paddingTop: 4,
+            overflow: 'hidden',
+          }}>
+            {display.map(ballId => (
+              <div
+                key={ballId}
+                style={{ animation: 'railBallIn 0.38s cubic-bezier(0.34,1.4,0.64,1) both', flexShrink: 0 }}
+              >
+                <RailBall ballId={ballId} />
+              </div>
+            ))}
+          </div>
+
+        </div>
       </div>
     </>
   );

@@ -360,7 +360,7 @@ export class PhysicsEngine {
     const targetTangent = r.times(target.velocity.dot(r));
 
     if (Math.abs(target.ySpin) < Math.abs(ball.ySpin)) {
-      target.ySpin = -0.5 * ball.ySpin;
+      target.ySpin = -0.15 * ball.ySpin;
     }
 
     if (ball.id === 0 && !ball.firstContactMade) {
