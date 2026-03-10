@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -21,7 +22,15 @@ import (
 	"github.com/playpool/backend/internal/redis"
 	"github.com/playpool/backend/internal/sms"
 	"github.com/playpool/backend/internal/ws"
+	sqlfiles "github.com/playpool/backend/migrations"
+	"github.com/playpool/backend/ui"
 )
+
+func init() {
+	// Wire the embedded SQL files (from the root migrations package) into the
+	// internal migrations runner so RunMigrations reads from the binary, not disk.
+	migrations.SQLFiles = sqlfiles.Files
+}
 
 func main() {
 	// Load environment variables
@@ -115,8 +124,29 @@ func main() {
 	// Initialize API handlers
 	api.SetupRoutes(router, db, rdb, cfg)
 
-	// Serve built frontend (SERVE_STATIC_FILES=true)
-	if cfg.ServeStaticFiles {
+	// Serve frontend.
+	// Priority 1: embedded FS (binary compiled with -tags embed — single-binary production mode).
+	// Priority 2: disk directory via SERVE_STATIC_FILES=true (dev / legacy deployments).
+	if ui.FS != nil {
+		log.Println("Serving embedded frontend (single-binary mode)")
+		fileServer := http.FileServer(http.FS(ui.FS))
+		router.NoRoute(func(c *gin.Context) {
+			if strings.HasPrefix(c.Request.URL.Path, "/api/") {
+				c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+				return
+			}
+			// Try to resolve the exact asset; fall back to index.html for all SPA routes.
+			clean := strings.TrimPrefix(c.Request.URL.Path, "/")
+			if clean == "" {
+				clean = "index.html"
+			}
+			if _, err := fs.Stat(ui.FS, clean); err != nil {
+				// Unknown path — let the SPA router handle it.
+				c.Request.URL.Path = "/"
+			}
+			fileServer.ServeHTTP(c.Writer, c.Request)
+		})
+	} else if cfg.ServeStaticFiles {
 		distDir := cfg.StaticFilesDir
 		log.Printf("Serving static frontend from %s", distDir)
 		router.NoRoute(func(c *gin.Context) {

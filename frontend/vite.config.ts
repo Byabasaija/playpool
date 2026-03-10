@@ -4,6 +4,12 @@ import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
+  // Output into the Go embed package so `go build -tags embed` produces a
+  // self-contained binary with no external static file dependency.
+  build: {
+    outDir: '../ui/dist',
+    emptyOutDir: true,
+  },
   plugins: [
     react(),
     tailwindcss(),

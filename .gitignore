@@ -13,6 +13,11 @@ backend
 main
 playpool
 
+# Generated frontend build (output of `npm run build` inside frontend/)
+# Embedded into the binary at compile time via -tags embed — not committed.
+/ui/dist/
+/frontend/dist/
+
 # Test binary, built with `go test -c`
 *.test
 

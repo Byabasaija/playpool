@@ -417,12 +417,13 @@ export const PoolGamePage: React.FC = () => {
           next_turn: message.next_turn,
         });
 
-        // if the message explains that the *next* turn is ours and we have
-        // ball_in_hand, record locally as well. this avoids cases where the
-        // reducer state doesn't flip quickly enough.
-        if (message.ball_in_hand && message.next_turn === gameState.playerId) {
-          setLocalBallInHand(true);
-        }
+        // Always sync localBallInHand from shot_result. Setting it only when
+        // true caused a stale true to persist when a ball-in-hand turn timed
+        // out and the turn passed back to the opponent (double-timeout bug).
+        setLocalBallInHand(!!message.ball_in_hand && message.next_turn === gameState.playerId);
+        // Clear any lingering opponent ball-in-hand ghost (e.g. opponent timed
+        // out mid-drag without placing — ball_placed never fires to clear it).
+        setOpponentBallInHandPos(null);
 
         // track scratches so the canvas can reposition the ghost for cases
         // where the player already had ball-in-hand when they scratched again
